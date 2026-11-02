@@ -1,0 +1,27 @@
+[project]
+name = "zonesim"
+version = "0.1.0"
+description = "Табличная симуляция жизни аномальной Зоны"
+requires-python = ">=3.12"
+dependencies = [
+    "pyside6>=6.6.0",
+    "pydantic>=2.0.0",
+    "networkx>=3.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.3.0",
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
