@@ -114,6 +114,11 @@ def _assign_start_sectors(sectors: dict[int, Sector], rng: SeededRNG, min_dist: 
     for sid in starts:
         sectors[sid].is_faction_start = True
 
+    # Стартовые сектора закрепляются за фракциями (домашние базы, §6.2)
+    factions = ["Бродяги", "Борзые", "Серая лига"]
+    for i, sid in enumerate(starts):
+        sectors[sid].controller_faction = factions[i % len(factions)]
+
     return starts
 
 

@@ -51,6 +51,8 @@ class HumanNPC(BaseEntity):
     faction: str = "Бродяги"
     group_id: int | None = None
     name: str = "Unknown"
+    intention: str = ""  # выбранное намерение (фаза 4, §9)
+    artifacts: list[int] = field(default_factory=list)  # id переносимых артефактов
 
     @property
     def health_share(self) -> float:

@@ -64,14 +64,14 @@ class HumanGroup:
         # Проверяем членов группы
         for mid in self.members:
             npc = npcs.get(mid)
-            if npc and npc.status not in (EntityStatus.SLEEPING, EntityStatus.UNCONSCIOUS):
+            if npc and npc.status == EntityStatus.ACTIVE:
                 return True
 
         # Если все спят/бессознательны — проверяем внешних NPC в том же секторе
         for npc_id, npc in npcs.items():
             if npc_id in self.members:
                 continue
-            if npc and npc.status not in (EntityStatus.SLEEPING, EntityStatus.UNCONSCIOUS):
+            if npc and npc.status == EntityStatus.ACTIVE:
                 return True
 
         return False

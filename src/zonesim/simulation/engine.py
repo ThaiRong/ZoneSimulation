@@ -20,6 +20,31 @@ from zonesim.combat.unconscious import calculate_unconscious_chance, resolve_unc
 
 from zonesim.actions.detection import check_anomaly_detection
 
+from zonesim.ai import (
+    EXIT,
+    EXPLORE,
+    RESEARCH,
+    REST,
+    SLEEP,
+    IntentionContext,
+    choose_explore_target,
+    choose_intention,
+    known_anomaly_sectors,
+    next_step_towards,
+)
+
+from zonesim.needs.sleep import (
+    STAMINA_COST_AWAKE,
+    STAMINA_COST_MOVEMENT,
+    STAMINA_COST_RESEARCH,
+    human_sleep_recover,
+    update_stamina,
+)
+
+from zonesim.anomalies.research import research_anomaly
+
+from zonesim.world.group import HumanGroup
+
 from zonesim.economy.contracts import ContractManager
 from zonesim.economy.trade import ImportExportManager
 
@@ -76,6 +101,8 @@ class SimulationState:
     next_anomaly_id: int = 0
     next_stash_id: int = 0
 
+    visit_memory: dict[int, dict[int, int]] = field(default_factory=dict)  # npc_id -> sector -> hour
+
     config: dict = field(default_factory=dict)
 
 
@@ -84,6 +111,8 @@ class SimulationEngine:
 
     def __init__(self, seed: int = 42, config: dict | None = None):
         self.state = SimulationState(rng=SeededRNG(seed), config=config or {})
+        self._home_cache: dict[str, int | None] = {}
+        self._border_dist: dict[int, int] | None = None
         self._generate_world()
 
     def _generate_world(self) -> None:
@@ -248,31 +277,83 @@ class SimulationEngine:
                     payload={
                         "sector_id": anomaly.sector_id,
                         "anomaly_type": anomaly.anomaly_type.value,
+                        "concealment": anomaly.concealment,
                     },
                     hour=hour,
                 )
 
     def _phase4_intentions(self, hour: int) -> None:
-        """Фаза 4: Выбор намерений групп."""
-        # Группы людей и монстров выбирают действия
-        pass  # Упрощённо: выбираем случайные намерения для тестирования
+        """Фаза 4: Выбор намерений по оценке полезности (§9.2).
 
-    def _phase5_movement(self, hour: int, is_night: bool) -> None:
-        """Фаза 5: Перемещение сущностей."""
-        self._moved_human_ids: set[int] = set()
+        Спящие, бессознательные и пленные не выбирают (§8, фаза 4).
+        """
+        is_night = self.state.time.is_night()
 
         for npc in self.state.humans:
-            if npc.status in (EntityStatus.SLEEPING, EntityStatus.UNCONSCIOUS,
-                              EntityStatus.DEAD, EntityStatus.EXILED, EntityStatus.PRISONER):
+            if npc.status != EntityStatus.ACTIVE:
                 continue
-            # Случайное перемещение для демонстрации
-            if self.state.rng.random() < 0.3:
-                sector = self.state.sectors.get(npc.sector_id)
-                if sector and sector.neighbors:
-                    new_sector = self.state.rng.choice(sector.neighbors)
-                    if new_sector != npc.sector_id:
-                        npc.sector_id = new_sector
-                        self._moved_human_ids.add(npc.id)
+
+            kb = self.state.knowledge_bases.get(npc.id)
+            facts = kb.get_facts(KnowledgeType.ANOMALY) if kb else []
+            here = [f for f in facts if f.payload.get("sector_id") == npc.sector_id]
+            researchable = [f for f in here if not f.payload.get("researched")]
+            home = self._home_sector_id(npc.faction)
+
+            ctx = IntentionContext(
+                hour=hour,
+                is_night=is_night,
+                bravery=npc.bravery,
+                faction=npc.faction,
+                health_share=npc.health_share,
+                stamina_share=npc.stamina_share,
+                at_home=(home is not None and npc.sector_id == home),
+                home_sector_id=home,
+                distance_to_border=self._distance_to_border(npc.sector_id),
+                has_known_anomaly=any(
+                    self.state.anomalies[f.subject_id].status == AnomalyStatus.ACTIVE
+                    for f in researchable if f.subject_id in self.state.anomalies
+                ),
+                known_anomaly_concealment=max(
+                    (f.payload.get("concealment", 50) for f in researchable), default=0
+                ),
+                known_has_artifact=any(f.payload.get("has_artifact") for f in researchable),
+            )
+            npc.intention = choose_intention(ctx, self.state.rng)
+
+    def _phase5_movement(self, hour: int, is_night: bool) -> None:
+        """Фаза 5: Перемещение по намерениям (1 ребро в час, §6.2)."""
+        self._moved_human_ids: set[int] = set()
+        border_ids = {s.id for s in self.state.sectors.values() if s.is_border}
+
+        for npc in self.state.humans:
+            if npc.status != EntityStatus.ACTIVE:
+                continue
+
+            destination: int | None = None
+            if npc.intention == EXPLORE:
+                memory = self.state.visit_memory.setdefault(npc.id, {})
+                destination = choose_explore_target(
+                    self.state.sectors, npc.sector_id, memory, hour,
+                    self._known_anomaly_sectors(npc), self.state.rng,
+                )
+            elif npc.intention == EXIT:
+                destination = next_step_towards(
+                    self.state.sectors, npc.sector_id, border_ids,
+                    avoid_ids=self._known_anomaly_sectors(npc),
+                )
+            elif npc.intention == REST:
+                home = self._home_sector_id(npc.faction)
+                if home is not None and npc.sector_id != home:
+                    destination = next_step_towards(
+                        self.state.sectors, npc.sector_id, {home},
+                        avoid_ids=self._known_anomaly_sectors(npc),
+                    )
+
+            if destination is not None and destination != npc.sector_id:
+                npc.sector_id = destination
+                self._moved_human_ids.add(npc.id)
+                update_stamina(npc, STAMINA_COST_MOVEMENT, "movement", self.state.time)
+                self.state.visit_memory.setdefault(npc.id, {})[destination] = hour
 
         for monster in self.state.monsters:
             if monster.status in (EntityStatus.SLEEPING, EntityStatus.UNCONSCIOUS, EntityStatus.DEAD):
@@ -298,44 +379,49 @@ class SimulationEngine:
             if npc.status not in (EntityStatus.ACTIVE, EntityStatus.SLEEPING):
                 continue
 
+            co_located = [
+                a for a in self.state.anomalies.values()
+                if a.sector_id == npc.sector_id and a.status == AnomalyStatus.ACTIVE
+            ]
+            if not co_located:
+                continue
+
+            # Одна проверка на вход в сектор — по одной (случайной) аномалии
+            anomaly = self.state.rng.choice(co_located)
             kb = self.state.knowledge_bases.get(npc.id)
-            for anomaly in self.state.anomalies.values():
-                if anomaly.sector_id != npc.sector_id or anomaly.status != AnomalyStatus.ACTIVE:
-                    continue
+            known = bool(kb and kb.get_facts(KnowledgeType.ANOMALY, subject_id=anomaly.id))
+            contact = check_anomaly_contact(
+                entity_sector=npc.sector_id,
+                anomaly=anomaly,
+                rng_func=self.state.rng.random,
+                attentiveness=npc.attentiveness,
+                known_bonus=20 if known else 0,
+                is_night=is_night,
+            )
+            if contact["result"] != "hit":
+                continue
 
-                known = bool(kb and kb.get_facts(KnowledgeType.ANOMALY, subject_id=anomaly.id))
-                contact = check_anomaly_contact(
-                    entity_sector=npc.sector_id,
-                    anomaly=anomaly,
-                    rng_func=self.state.rng.random,
-                    attentiveness=npc.attentiveness,
-                    known_bonus=20 if known else 0,
-                    is_night=is_night,
-                )
-                if contact["result"] != "hit":
-                    continue
+            start_health = npc.health
+            result = apply_anomaly_damage(
+                npc.health, npc.max_health, anomaly, self.state.rng.random(),
+            )
+            npc.health = result["new_health"]
 
-                start_health = npc.health
-                result = apply_anomaly_damage(
-                    npc.health, npc.max_health, anomaly, self.state.rng.random(),
-                )
-                npc.health = result["new_health"]
+            outcome = "hit"
+            if npc.health <= 0:
+                outcome = self._resolve_zero_health(npc, start_health)
 
-                outcome = "hit"
-                if npc.health <= 0:
-                    outcome = self._resolve_zero_health(npc, start_health)
-
-                self.state.news_manager.create_event(
-                    hour=hour,
-                    minute=0,
-                    sector_id=npc.sector_id,
-                    event_type="anomaly_hit",
-                    participants=[npc.id],
-                    result=outcome,
-                    importance=60 if outcome == "dead" else 30,
-                    summary=f"NPC {npc.id} попал в аномалию {anomaly.id} ({outcome})",
-                    details={"damage": result["damage"], "anomaly_id": anomaly.id},
-                )
+            self.state.news_manager.create_event(
+                hour=hour,
+                minute=0,
+                sector_id=npc.sector_id,
+                event_type="anomaly_hit",
+                participants=[npc.id],
+                result=outcome,
+                importance=60 if outcome == "dead" else 30,
+                summary=f"NPC {npc.id} попал в аномалию {anomaly.id} ({outcome})",
+                details={"damage": result["damage"], "anomaly_id": anomaly.id},
+            )
 
     def _resolve_zero_health(self, npc: HumanNPC, start_health: int) -> str:
         """Здоровье 0: бессознательное состояние по шансу §11.10, иначе гибель."""
@@ -343,30 +429,207 @@ class SimulationEngine:
         chance = calculate_unconscious_chance(start_share)
         if resolve_unconscious_check(self.state.rng.random(), chance) == "unconscious":
             npc.status = EntityStatus.UNCONSCIOUS
+            npc.unconscious_reason = "health_zero"
+            npc.unconscious_start_hour = self.state.time.hour
             return "unconscious"
         npc.status = EntityStatus.DEAD
         return "dead"
 
+    # --- Вспомогательные методы намерений ---
+
+    def _home_sector_id(self, faction: str) -> int | None:
+        """Домашняя база фракции (§6.2)."""
+        if faction not in self._home_cache:
+            self._home_cache[faction] = next(
+                (s.id for s in self.state.sectors.values()
+                 if s.is_faction_start and s.controller_faction == faction),
+                None,
+            )
+        return self._home_cache[faction]
+
+    def _distance_to_border(self, sector_id: int) -> int | None:
+        """Расстояние в рёбрах до ближайшего граничного сектора (§6.2)."""
+        if self._border_dist is None:
+            dist: dict[int, int] = {}
+            queue = [sid for sid, s in self.state.sectors.items() if s.is_border]
+            for sid in queue:
+                dist[sid] = 0
+            while queue:
+                current = queue.pop(0)
+                for nid in self.state.sectors[current].neighbors:
+                    if nid not in dist:
+                        dist[nid] = dist[current] + 1
+                        queue.append(nid)
+            self._border_dist = dist
+        return self._border_dist.get(sector_id)
+
+    def _known_anomaly_sectors(self, npc: HumanNPC) -> set[int]:
+        kb = self.state.knowledge_bases.get(npc.id)
+        if not kb:
+            return set()
+        return known_anomaly_sectors(kb.get_facts(KnowledgeType.ANOMALY))
+
+    def _sleep_tick(self, npc: HumanNPC) -> None:
+        """Сон: восстановление выносливости по §14.1 (комфорт 4 ч / иначе 6 ч)."""
+        group = HumanGroup(id=-(npc.id + 1), members=[npc.id], sector_id=npc.sector_id)
+        human_sleep_recover(group, {npc.id: npc}, self.state.time, self.state.rng)
+
+    def _unconscious_tick(self, npc: HumanNPC, hour: int) -> None:
+        """Бессознательные состояния (§11.10, §14.2)."""
+        if getattr(npc, "unconscious_reason", "") == "health_zero":
+            # Без медицинской помощи бессознательный с здоровьем 0 становится трупом (§11.10)
+            if hour - getattr(npc, "unconscious_start_hour", hour) >= 1:
+                npc.status = EntityStatus.DEAD
+                self.state.news_manager.create_event(
+                    hour=hour, minute=0, sector_id=npc.sector_id,
+                    event_type="npc_death", participants=[npc.id], result="dead",
+                    importance=60, summary=f"NPC {npc.id} умер от ран без помощи",
+                    details={"cause": "unconscious_no_aid"},
+                )
+            return
+        # Истощение: минимум час, затем пробуждение с 10% выносливости (§14.2)
+        group = HumanGroup(id=-(npc.id + 1), members=[npc.id], sector_id=npc.sector_id)
+        human_sleep_recover(group, {npc.id: npc}, self.state.time, self.state.rng)
+
+    def _rest_tick(self, npc: HumanNPC) -> None:
+        """Отдых и лечение на базе (§14.3).
+
+        Временная мера до системы медикаментов: медленное восстановление
+        с потолком 70% — полное мгновенное восстановление невозможно.
+        """
+        home = self._home_sector_id(npc.faction)
+        if home is None or npc.sector_id != home:
+            return
+        cap = int(npc.max_health * 0.7)
+        if npc.health < cap:
+            npc.health = min(cap, npc.health + 2)
+
+    def _research_tick(self, npc: HumanNPC, hour: int) -> None:
+        """Исследование известной аномалии — основное действие часа (§12.3)."""
+        kb = self.state.knowledge_bases.setdefault(npc.id, KnowledgeBase())
+        known = [f for f in kb.get_facts(KnowledgeType.ANOMALY)
+                 if f.payload.get("sector_id") == npc.sector_id]
+        known_ids = {f.subject_id for f in known}
+
+        target = next(
+            (a for a in self.state.anomalies.values()
+             if a.id in known_ids and a.sector_id == npc.sector_id
+             and a.status == AnomalyStatus.ACTIVE),
+            None,
+        )
+        if target is None:
+            return
+
+        update_stamina(npc, STAMINA_COST_RESEARCH, "research", self.state.time)
+        outcome = research_anomaly(
+            npc, target, hour,
+            rng_value=self.state.rng.random(),
+            prior_anomaly_knowledge=True,
+        )
+        result = outcome.get("result", "no_new_info")
+
+        if result == "position_type_found":
+            kb.add_manual(npc.id, KnowledgeType.ANOMALY, target.id, {
+                "sector_id": npc.sector_id,
+                "anomaly_type": target.anomaly_type.value,
+                "concealment": target.concealment,
+                "stability": target.stability,
+                "researched": True,
+            }, hour)
+            # Сформировавшийся артефакт обнаруживается при исследовании (§12.3)
+            self._give_artifact(npc, target, hour)
+        elif result == "safe_path_found":
+            kb.add_manual(npc.id, KnowledgeType.SAFE_PATH, target.id, {
+                "sector_id": npc.sector_id, "active": True,
+            }, hour)
+        elif result == "artifact_found":
+            kb.add_manual(npc.id, KnowledgeType.ANOMALY, target.id, {
+                "sector_id": npc.sector_id, "has_artifact": True,
+            }, hour)
+            self._give_artifact(npc, target, hour)
+        elif result == "damage_taken":
+            start = npc.health
+            npc.health = max(0, npc.health - outcome.get("damage", 0))
+            if npc.health <= 0:
+                self._set_unconscious_or_dead(npc, start, hour, cause="research")
+
+        if result != "no_new_info":
+            self.state.news_manager.create_event(
+                hour=hour, minute=30, sector_id=npc.sector_id,
+                event_type="research", participants=[npc.id], result=result,
+                importance=25, summary=f"NPC {npc.id} исследует аномалию {target.id}: {result}",
+                details={"anomaly_id": target.id, "outcome": result},
+            )
+
+    def _give_artifact(self, npc: HumanNPC, anomaly, hour: int) -> None:
+        for art in self.state.artifacts.artifacts:
+            if art.anomaly_id == anomaly.id and not art.discovered:
+                art.discovered = True
+                npc.artifacts.append(art.id)
+                self.state.news_manager.create_event(
+                    hour=hour, minute=45, sector_id=npc.sector_id,
+                    event_type="artifact_found", participants=[npc.id], result="picked_up",
+                    importance=30,
+                    summary=f"NPC {npc.id} извлёк артефакт из аномалии {anomaly.id}",
+                    details={"artifact_id": art.id, "rarity": art.rarity, "value": art.value},
+                )
+                return
+
+    def _exit_tick(self, npc: HumanNPC, hour: int) -> None:
+        """Попытка покинуть Зону с внешней границы (§14.6)."""
+        border_ids = {s.id for s in self.state.sectors.values() if s.is_border}
+        if npc.sector_id not in border_ids:
+            return
+        success, result = self.state.exile_manager.process_exile_attempt(
+            npc, npc.sector_id, border_ids, self.state.rng,
+        )
+        if success:
+            self.state.news_manager.create_event(
+                hour=hour, minute=0, sector_id=npc.sector_id,
+                event_type="exile", participants=[npc.id], result="exiled",
+                importance=50, summary=f"NPC {npc.id} покинул Зону",
+                details={"result": result},
+            )
+
+    def _set_unconscious_or_dead(self, npc: HumanNPC, start_health: int,
+                                 hour: int, cause: str) -> None:
+        outcome = self._resolve_zero_health(npc, start_health)
+        self.state.news_manager.create_event(
+            hour=hour, minute=0, sector_id=npc.sector_id,
+            event_type="npc_death" if outcome == "dead" else "npc_unconscious",
+            participants=[npc.id], result=outcome,
+            importance=60 if outcome == "dead" else 40,
+            summary=f"NPC {npc.id}: {outcome} ({cause})",
+            details={"cause": cause},
+        )
+
     def _phase7_actions(self, hour: int, is_night: bool) -> None:
-        """Фаза 7: Основные действия."""
+        """Фаза 7: Основные действия — исполнение намерений (§9.1) и сон."""
         for npc in self.state.humans:
-            if npc.status not in (EntityStatus.ACTIVE, EntityStatus.SLEEPING):
+            if npc.status == EntityStatus.SLEEPING:
+                self._sleep_tick(npc)
+                continue
+            if npc.status == EntityStatus.UNCONSCIOUS:
+                self._unconscious_tick(npc, hour)
+                continue
+            if npc.status != EntityStatus.ACTIVE:
                 continue
 
-            # Обработка сна
-            if npc.status == EntityStatus.SLEEPING:
-                if self.state.rng.random() < 0.2:
-                    npc.status = EntityStatus.ACTIVE
-                    npc.stamina = min(npc.stamina + 25, npc.max_stamina)
-                    continue
+            # Базовый расход выносливости за час бодрствования (§14.1)
+            update_stamina(npc, STAMINA_COST_AWAKE, "awake", self.state.time)
+            if npc.status != EntityStatus.ACTIVE:
+                continue  # истощение → потеря сознания
 
-            # Обработка бессознательного
-            if npc.status == EntityStatus.UNCONSCIOUS:
-                if self.state.rng.random() < 0.1:
-                    npc.status = EntityStatus.SLEEPING
-                    npc.stamina = min(npc.stamina + 10, npc.max_stamina * 0.3)
+            if npc.intention == SLEEP:
+                npc.status = EntityStatus.SLEEPING
+            elif npc.intention == REST:
+                self._rest_tick(npc)
+            elif npc.intention == RESEARCH:
+                self._research_tick(npc, hour)
+            elif npc.intention == EXIT:
+                self._exit_tick(npc, hour)
 
-        # Обработка сна монстров
+        # Монстры: временное простое поведение (видовое поведение — отдельный этап)
         for monster in self.state.monsters:
             if monster.status == EntityStatus.ACTIVE and is_night and self.state.rng.random() < 0.3:
                 monster.status = EntityStatus.SLEEPING
@@ -425,29 +688,8 @@ class SimulationEngine:
                     )
 
     def _phase9_consequences(self, hour: int) -> None:
-        """Фаза 9: Последствия."""
-        # Развитие характеристик
-        for npc in self.state.humans:
-            if npc.status == EntityStatus.ACTIVE:
-                # Попытка выхода из Зоны — редкое обдуманное решение (§14.6),
-                # а не автоматический часовой бросок
-                border_ids = {s.id for s in self.state.sectors.values() if s.is_border}
-                if npc.sector_id in border_ids and self.state.rng.random() < 0.03:
-                    success, result = self.state.exile_manager.process_exile_attempt(
-                        npc, npc.sector_id, border_ids, self.state.rng,
-                    )
-                    if success:
-                        self.state.news_manager.create_event(
-                            hour=hour,
-                            minute=0,
-                            sector_id=npc.sector_id,
-                            event_type="exile",
-                            participants=[npc.id],
-                            result="exiled",
-                            importance=75,
-                            summary=f"NPC {npc.id} покинул Зону",
-                            details={"result": result},
-                        )
+        """Фаза 9: Последствия (добыча, плен, отношения — по мере готовности систем)."""
+        pass
 
     def _phase10_report(self, hour: int) -> None:
         """Фаза 10: Отчёт."""
