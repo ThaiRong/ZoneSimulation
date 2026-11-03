@@ -5,8 +5,9 @@ from __future__ import annotations
 import random
 from typing import Any
 
+from zonesim.anomalies.core import Anomaly, AnomalyType
 from zonesim.core.time import SeededRNG
-from zonesim.world.entity import Anomaly, HumanNPC, Monster
+from zonesim.world.entity import HumanNPC, Monster
 from zonesim.world.sector import Sector, get_distance
 
 
@@ -166,18 +167,16 @@ def _spawn_monsters(sectors: dict[int, Sector], start_ids: list[int], count: int
 
 
 def _spawn_anomalies(sectors: dict[int, Sector], start_ids: list[int], count: int, rng: SeededRNG) -> list[Anomaly]:
-    types = ["subtle", "visible", "large"]
+    types = list(AnomalyType)
     anomalies: list[Anomaly] = []
     sector_ids = [s for s in sectors if s not in start_ids]
 
     for i in range(count):
         sec_id = rng.choice(sector_ids) if sector_ids else rng.choice(list(sectors.keys()))
-        atype = rng.choice(types)
-        anomalies.append(Anomaly(
+        anomalies.append(Anomaly.create_from_type(
             id=i + 2000,
             sector_id=sec_id,
-            anomaly_type=atype,
-            concealment={"subtle": 70, "visible": 30, "large": 20}[atype],
-            stability={"subtle": 40, "visible": 80, "large": 140}[atype],
+            atype=rng.choice(types),
+            rng=rng,
         ))
     return anomalies

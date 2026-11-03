@@ -37,13 +37,12 @@ def check_anomaly_migration(
     if not sector_ids or not faction_start_ids:
         return {"moved": False, "reason": "no_valid_sectors"}
 
-    # Выбираем допустимый сектор (не стартовый)
+    # Выбираем допустимый сектор (не стартовый) — детерминированно по rng_value
     valid_targets = [s for s in sector_ids if s not in faction_start_ids]
     if not valid_targets:
         return {"moved": False, "reason": "no_valid_targets"}
 
-    import random
-    new_sector = random.choice(valid_targets)
+    new_sector = valid_targets[int(rng_value * len(valid_targets)) % len(valid_targets)]
     old_sector = anomaly.sector_id
 
     anomaly.sector_id = new_sector

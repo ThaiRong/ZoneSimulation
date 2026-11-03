@@ -69,6 +69,7 @@ def check_anomaly_contact(
     entity_sector: int,
     anomaly: Anomaly,
     rng_func,
+    attentiveness: int = 50,
     known_bonus: int = 0,
     has_safe_path: bool = False,
     is_night: bool = False,
@@ -78,7 +79,7 @@ def check_anomaly_contact(
     Возвращает результат: avoided или hit.
     """
     avoid_chance = calculate_avoid_chance(
-        attentiveness=50,  # placeholder — caller должен передать реальную внимательность
+        attentiveness=attentiveness,
         anomaly_concealment=anomaly.concealment,
         known_bonus=known_bonus,
         path_bonus=70 if has_safe_path else 0,

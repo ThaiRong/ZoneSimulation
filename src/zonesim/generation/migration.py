@@ -13,6 +13,7 @@ MONSTER_MAX_GROUPS_PER_DAY = 3
 # Лимит прибытия людей (§14.6)
 HUMAN_MAX_PER_DAY = 1
 HUMAN_ARRIVAL_CHANCE_LOW_POP = 0.3  # при критически малом населении
+HUMAN_ARRIVAL_CHANCE_NORMAL = 0.02  # обычный фоновый приток
 
 
 class MigrationState:
@@ -43,7 +44,7 @@ def process_migration(
     new_monsters: list[Monster] = []
 
     # Обработка прибытия людей (§14.6)
-    _process_human_migration(sectors, time, migration_state, rng, config, new_humans)
+    _process_human_migration(sectors, humans, time, migration_state, rng, config, new_humans)
 
     # Обработка прибытия монстров (§13.6)
     _process_monster_migration(sectors, monsters, time, migration_state, rng, config, new_monsters)
@@ -56,13 +57,14 @@ def process_migration(
 
 def _process_human_migration(
     sectors: dict[int, object],
+    humans: list[HumanNPC],
     time,
     migration_state: MigrationState,
     rng: random.Random,
     config: dict,
     result: list[HumanNPC],
 ) -> None:
-    """Прибытие мобильных NPC через внешние границы."""
+    """Прибытие мобильных NPC через внешние границы (§14.6)."""
     current_day = time.hour // 24
 
     # Проверяем лимиты
@@ -73,11 +75,14 @@ def _process_human_migration(
     if migration_state.human_groups_today >= HUMAN_MAX_PER_DAY:
         return
 
-    # Вероятность при низком населении
-    current_human_count = sum(1 for h in result + [h for h in result if h.status != EntityStatus.EXILED] if True)
-    if current_human_count < 10:
-        if rng.random() > HUMAN_ARRIVAL_CHANCE_LOW_POP:
-            return
+    # Вероятность зависит от численности: при критически малой — выше
+    current_human_count = sum(
+        1 for h in humans
+        if h.status in (EntityStatus.ACTIVE, EntityStatus.SLEEPING)
+    )
+    arrival_chance = HUMAN_ARRIVAL_CHANCE_LOW_POP if current_human_count < 10 else HUMAN_ARRIVAL_CHANCE_NORMAL
+    if rng.random() > arrival_chance:
+        return
 
     # Выбираем случайный граничный сектор
     border_ids = [sid for sid, s in sectors.items() if s.is_border]

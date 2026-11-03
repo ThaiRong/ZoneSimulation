@@ -199,7 +199,7 @@ class ExileManager:
         success_chance = 0.7 if npc.health > 50 else 0.4
 
         if rng.random() < success_chance:
-            npc.status = "exiled"
+            npc.status = EntityStatus.EXILED
             return True, "exiled"
         else:
             return False, "failed_exit"

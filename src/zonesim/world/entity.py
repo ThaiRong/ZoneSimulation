@@ -66,18 +66,3 @@ class Monster(BaseEntity):
     species: str = "TerritorialPredator"
     group_id: int | None = None
     home_sector_id: int | None = None
-
-
-@dataclass
-class Anomaly:
-    id: int
-    sector_id: int
-    anomaly_type: str = "subtle"  # subtle, visible, large
-    stability: int = 40
-    concealment: int = 70
-    damage_min: int = 5
-    damage_max: int = 12
-    artifact_timer: int = 0
-    move_timer: int = 0
-    safe_path: bool = False
-    status: str = "active"  # active, destroyed

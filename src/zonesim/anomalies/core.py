@@ -61,12 +61,9 @@ class Anomaly:
     @classmethod
     def create_from_type(cls, id: int, sector_id: int, atype: AnomalyType,
                          rng) -> Anomaly:
-        """Создаёт аномалию по типу с рандомными параметрами."""
+        """Создаёт аномалию по типу со стартовыми параметрами из §12.1."""
         params = cls.TYPE_PARAMS[atype]
-        rng_val = rng.random()
-        damage = int((params["damage_min"] + params["damage_max"]) / 2 + (rng_val - 0.5) * (params["damage_max"] - params["damage_min"]))
-
-        anomaly = cls(
+        return cls(
             id=id,
             sector_id=sector_id,
             anomaly_type=atype,
@@ -76,6 +73,5 @@ class Anomaly:
             stability=params["stability"],
             artifact_timer=rng.randint(params["artifact_interval_min"], params["artifact_interval_max"]),
             move_timer=0,
-            safe_path=False,
+            safe_path=rng.random() < params["path_chance"],
         )
-        return anomaly

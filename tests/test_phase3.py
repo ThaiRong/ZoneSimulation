@@ -2,7 +2,8 @@
 
 import pytest
 from zonesim.core.time import PhaseOfDay, GameTime
-from zonesim.world.entity import Anomaly, HumanNPC, EntityStatus
+from zonesim.anomalies.core import Anomaly, AnomalyType
+from zonesim.world.entity import HumanNPC, EntityStatus
 from zonesim.world.stash import Stash
 from zonesim.world.shelter import Shelter
 from zonesim.knowledge.fact import KnowledgeBase, KnowledgeType
@@ -241,14 +242,14 @@ class TestResearch:
 
     def test_research_anomaly_outcomes(self):
         npc = HumanNPC(id=1, attentiveness=70, sector_id=5)
-        anomaly = Anomaly(id=100, sector_id=5, anomaly_type="large", stability=140, concealment=20)
+        anomaly = Anomaly(id=100, sector_id=5, anomaly_type=AnomalyType.LARGE, stability=140, concealment=20)
 
         result = research_anomaly(npc, anomaly, None, hour=10, rng_value=0.1)
         assert result["research_success"] in ("safe_path_found", "artifact_found", "position_type_found")
 
     def test_research_anomaly_damage(self):
         npc = HumanNPC(id=1, attentiveness=20, sector_id=5)
-        anomaly = Anomaly(id=100, sector_id=5, anomaly_type="visible", stability=80, concealment=30)
+        anomaly = Anomaly(id=100, sector_id=5, anomaly_type=AnomalyType.VISIBLE, stability=80, concealment=30)
 
         result = research_anomaly(npc, anomaly, None, hour=10, rng_value=0.7)
         # При провале — урон

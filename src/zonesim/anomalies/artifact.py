@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from zonesim.anomalies.core import Anomaly, AnomalyStatus, AnomalyType
+from zonesim.core.time import SeededRNG
 
 
 @dataclass
@@ -40,11 +41,13 @@ class ArtifactManager:
         self,
         anomaly: Anomaly,
         hour: int,
-        rng_value: float,
+        rng_value: float = 0.5,
+        rng: SeededRNG | None = None,
     ) -> dict:
         """
         Проверяет, сформировался ли артефакт.
-        Интервал 48-120 часов (§12.5).
+        Интервал 48-120 часов (§12.5). По завершении таймера — шанс 60%,
+        после чего начинается новый цикл независимо от результата.
         """
         if anomaly.status != AnomalyStatus.ACTIVE:
             return {"formed": False, "reason": "anomaly_inactive"}
@@ -52,36 +55,40 @@ class ArtifactManager:
         # Уменьшаем таймер
         anomaly.artifact_timer -= 1
 
-        if anomaly.artifact_timer <= 0:
-            # Шанс формирования — 60% за тик
-            if rng_value < 0.6:
-                artifact = self._create_artifact(anomaly, rng_value)
-                return {
-                    "formed": True,
-                    "artifact_id": artifact.id,
-                    "rarity": artifact.rarity,
-                    "value": artifact.value,
-                }
-            else:
-                # Новый интервал
-                anomaly.artifact_timer = rng_value.randint(48, 120)
-                return {"formed": False, "new_timer": anomaly.artifact_timer}
+        if anomaly.artifact_timer > 0:
+            return {"formed": False, "timer_remaining": anomaly.artifact_timer}
 
-        return {"formed": False, "timer_remaining": anomaly.artifact_timer}
+        roll = rng.random() if rng is not None else rng_value
+        if roll < 0.6:
+            artifact = self._create_artifact(anomaly, roll)
+            anomaly.artifact_timer = self._roll_new_timer(rng, rng_value)
+            return {
+                "formed": True,
+                "artifact_id": artifact.id,
+                "rarity": artifact.rarity,
+                "value": artifact.value,
+            }
 
-    def _create_artifact(self, anomaly: Anomaly, rng_value: float) -> Artifact:
+        anomaly.artifact_timer = self._roll_new_timer(rng, rng_value)
+        return {"formed": False, "new_timer": anomaly.artifact_timer}
+
+    @staticmethod
+    def _roll_new_timer(rng, rng_value: float) -> int:
+        if rng is not None:
+            return rng.randint(48, 120)
+        return 48 + int(rng_value * 72)  # 48..119, детерминированный запасной вариант
+
+    def _create_artifact(self, anomaly: Anomaly, rarity_roll: float) -> Artifact:
         """Создаёт артефакт."""
-        rarity_roll = rng_value
-
         if rarity_roll < 0.7:
             rarity = "common"
-            value = 150.0 + rng_value * 100
+            value = 150.0 + rarity_roll * 100
         elif rarity_roll < 0.9:
             rarity = "uncommon"
-            value = 250.0 + rng_value * 150
+            value = 250.0 + rarity_roll * 150
         else:
             rarity = "rare"
-            value = 400.0 + rng_value * 200
+            value = 400.0 + rarity_roll * 200
 
         artifact = Artifact(
             id=self._next_id,

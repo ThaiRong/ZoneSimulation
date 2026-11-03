@@ -85,8 +85,12 @@ class TestSimulationEngine:
         engine = SimulationEngine(seed=42)
         engine.state.time.hour = 47
         result = engine.simulate_hour()
+        # Симулировался час 47 (сутки 1 по §5: day = floor(hour/24))
+        assert result["hour"] == 47
+        assert result["day"] == 1
+        # После шага — час 48, сутки 2
         assert engine.state.time.hour == 48
-        assert result["day"] == 2
+        assert engine.state.time.day == 2
 
     def test_phase_changes(self):
         """Фазы суток меняются корректно."""
@@ -142,7 +146,7 @@ class TestSimulationEngine:
     def test_config_passed(self):
         """Config передаётся в движок."""
         engine = SimulationEngine(seed=42, config={"world": {"sectors_count": 20}})
-        assert "sectors_count" in engine.state.config
+        assert "sectors_count" in engine.state.config["world"]
 
     def test_mutation_does_not_crash(self):
         """Мутации NPC не вызывают ошибок."""
