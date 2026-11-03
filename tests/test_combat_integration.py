@@ -7,7 +7,7 @@ from zonesim.world.entity import EntityStatus
 
 
 class TestCombatLoop:
-    def test_combat_is_limited_to_five_rounds(self):
+    def test_combat_is_limited_to_ten_rounds(self):
         attacker = Combatant(
             1, "A", True, attack=1, defense=100, health=1000, max_health=1000,
             bravery=100, ammo=20, weapon_damage=1,
@@ -18,8 +18,48 @@ class TestCombatLoop:
         )
         result = CombatSystem([attacker], [defender], max_rounds=999).fight(lambda: 0.5)
 
-        assert result.rounds_fought == 5
+        assert result.rounds_fought == 10
         assert result.outcome == "draw"
+
+    def test_human_can_retreat_before_first_round_with_bonus(self):
+        attacker = Combatant(1, "A", True, health=10, bravery=0, ammo=5)
+        defender = Combatant(2, "D", True, attack=100, ammo=5)
+        sector = type("Sector", (), {"neighbors": [1]})()
+
+        result = CombatSystem(
+            [attacker], [defender], sectors={0: sector}, battle_sector_id=0,
+        ).fight(lambda: 0.5)
+
+        assert result.outcome == "attacker_retreated"
+        assert result.rounds_fought == 0
+        assert result.attacker_retreat_sector == 1
+        assert attacker.health == 10
+        assert attacker.ammo == 5
+        assert result.equipment_wear == []
+        retreat = next(entry for entry in result.battle_log if entry["type"] == "retreat")
+        assert retreat["round"] == 0
+        assert retreat["pre_combat"] is True
+        assert retreat["chance"] == 65
+
+    def test_monster_cannot_retreat_before_first_round(self):
+        attacker = Combatant(
+            1, "M", False, attack=1, health=10, bravery=0, species="TerritorialPredator",
+        )
+        defender = Combatant(
+            2, "D", True, attack=1, defense=100, health=1000, max_health=1000,
+            bravery=100, ammo=20, weapon_damage=1,
+        )
+        sector = type("Sector", (), {"neighbors": [1]})()
+
+        result = CombatSystem(
+            [attacker], [defender], sectors={0: sector}, battle_sector_id=0,
+        ).fight(lambda: 0.0)
+
+        assert result.rounds_fought >= 1
+        assert not any(
+            entry.get("type") == "retreat" and entry["round"] == 0
+            for entry in result.battle_log
+        )
 
     def test_defender_win_is_reported(self):
         attacker = Combatant(1, "A", True, attack=1, health=1, max_health=100, bravery=100)
@@ -80,6 +120,7 @@ class TestEngineCombat:
     def test_monster_encounter_executes_in_phase_seven(self):
         engine = SimulationEngine(seed=42)
         npc, monster = self._isolate_encounter(engine)
+        engine.state.sectors[npc.sector_id].neighbors = []
 
         engine._phase6_detections(engine.state.time.hour)
         assert len(engine._pending_battles) == 1
@@ -87,7 +128,7 @@ class TestEngineCombat:
 
         battles = [e for e in engine.state.news_manager.events if e.event_type == "combat"]
         assert len(battles) == 1
-        assert battles[0].details["rounds"] <= 5
+        assert battles[0].details["rounds"] <= 10
         assert npc.id in engine._combat_human_ids
         assert monster.id in engine._combat_monster_ids
         assert npc.health <= 1

@@ -56,9 +56,10 @@ class BattleResult:
 
 
 class CombatSystem:
-    """Автоматический бой продолжительностью не более пяти раундов (§11.1)."""
+    """Автоматический бой с предбоевым отступлением и лимитом в десять раундов."""
 
-    MAX_ROUNDS_DEFAULT = 5
+    MAX_ROUNDS_DEFAULT = 10
+    PRE_COMBAT_RETREAT_BONUS = 20.0
 
     def __init__(
         self,
@@ -116,6 +117,11 @@ class CombatSystem:
         """Выполняет бой с воспроизводимым источником случайных чисел."""
         self.rounds_fought = 0
         self.battle_log = []
+
+        if self._check_retreat_phase("attacker", rng_func):
+            return self._compile_result()
+        if self._check_retreat_phase("defender", rng_func):
+            return self._compile_result()
 
         while self.rounds_fought < self.max_rounds:
             if not self._active(self.attackers) or not self._active(self.defenders):
@@ -208,6 +214,10 @@ class CombatSystem:
         if not alive or not enemies:
             return False
 
+        pre_combat = self.rounds_fought == 0
+        if pre_combat and not all(c.is_human for c in alive):
+            return False
+
         enemy_ambush = self.defender_ambush if side == "attacker" else self.attacker_ambush
         if enemy_ambush and self.rounds_fought == 1:
             return False
@@ -229,6 +239,8 @@ class CombatSystem:
             pursuer_att=round(sum(c.attentiveness for c in enemies) / len(enemies)),
             shelter_bonus=0.1 if (self.attacker_shelter if side == "attacker" else self.defender_shelter) else 0.0,
         )
+        if pre_combat:
+            chance = min(95.0, chance + self.PRE_COMBAT_RETREAT_BONUS)
         result = resolve_retreat(
             retreat_score=score,
             retreat_chance=chance,
@@ -238,7 +250,14 @@ class CombatSystem:
             has_shelter=self.attacker_shelter if side == "attacker" else self.defender_shelter,
             ambush=enemy_ambush and self.rounds_fought == 1,
         )
-        self.battle_log.append({"type": "retreat", "side": side, "round": self.rounds_fought, **result})
+        self.battle_log.append({
+            "type": "retreat",
+            "side": side,
+            "round": self.rounds_fought,
+            "pre_combat": pre_combat,
+            "chance": chance,
+            **result,
+        })
         if result["success"]:
             for combatant in alive:
                 combatant.is_retreating = True
