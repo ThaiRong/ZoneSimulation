@@ -1,29 +1,37 @@
-"""Главная боевая петля. Связывает base, retreat, surrender, unconscious, loot. Основано на §11 ТЗ."""
+"""Главная боевая петля. Связывает раунды, отступление, сдачу и последствия (§11)."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 
 from zonesim.combat.base import (
-    BattleLog, Combatant, CombatDefense, CombatFactory, CombatRound,
-    CombatBase, select_targets, CombatResult,
+    Combatant,
+    CombatBase,
+    CombatFactory as CombatFactory,
+    CombatResult,
+    CombatRound,
+    select_targets,
 )
+from zonesim.combat.loot import EquipmentManager
 from zonesim.combat.retreat import (
-    calculate_retreat_score, resolve_retreat, should_attempt_retreat,
     calculate_enemy_power_ratio,
+    calculate_retreat_chance,
+    calculate_retreat_score,
+    resolve_retreat,
+    should_attempt_retreat,
 )
-from zonesim.combat.surrender import SurrenderManager, SurrenderOutcome
+from zonesim.combat.surrender import SurrenderManager
 from zonesim.combat.unconscious import (
-    calculate_unconscious_chance, resolve_unconscious_check,
-    provide_medical_help, check_injury,
+    calculate_unconscious_chance,
+    provide_medical_help,
+    resolve_unconscious_check,
 )
-from zonesim.combat.loot import EquipmentManager, Corpse, LootType
 
 
 @dataclass
 class BattleResult:
     """Результат всего столкновения."""
+
     outcome: str
     rounds_fought: int
     attacker_survivors: list[int]
@@ -43,19 +51,21 @@ class BattleResult:
     medical_help: dict = field(default_factory=dict)
     value_damage: list[dict] = field(default_factory=list)
     battle_log: list[dict] = field(default_factory=list)
+    attacker_retreat_sector: int | None = None
+    defender_retreat_sector: int | None = None
 
 
 class CombatSystem:
-    """Главная боевая система. (§11)"""
+    """Автоматический бой продолжительностью не более пяти раундов (§11.1)."""
 
-    MAX_ROUNDS_DEFAULT = 999  # больше 5, без жёсткого ограничения
+    MAX_ROUNDS_DEFAULT = 5
 
     def __init__(
         self,
         attackers: list[Combatant],
         defenders: list[Combatant],
         sectors: dict[int, object] | None = None,
-        max_rounds: int = 999,
+        max_rounds: int = MAX_ROUNDS_DEFAULT,
         attacker_has_shelter: bool = False,
         defender_has_shelter: bool = False,
         attacker_is_monster: bool = False,
@@ -63,11 +73,12 @@ class CombatSystem:
         attacker_ambush: bool = False,
         defender_ambush: bool = False,
         battle_sector_id: int = 0,
+        relation: int = 0,
     ):
         self.attackers = attackers
         self.defenders = defenders
         self.sectors = sectors or {}
-        self.max_rounds = max_rounds
+        self.max_rounds = max(1, min(max_rounds, self.MAX_ROUNDS_DEFAULT))
         self.attacker_shelter = attacker_has_shelter
         self.defender_shelter = defender_has_shelter
         self.attacker_is_monster = attacker_is_monster
@@ -75,282 +86,326 @@ class CombatSystem:
         self.attacker_ambush = attacker_ambush
         self.defender_ambush = defender_ambush
         self.battle_sector_id = battle_sector_id
+        self.relation = relation
 
         self.battle_log: list[dict] = []
-        self.rounds_fought: int = 0
+        self.rounds_fought = 0
+        self.medical_help: dict = {}
+        self.equipment_wear: list[dict] = []
+        self._start_health = {
+            c.id: c.health / c.max_health if c.max_health > 0 else 0.0
+            for c in attackers + defenders
+        }
+        self._failed_retreat = {"attacker": False, "defender": False}
+        self._retreat_sectors: dict[str, int] = {}
+
+    @staticmethod
+    def _active(combatants: list[Combatant]) -> list[Combatant]:
+        return [
+            c for c in combatants
+            if c.is_alive and not c.unconscious and not c.surrendered and not c.is_retreating
+        ]
+
+    def _side(self, side: str) -> list[Combatant]:
+        return self.attackers if side == "attacker" else self.defenders
+
+    def _enemy(self, side: str) -> list[Combatant]:
+        return self.defenders if side == "attacker" else self.attackers
 
     def fight(self, rng_func) -> BattleResult:
-        """
-        Выполняет бой. (§11)
-        rng_func: callable() -> float для воспроизводимой случайности.
-        """
+        """Выполняет бой с воспроизводимым источником случайных чисел."""
         self.rounds_fought = 0
+        self.battle_log = []
 
         while self.rounds_fought < self.max_rounds:
-            # Проверяем живых
-            alive_attackers = [a for a in self.attackers if a.is_alive and not a.unconscious and not a.surrendered]
-            alive_defenders = [d for d in self.defenders if d.is_alive and not d.unconscious and not d.surrendered]
-
-            if not alive_attackers or not alive_defenders:
+            if not self._active(self.attackers) or not self._active(self.defenders):
                 break
 
-            # Фаза атаки атакующих
-            attack_rounds = self._resolve_phase(
-                self.attackers, self.defenders,
-                self.attacker_ambush,
-                self.defender_shelter,
-                self.defender_ambush,
-                "attacker",
-                rng_func,
-            )
-            self.battle_log.extend(attack_rounds)
-
-            # Фаза атаки защищающихся
-            defense_rounds = self._resolve_phase(
-                self.defenders, self.attackers,
-                self.defender_ambush,
-                self.attacker_shelter,
-                self.attacker_ambush,
-                "defender",
-                rng_func,
-            )
-            self.battle_log.extend(defense_rounds)
-
+            self._consume_ammo(self.attackers)
+            self._consume_ammo(self.defenders)
+            attack_rounds = self._resolve_phase("attacker", rng_func)
+            defense_rounds = self._resolve_phase("defender", rng_func)
             self.rounds_fought += 1
 
-            # Применение урона
-            for r in attack_rounds:
-                for attacker in self.attackers:
-                    if attacker.id == r["attacker_id"]:
-                        for defender in self.defenders:
-                            if defender.id == r["defender_id"]:
-                                defender.health -= r["damage"]
-                                if defender.health <= 0:
-                                    defender.health = 0
-
-            for r in defense_rounds:
-                for defender in self.defenders:
-                    if defender.id == r["attacker_id"]:
-                        for attacker in self.attackers:
-                            if attacker.id == r["defender_id"]:
-                                attacker.health -= r["damage"]
-                                if attacker.health <= 0:
-                                    attacker.health = 0
-
-            # Проверка здоровья 0 (ДО отступления — при health=0 монстр мёртв, человек — бессознателен)
+            for entry in attack_rounds + defense_rounds:
+                entry["round"] = self.rounds_fought
+            self.battle_log.extend(attack_rounds + defense_rounds)
+            self._apply_round_damage(attack_rounds, defense_rounds)
             self._check_zero_health(rng_func)
 
-            # Проверка отступления после раунда
-            attacker_retreat = self._check_retreat_phase(
-                "attacker", rng_func,
-            )
-            defender_retreat = self._check_retreat_phase(
-                "defender", rng_func,
-            )
+            for combatant in self.attackers + self.defenders:
+                combatant.attack_penalty = 1.0
+                combatant.defense_penalty = 1.0
+            self._failed_retreat = {"attacker": False, "defender": False}
 
-            if attacker_retreat:
-                self.attackers[0].is_retreating = True
+            if self._check_retreat_phase("attacker", rng_func):
                 break
-            if defender_retreat:
-                self.defenders[0].is_retreating = True
+            if self._check_retreat_phase("defender", rng_func):
                 break
 
-            # Проверка сдачи
-            self._check_surrender_phase(rng_func)
+            self._check_surrender_phase("attacker", rng_func)
+            self._check_surrender_phase("defender", rng_func)
 
+        self._apply_medical_help(rng_func)
+        self._apply_equipment_wear(rng_func)
+        for combatant in self.attackers + self.defenders:
+            combatant.stamina = max(0.0, combatant.stamina - 5.0)
         return self._compile_result()
 
-    def _resolve_phase(
-        self,
-        attacking_combatants: list[Combatant],
-        defending_combatants: list[Combatant],
-        ambush: bool,
-        shelter_bonus: bool,
-        defender_ambush: bool,
-        phase_name: str,
-        rng_func,
-    ) -> list[dict]:
-        """Решает фазу атак одной из сторон."""
-        rounds: list[dict] = []
-        targets = select_targets(
-            attacking_combatants, defending_combatants,
-            is_monster=(phase_name == "attacker" and self.attacker_is_monster),
-        )
+    def _consume_ammo(self, combatants: list[Combatant]) -> None:
+        for combatant in self._active(combatants):
+            if combatant.is_human and combatant.ammo > 0:
+                combatant.ammo -= 1
 
-        for atk, def_ in targets:
-            if not atk.is_alive or atk.unconscious:
-                continue
-            round_result = CombatRound(
-                attacker=atk,
-                defender=def_,
-                ambush_bonus=ambush,
-                shelter_bonus=0.1 if shelter_bonus else 0.0,
-            ).resolve(rng_func())
-            rounds.append(round_result)
+    def _resolve_phase(self, side: str, rng_func) -> list[dict]:
+        attackers = self._side(side)
+        defenders = self._enemy(side)
+        is_monster = self.attacker_is_monster if side == "attacker" else self.defender_is_monster
+        ambush = self.attacker_ambush if side == "attacker" else self.defender_ambush
+        shelter = self.defender_shelter if side == "attacker" else self.attacker_shelter
+        results = []
+        targets = select_targets(attackers, defenders, is_monster=is_monster)
+        for attacker, defender in targets:
+            result = CombatRound(
+                attacker=attacker,
+                defender=defender,
+                ambush_bonus=ambush and self.rounds_fought == 0,
+                shelter_bonus=0.1 if shelter else 0.0,
+            ).resolve(rng_func)
+            results.append(result)
+        return results
 
-        return rounds
-
-    def _check_retreat_phase(
-        self, side: str,
-        rng_func,
-    ) -> bool:
-        """Проверяет, пытается ли сторона отступить после раунда."""
-        if side == "attacker":
-            combatants = self.attackers
-            is_monster = self.attacker_is_monster
-            ambush_active = self.defender_ambush
-        else:
-            combatants = self.defenders
-            is_monster = self.defender_is_monster
-            ambush_active = self.attacker_ambush
-
-        alive = [c for c in combatants if c.is_alive and not c.unconscious and not c.surrendered]
-        if not alive:
-            return False
-
-        # Считаем average health share и loss share
-        avg_health = sum(c.health / c.max_health for c in alive) / len(alive) if alive else 0
-        total_before = len(combatants)
-        losses = total_before - len(alive)
-        loss_share = losses / total_before if total_before > 0 else 0
-
-        enemy_power = sum(
-            c.attack * c.health / c.max_health for c in (self.defenders if side == "attacker" else self.attackers)
-            if c.is_alive and not c.unconscious
-        )
-        own_power = sum(
-            c.attack * c.health / c.max_health for c in alive
-        )
-        power_ratio = enemy_power / own_power if own_power > 0 else 2.0
-
-        # Avg bravery
-        avg_bravery = sum(c.bravery for c in alive) / len(alive) if alive else 50
-
-        retreat_score = calculate_retreat_score(
-            health_share=avg_health,
-            enemy_power_ratio=power_ratio,
-            bravery=avg_bravery,
-            loss_share=loss_share,
-        )
-
-        if should_attempt_retreat(retreat_score, is_overwhelming=power_ratio > 2.0):
-            result = resolve_retreat(
-                retreat_score=retreat_score,
-                retreat_chance=50.0,
-                rng_value=rng_func(),
-                current_sector_id=self.battle_sector_id,
-                sectors=self.sectors,
-                has_shelter=alive[0] in (self.attackers if side == "attacker" else self.defenders)
-                              and (self.attacker_shelter if side == "attacker" else self.defender_shelter),
-                ambush=ambush_active,
-            )
-            if result.get("success"):
-                # Перемещение
-                for c in alive:
-                    if result.get("new_sector_id"):
-                        pass  # в полной версии обновляем sector_id
-                return True
-
-        return False
-
-    def _check_surrender_phase(self, rng_func) -> None:
-        """Проверяет сдачу после раунда. (§11.9)"""
-        alive_attackers = [a for a in self.attackers if a.is_alive and not a.unconscious]
-        alive_defenders = [d for d in self.defenders if d.is_alive and not d.unconscious]
-
-        if not alive_attackers or not alive_defenders:
-            return
-
-        atk = alive_attackers[0]
-        def_ = alive_defenders[0]
-
-        if atk.is_human and def_.is_human:
-            atk_health_share = atk.health / atk.max_health if atk.max_health > 0 else 0
-            enemy_ratio = (sum(d.attack * d.health / d.max_health for d in alive_defenders)) / \
-                          max(sum(a.attack * a.health / a.max_health for a in alive_attackers), 1)
-
-            if SurrenderManager.can_surrender(
-                attacker_is_human=True,
-                defender_is_human=True,
-                bravery=atk.attack,
-                health_share=atk_health_share,
-                power_ratio=enemy_ratio,
-            ):
-                if rng_func() < 0.3:  # 30% шанс предложить сдачу
-                    atk.surrendered = True
+    def _apply_round_damage(self, attack_rounds: list[dict], defense_rounds: list[dict]) -> None:
+        for rounds, attackers, defenders in (
+            (attack_rounds, self.attackers, self.defenders),
+            (defense_rounds, self.defenders, self.attackers),
+        ):
+            attacker_map = {c.id: c for c in attackers}
+            defender_map = {c.id: c for c in defenders}
+            for entry in rounds:
+                attacker = attacker_map[entry["attacker_id"]]
+                defender = defender_map[entry["defender_id"]]
+                if attacker.is_alive and defender.is_alive:
+                    defender.health = max(0, defender.health - entry["damage"])
 
     def _check_zero_health(self, rng_func) -> None:
-        """Проверяет здоровье 0 и применяет механику unconscious. (§11.10)"""
-        for c in self.attackers + self.defenders:
-            if c.health <= 0 and c.is_alive and not c.unconscious:
-                if c.is_human:
-                    # humans: check unconscious chance
-                    # При первом достижении 0
-                    start_health = c.max_health  # для упрощения
-                    start_share = start_health / c.max_health if c.max_health > 0 else 0.5
-                    chance = calculate_unconscious_chance(start_share)
-                    outcome = resolve_unconscious_check(rng_func(), chance)
-                    if outcome == "unconscious":
-                        c.unconscious = True
-                        c.health = 0
-                else:
-                    # Монстры при health 0 → труп
-                    c.is_alive = False
+        for combatant in self.attackers + self.defenders:
+            if combatant.health > 0 or not combatant.is_alive or combatant.unconscious:
+                continue
+            if not combatant.is_human:
+                combatant.is_alive = False
+                continue
+            chance = calculate_unconscious_chance(self._start_health[combatant.id])
+            if resolve_unconscious_check(rng_func(), chance) == "unconscious":
+                combatant.unconscious = True
+            else:
+                combatant.is_alive = False
+
+    def _check_retreat_phase(self, side: str, rng_func) -> bool:
+        combatants = self._side(side)
+        alive = self._active(combatants)
+        enemies = self._active(self._enemy(side))
+        if not alive or not enemies:
+            return False
+
+        enemy_ambush = self.defender_ambush if side == "attacker" else self.attacker_ambush
+        if enemy_ambush and self.rounds_fought == 1:
+            return False
+
+        avg_health = sum(c.health / c.max_health for c in alive) / len(alive)
+        loss_share = (len(combatants) - len(alive)) / len(combatants)
+        own_power = CombatBase.calculate_group_bp(alive)
+        enemy_power = CombatBase.calculate_group_bp(enemies)
+        power_ratio = calculate_enemy_power_ratio(enemy_power, own_power)
+        avg_bravery = sum(c.bravery for c in alive) / len(alive)
+        score = calculate_retreat_score(avg_health, power_ratio, avg_bravery, loss_share)
+
+        if not should_attempt_retreat(score, is_overwhelming=power_ratio > 2.0):
+            return False
+
+        chance = calculate_retreat_chance(
+            speed_ratio=self._speed_ratio(side),
+            escape_att=round(sum(c.attentiveness for c in alive) / len(alive)),
+            pursuer_att=round(sum(c.attentiveness for c in enemies) / len(enemies)),
+            shelter_bonus=0.1 if (self.attacker_shelter if side == "attacker" else self.defender_shelter) else 0.0,
+        )
+        result = resolve_retreat(
+            retreat_score=score,
+            retreat_chance=chance,
+            rng_value=rng_func(),
+            current_sector_id=self.battle_sector_id,
+            sectors=self.sectors,
+            has_shelter=self.attacker_shelter if side == "attacker" else self.defender_shelter,
+            ambush=enemy_ambush and self.rounds_fought == 1,
+        )
+        self.battle_log.append({"type": "retreat", "side": side, "round": self.rounds_fought, **result})
+        if result["success"]:
+            for combatant in alive:
+                combatant.is_retreating = True
+            self._retreat_sectors[side] = result["new_sector_id"]
+            return True
+
+        if result.get("reason") == "failed":
+            self._failed_retreat[side] = True
+            for combatant in alive:
+                combatant.attack_penalty = 0.9
+                combatant.defense_penalty = 0.8
+        return False
+
+    def _speed_ratio(self, side: str) -> float:
+        own = self._side(side)
+        enemy = self._enemy(side)
+
+        def speed(combatants):
+            return max((2.0 if c.species == "TerritorialPredator" else 1.0) for c in combatants)
+
+        return speed(own) / speed(enemy)
+
+    def _check_surrender_phase(self, side: str, rng_func) -> None:
+        if not self._failed_retreat[side]:
+            return
+        combatants = self._active(self._side(side))
+        enemies = self._active(self._enemy(side))
+        if not combatants or not enemies:
+            return
+        if not all(c.is_human for c in combatants + enemies):
+            return
+
+        health = sum(c.health / c.max_health for c in combatants) / len(combatants)
+        bravery = sum(c.bravery for c in combatants) / len(combatants)
+        ratio = calculate_enemy_power_ratio(
+            CombatBase.calculate_group_bp(enemies),
+            CombatBase.calculate_group_bp(combatants),
+        )
+        if not SurrenderManager.can_surrender(True, True, bravery, health, ratio, self.relation):
+            return
+        if rng_func() >= 0.3:
+            return
+
+        outcome = SurrenderManager.determine_outcome(
+            surrendering_count=len(combatants),
+            captor_count=len(enemies),
+            relation=self.relation,
+            captor_faction=enemies[0].faction,
+            target_faction=combatants[0].faction,
+            bravery=bravery,
+            rng_value=rng_func(),
+        )
+        for index in outcome["captured"]:
+            combatants[index].surrendered = True
+        for index in outcome["killed"]:
+            combatants[index].is_alive = False
+            combatants[index].health = 0
+        for index in outcome["released"]:
+            combatants[index].is_retreating = True
+            self._retreat_sectors[side] = self.battle_sector_id
+        self.battle_log.append({
+            "type": "surrender",
+            "side": side,
+            "round": self.rounds_fought,
+            "outcome": outcome["outcome"].value,
+            "participants": [c.id for c in combatants],
+        })
+
+    def _apply_medical_help(self, rng_func) -> None:
+        attackers_active = self._active(self.attackers)
+        defenders_active = self._active(self.defenders)
+        winners = []
+        losers = []
+        if attackers_active and not defenders_active:
+            winners, losers = self.attackers, self.defenders
+        elif defenders_active and not attackers_active:
+            winners, losers = self.defenders, self.attackers
+
+        helped_ids = set()
+        unconscious = [c for c in winners if c.is_alive and c.unconscious]
+        if unconscious and all(c.is_human for c in winners):
+            medicines = sum(c.medicines for c in winners + losers)
+            result = provide_medical_help(
+                unconscious_ids=[c.id for c in unconscious],
+                available_medicines=medicines,
+                unconscious_state={c.id: 0 for c in unconscious},
+                max_healths={c.id: c.max_health for c in unconscious},
+                rng_value=rng_func(),
+            )
+            self.medical_help = result
+            by_id = {c.id: c for c in unconscious}
+            for entry in result["helped"]:
+                combatant = by_id[entry["id"]]
+                combatant.health = entry["new_health"]
+                combatant.unconscious = False
+                helped_ids.add(combatant.id)
+            to_consume = result["medicines_used"]
+            for combatant in winners + losers:
+                used = min(combatant.medicines, to_consume)
+                combatant.medicines -= used
+                to_consume -= used
+
+        for combatant in self.attackers + self.defenders:
+            if combatant.unconscious and combatant.id not in helped_ids:
+                combatant.unconscious = False
+                combatant.is_alive = False
+                combatant.health = 0
+
+    def _apply_equipment_wear(self, rng_func) -> None:
+        self.equipment_wear = []
+        for combatant in self.attackers + self.defenders:
+            old_condition = combatant.weapon_condition
+            wear = EquipmentManager.apply_weapon_wear(old_condition, True, rng_func())
+            combatant.weapon_condition = wear.new_condition
+            self.equipment_wear.append({
+                "id": combatant.id,
+                "name": combatant.name,
+                "old_condition": old_condition,
+                "new_condition": wear.new_condition,
+                "destroyed": wear.destroyed,
+            })
 
     def _compile_result(self) -> BattleResult:
-        """Собирает итоговый результат боя."""
-        attacker_wear = []
-        defender_wear = []
+        attackers_active = self._active(self.attackers)
+        defenders_active = self._active(self.defenders)
+        attacker_retreated = [c.id for c in self.attackers if c.is_retreating]
+        defender_retreated = [c.id for c in self.defenders if c.is_retreating]
+        attacker_surrendered = [c.id for c in self.attackers if c.surrendered]
+        defender_surrendered = [c.id for c in self.defenders if c.surrendered]
 
-        for atk in self.attackers:
-            wear = EquipmentManager.apply_weapon_wear(100, True, 0.5)
-            attacker_wear.append({
-                "id": atk.id,
-                "name": atk.name,
-                "old_condition": 100,
-                "new_condition": wear.new_condition,
-                "destroyed": wear.destroyed,
-            })
-
-        for def_ in self.defenders:
-            wear = EquipmentManager.apply_weapon_wear(100, True, 0.5)
-            defender_wear.append({
-                "id": def_.id,
-                "name": def_.name,
-                "old_condition": 100,
-                "new_condition": wear.new_condition,
-                "destroyed": wear.destroyed,
-            })
-
-        attacker_dead = [a.id for a in self.attackers if not a.is_alive]
-        defender_dead = [d.id for d in self.defenders if not d.is_alive]
-
-        attacker_unconscious = [a.id for a in self.attackers if a.unconscious]
-        defender_unconscious = [d.id for d in self.defenders if d.unconscious]
-
-        attacker_surrendered = [a.id for a in self.attackers if a.surrendered]
-        defender_surrendered = [d.id for d in self.defenders if d.surrendered]
-
-        if self.defenders:
-            outcome = CombatResult.ATTACKER_WINS if defender_dead else CombatResult.DRAW
-        else:
+        if attacker_retreated:
+            outcome = CombatResult.ATTACKER_RETREATED
+        elif defender_retreated:
+            outcome = CombatResult.DEFENDER_RETREATED
+        elif attacker_surrendered and not attackers_active:
+            outcome = CombatResult.ATTACKER_SURRENDERED
+        elif defender_surrendered and not defenders_active:
+            outcome = CombatResult.DEFENDER_SURRENDERED
+        elif attackers_active and not defenders_active:
             outcome = CombatResult.ATTACKER_WINS
+        elif defenders_active and not attackers_active:
+            outcome = CombatResult.DEFENDER_WINS
+        else:
+            outcome = CombatResult.DRAW
 
         return BattleResult(
-            outcome=outcome,
+            outcome=outcome.value,
             rounds_fought=self.rounds_fought,
-            attacker_survivors=[a.id for a in self.attackers if a.is_alive and not a.unconscious and not a.surrendered],
-            defender_survivors=[d.id for d in self.defenders if d.is_alive and not d.unconscious and not d.surrendered],
-            attacker_dead=attacker_dead,
-            defender_dead=defender_dead,
-            attacker_unconscious=attacker_unconscious,
-            defender_unconscious=defender_unconscious,
+            attacker_survivors=[c.id for c in attackers_active],
+            defender_survivors=[c.id for c in defenders_active],
+            attacker_dead=[c.id for c in self.attackers if not c.is_alive],
+            defender_dead=[c.id for c in self.defenders if not c.is_alive],
+            attacker_unconscious=[c.id for c in self.attackers if c.unconscious],
+            defender_unconscious=[c.id for c in self.defenders if c.unconscious],
             attacker_prisoners=attacker_surrendered,
             defender_prisoners=defender_surrendered,
-            attacker_retreated=[a.id for a in self.attackers if a.is_retreating],
-            defender_retreated=[d.id for d in self.defenders if d.is_retreating],
+            attacker_retreated=attacker_retreated,
+            defender_retreated=defender_retreated,
             attacker_surrendered=attacker_surrendered,
             defender_surrendered=defender_surrendered,
-            equipment_wear=attacker_wear + defender_wear,
+            equipment_wear=self.equipment_wear,
+            corpses=[
+                {"entity_id": c.id, "sector_id": self.battle_sector_id}
+                for c in self.attackers + self.defenders if not c.is_alive
+            ],
+            medical_help=self.medical_help,
             battle_log=self.battle_log,
+            attacker_retreat_sector=self._retreat_sectors.get("attacker"),
+            defender_retreat_sector=self._retreat_sectors.get("defender"),
         )

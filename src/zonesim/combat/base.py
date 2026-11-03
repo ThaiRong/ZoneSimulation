@@ -32,9 +32,16 @@ class Combatant:
     health: int = 100
     max_health: int = 100
     species: str = "Human"
-    weapon_damage: int = 20  # базовый урон оружия (20 для стандартного)
-    armor_value: float = 1.0  # множитель защиты (1.0 стандарт, <1 сломано)
-    bravery: int = 50  # храбрость (§11.6)
+    weapon_damage: int = 20
+    weapon_condition: int = 100
+    armor_value: float = 1.0
+    bravery: int = 50
+    attentiveness: int = 50
+    faction: str = ""
+    ammo: int = 0
+    medicines: int = 0
+    attack_penalty: float = 1.0
+    defense_penalty: float = 1.0
     is_alive: bool = True
     is_retreating: bool = False
     surrendered: bool = False
@@ -56,13 +63,20 @@ class CombatFactory:
             max_stamina=npc.max_stamina,
             health=npc.health,
             max_health=npc.max_health,
+            bravery=npc.bravery,
+            attentiveness=npc.attentiveness,
+            faction=npc.faction,
+            weapon_condition=getattr(npc, "weapon_condition", 100),
+            ammo=getattr(npc, "ammo", 0),
+            medicines=getattr(npc, "medicines", 0),
         )
 
     @staticmethod
     def from_monster(monster: Monster) -> Combatant:
+        species = monster.species.value if hasattr(monster.species, "value") else monster.species
         return Combatant(
             id=monster.id,
-            name=monster.species,
+            name=str(species),
             is_human=False,
             attack=monster.attack,
             defense=monster.defense,
@@ -70,8 +84,10 @@ class CombatFactory:
             max_stamina=monster.max_stamina,
             health=monster.health,
             max_health=monster.max_health,
-            species=monster.species,
-            weapon_damage=CombatBase.calculate_monster_base_damage(monster.species),
+            species=species,
+            weapon_damage=CombatBase.calculate_monster_base_damage(species),
+            bravery=monster.bravery,
+            attentiveness=monster.attentiveness,
         )
 
 
@@ -172,43 +188,43 @@ class CombatRound:
         self.result: str = ""
 
     def resolve(self, rng_value: float) -> dict[str, Any]:
-        """
-        Выполняет один раунд. (§11.4)
-        A = BP × random(0.80; 1.20) × AttackSituation
-        D = DP × random(0.80; 1.20)
-        P_hit = clamp(0.20 + 0.60 × A/(A+D), 0.10, 0.90)
-        """
+        """Выполняет атаку; callable даёт независимый бросок каждой проверке."""
+        if callable(rng_value):
+            rng_func = rng_value
+        else:
+            rng_func = lambda: rng_value
+
         atk_bp = self._calc_attack_bp(self.attacker)
         def_dp = CombatDefense.calculate_dp(
             defense=self.defender.defense,
-            armor=1.0,
+            armor=self.defender.armor_value,
             health=self.defender.health,
             max_health=self.defender.max_health,
             stamina=self.defender.stamina,
             max_stamina=self.defender.max_stamina,
-            situation_bonus=1.0 + self.shelter_bonus + (0.25 if self.ambush_bonus else 0.0),
+            situation_bonus=1.0 + self.shelter_bonus,
+        ) * self.defender.defense_penalty
+
+        attack_situation = 1.25 if self.ambush_bonus else 1.0
+        if self.attacker.is_human and self.attacker.ammo <= 0:
+            attack_situation *= 0.5
+        self.atk_a = (
+            atk_bp * (0.80 + 0.40 * rng_func()) * attack_situation
+            * self.attacker.attack_penalty * self.retreating_penalty
         )
+        self.def_d = def_dp * (0.80 + 0.40 * rng_func())
 
-        # Случайные множители
-        atk_situation = 0.80 + 0.40 * rng_value
-        def_situation = 0.80 + 0.40 * (1.0 - rng_value)
-
-        self.atk_a = atk_bp * atk_situation * self.retreating_penalty
-        self.def_d = def_dp * def_situation
-
-        # Вероятность попадания
         denom = self.atk_a + self.def_d
         raw_p = 0.20 + 0.60 * (self.atk_a / denom) if denom > 0 else 0.20
         self.p_hit = max(0.10, min(raw_p, 0.90))
-
-        # Результат
-        self.success = rng_value < self.p_hit
+        self.success = rng_func() < self.p_hit
 
         if self.success:
-            base_dmg = self.attacker.weapon_damage
             dmg_situ = 0.75 + 0.50 * (self.atk_a / denom) if denom > 0 else 0.75
-            self.damage = base_dmg * (0.85 + 0.30 * rng_value) * dmg_situ * (1.0 - 0.3)  # 30% mitigation
-            self.damage = round(self.damage)
+            self.damage = round(
+                self.attacker.weapon_damage * (0.85 + 0.30 * rng_func())
+                * dmg_situ * 0.7
+            )
             self.result = "hit"
         else:
             self.damage = 0
@@ -238,7 +254,8 @@ class CombatRound:
 
         if combatant.is_human:
             weapon_factor = max(combatant.weapon_damage / 20.0, 0.25)
-            return 1.0 * (0.5 + combatant.attack / 100.0) * weapon_factor * h * s
+            condition_factor = max(0.25, combatant.weapon_condition / 100.0)
+            return 1.0 * (0.5 + combatant.attack / 100.0) * weapon_factor * condition_factor * h * s
         else:
             sp = CombatBase.SPECIES_POWER.get(combatant.species, 0.33)
             return sp * (0.5 + combatant.attack / 100.0) * h * s
@@ -263,11 +280,13 @@ def select_targets(
         # Люди: наибольшую угрозу (высокая атака)
         alive_defenders.sort(key=lambda d: d.attack, reverse=True)
 
-    for atk in attacker_combatants:
-        if not atk.is_alive or atk.unconscious:
-            continue
+    active_attackers = [
+        atk for atk in attacker_combatants
+        if atk.is_alive and not atk.unconscious and not atk.surrendered and not atk.is_retreating
+    ]
+    for index, atk in enumerate(active_attackers):
         if alive_defenders:
-            targets.append((atk, alive_defenders.pop(0)))
+            targets.append((atk, alive_defenders[index % len(alive_defenders)]))
 
     return targets
 

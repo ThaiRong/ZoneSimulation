@@ -436,7 +436,8 @@ class TestCombatSystem:
                         max_stamina=100, max_health=100, bravery=10)
         def_ = Combatant(2, "StrongEnemy", True, attack=90, stamina=100, health=100,
                          max_stamina=100, max_health=100)
-        combat = CombatSystem([atk], [def_])
+        sector = type("Sector", (), {"neighbors": [1]})()
+        combat = CombatSystem([atk], [def_], sectors={0: sector}, battle_sector_id=0)
 
         def rng_func():
             return 0.4  # умеренный RNG — шанс отступления ~65%
@@ -464,7 +465,7 @@ class TestCombatSystem:
         atk = Combatant(1, "Player", True, attack=50, stamina=100, health=100,
                         max_stamina=100, max_health=100, bravery=80)  # высокая храбрость — не сдаётся
         def_ = Combatant(2, "Enemy", True, attack=90, stamina=100, health=100,
-                         max_stamina=100, max_health=100)
+                         max_stamina=100, max_health=100, weapon_damage=50)
         combat = CombatSystem([atk], [def_])
 
         def rng_func():

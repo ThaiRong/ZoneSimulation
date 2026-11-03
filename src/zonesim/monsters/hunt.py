@@ -37,16 +37,18 @@ def calculate_hunt_chance(
     elif distance == 1:
         base_chance += 5
 
+    species = predator.species.value if hasattr(predator.species, "value") else predator.species
+
     # Ночью — территориальные хищники лучше охотятся
-    if is_night and predator.species == MonsterSpecies.TERRITORIAL_PREDATOR:
+    if is_night and species in (MonsterSpecies.TERRITORIAL_PREDATOR, "TerritorialPredator"):
         base_chance += 10
 
     # Крупные мигранты менее внимательны
-    if predator.species == MonsterSpecies.LARGE_MIGRATOR:
+    if species in (MonsterSpecies.LARGE_MIGRATOR, "LargeMigrator"):
         base_chance -= 10
 
     # Падьальщики избегают здоровых целей
-    if predator.species == MonsterSpecies.SCAVENGER_PACK and not prey_is_monster:
+    if species in (MonsterSpecies.SCAVENGER_PACK, "ScavengerPack") and not prey_is_monster:
         if prey_health_share > 0.7:
             base_chance -= 15
 

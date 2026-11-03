@@ -87,10 +87,10 @@ def resolve_retreat(
 
     roll = rng_value * 100
     if roll < p_retreat:
-        result["success"] = True
         # Перемещение в соседний сектор — детерминированно по rng_value
         sector = sectors.get(current_sector_id)
         if sector and sector.neighbors:
+            result["success"] = True
             neighbors = sector.neighbors
             new_id = neighbors[int(rng_value * len(neighbors)) % len(neighbors)]
             result["new_sector_id"] = new_id
