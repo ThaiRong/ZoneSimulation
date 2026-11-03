@@ -164,7 +164,7 @@ class TestEngineIntegration:
 
     def test_artifacts_get_collected(self):
         """За 240 часов кто-то должен добыть артефакт."""
-        engine = SimulationEngine(seed=1)
+        engine = SimulationEngine(seed=42)
         for _ in range(240):
             engine.simulate_hour()
         carriers = [h for h in engine.state.humans if h.artifacts]

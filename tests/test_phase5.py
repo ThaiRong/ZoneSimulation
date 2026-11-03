@@ -408,6 +408,7 @@ class TestMonsterMigration:
             })(),
         )
         assert len(new_monsters) > 0
+        assert new_monsters[0].status.value == "Активен"
         assert mm.groups_today == 1
 
     def test_spawn_above_minimum(self):

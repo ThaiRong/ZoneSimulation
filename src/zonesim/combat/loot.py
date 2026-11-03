@@ -36,7 +36,7 @@ class Corpse:
     original_entity_id: int
     original_entity_type: str  # "human" или вид монстра
     sector_id: int
-    created_hour: int
+    created_hour: int = 0
     items: list[dict] = field(default_factory=list)
     monster_parts: list[dict] = field(default_factory=list)
     status: str = "available"  # available, looted, consumed

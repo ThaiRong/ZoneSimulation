@@ -7,7 +7,7 @@ from typing import Any
 
 from zonesim.core.time import GameTime, SeededRNG
 from zonesim.world.sector import Sector
-from zonesim.world.entity import HumanNPC, Monster, EntityStatus
+from zonesim.world.entity import HumanNPC, Monster, MonsterSpecies, EntityStatus
 from zonesim.combat.loot import Corpse
 
 from zonesim.core.config import GameConfig
@@ -53,7 +53,6 @@ from zonesim.anomalies.damage import apply_anomaly_damage, check_anomaly_contact
 from zonesim.anomalies.artifact import ArtifactManager
 from zonesim.anomalies.migration import check_anomaly_migration
 
-from zonesim.monsters.behavior import Monster as MonsterEntity, MonsterSpecies
 from zonesim.monsters.migration import MonsterMigrationManager
 from zonesim.monsters.hunt import calculate_hunt_chance
 
@@ -74,7 +73,7 @@ class SimulationState:
     humans: list[HumanNPC] = field(default_factory=list)  # только мобильные NPC
     stationary_humans: list[HumanNPC] = field(default_factory=list)
     human_groups: dict[int, HumanGroup] = field(default_factory=dict)
-    monsters: list[MonsterEntity] = field(default_factory=list)
+    monsters: list[Monster] = field(default_factory=list)
     monster_groups: dict[int, MonsterGroup] = field(default_factory=dict)
     anomalies: dict[int, AnomalyEntity] = field(default_factory=dict)
     artifacts: ArtifactManager = field(default_factory=ArtifactManager)
@@ -237,7 +236,7 @@ class SimulationEngine:
 
         for entity in new_entities:
             # ID назначаются детерминированно счётчиками движка (без коллизий)
-            if isinstance(entity, (MonsterEntity, Monster)):
+            if isinstance(entity, Monster):
                 entity.id = self.state.next_monster_id
                 self.state.next_monster_id += 1
                 self.state.monsters.append(entity)

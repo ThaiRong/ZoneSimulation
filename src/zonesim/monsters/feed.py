@@ -2,24 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any
+from zonesim.combat.loot import Corpse
 
 
-@dataclass
-class Corpse:
-    """Труп. (§7.11)"""
-    id: int
-    original_entity_id: int
-    original_entity_type: str  # "human" или название вида монстра
-    sector_id: int
-    created_hour: int = 0
-    monster_parts: list[dict] = field(default_factory=list)
-    status: str = "available"  # available, looted, consumed
-
-    @property
-    def is_human(self) -> bool:
-        return self.original_entity_type == "human"
+__all__ = ["Corpse", "FeedManager"]
 
 
 class FeedManager:
