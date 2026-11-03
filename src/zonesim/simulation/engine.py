@@ -70,7 +70,8 @@ class SimulationState:
     time: GameTime = field(default_factory=GameTime)
     rng: SeededRNG = field(default_factory=lambda: SeededRNG(42))
     sectors: dict[int, Sector] = field(default_factory=dict)
-    humans: list[HumanNPC] = field(default_factory=list)
+    humans: list[HumanNPC] = field(default_factory=list)  # только мобильные NPC
+    stationary_humans: list[HumanNPC] = field(default_factory=list)
     human_groups: dict[int, HumanGroup] = field(default_factory=dict)
     monsters: list[MonsterEntity] = field(default_factory=list)
     monster_groups: dict[int, MonsterGroup] = field(default_factory=dict)
@@ -125,13 +126,17 @@ class SimulationEngine:
 
         self.state.sectors = result["sectors"]
         self.state.humans = result["humans"]
+        self.state.stationary_humans = result["stationary_humans"]
+        self.state.human_groups = result["human_groups"]
         self.state.monsters = result["monsters"]
         self.state.anomalies = {a.id: a for a in result["anomalies"]}
 
         # Инициализация ID
-        self.state.next_human_id = max((h.id for h in self.state.humans), default=0) + 1
+        all_humans = self.state.humans + self.state.stationary_humans
+        self.state.next_human_id = max((h.id for h in all_humans), default=-1) + 1
         self.state.next_monster_id = max((m.id for m in self.state.monsters), default=0) + 1
         self.state.next_anomaly_id = max((a.id for a in self.state.anomalies.values()), default=0) + 1
+        self.state.next_group_id = max(self.state.human_groups, default=-1) + 1
 
     def simulate_hour(self) -> dict[str, Any]:
         """
@@ -189,11 +194,25 @@ class SimulationEngine:
         }
 
     def _phase0_check(self, hour: int) -> None:
-        """Фаза 0: Проверка состояния мира."""
-        # Удаление погибших из активных групп
-        for npc in self.state.humans:
-            if npc.status == EntityStatus.DEAD:
-                npc.group_id = None
+        """Фаза 0: Проверка состояния мира и состава групп."""
+        self._sync_human_groups()
+
+    def _sync_human_groups(self) -> None:
+        """Убирает выбывших и удаляет пустые группы, сохраняя инварианты §7.5."""
+        npcs = {npc.id: npc for npc in self.state.humans}
+        for group_id, group in list(self.state.human_groups.items()):
+            for member_id in list(group.members):
+                npc = npcs.get(member_id)
+                if npc is None or npc.status in (EntityStatus.DEAD, EntityStatus.EXILED):
+                    group.remove_member(member_id)
+                    if npc is not None:
+                        npc.group_id = None
+            if not group.members:
+                del self.state.human_groups[group_id]
+                continue
+            group.sector_id = npcs[group.members[0]].sector_id
+            if group.leader_id not in group.members:
+                group.select_leader(npcs)
 
     def _phase1_scheduled(self, hour: int, day: int) -> None:
         """Фаза 1: Запланированные события."""
@@ -219,6 +238,15 @@ class SimulationEngine:
             elif isinstance(entity, HumanNPC):
                 entity.id = self.state.next_human_id
                 self.state.next_human_id += 1
+                group = HumanGroup(
+                    id=self.state.next_group_id,
+                    members=[entity.id],
+                    sector_id=entity.sector_id,
+                    leader_id=entity.id,
+                )
+                self.state.next_group_id += 1
+                entity.group_id = group.id
+                self.state.human_groups[group.id] = group
                 self.state.humans.append(entity)
 
         # Монстры: пополнение численности
@@ -283,32 +311,36 @@ class SimulationEngine:
                 )
 
     def _phase4_intentions(self, hour: int) -> None:
-        """Фаза 4: Выбор намерений по оценке полезности (§9.2).
-
-        Спящие, бессознательные и пленные не выбирают (§8, фаза 4).
-        """
+        """Фаза 4: лидер выбирает одно намерение для всей группы (§7.5, §9.2)."""
         is_night = self.state.time.is_night()
+        npcs = {npc.id: npc for npc in self.state.humans}
 
-        for npc in self.state.humans:
-            if npc.status != EntityStatus.ACTIVE:
+        for group in self.state.human_groups.values():
+            group.select_leader(npcs)
+            leader = npcs.get(group.leader_id) if group.leader_id is not None else None
+            if leader is None or leader.status != EntityStatus.ACTIVE:
                 continue
 
-            kb = self.state.knowledge_bases.get(npc.id)
-            facts = kb.get_facts(KnowledgeType.ANOMALY) if kb else []
-            here = [f for f in facts if f.payload.get("sector_id") == npc.sector_id]
+            members = [npcs[mid] for mid in group.members if mid in npcs]
+            facts = []
+            for member in members:
+                kb = self.state.knowledge_bases.get(member.id)
+                if kb:
+                    facts.extend(kb.get_facts(KnowledgeType.ANOMALY))
+            here = [f for f in facts if f.payload.get("sector_id") == group.sector_id]
             researchable = [f for f in here if not f.payload.get("researched")]
-            home = self._home_sector_id(npc.faction)
+            home = self._home_sector_id(leader.faction)
 
             ctx = IntentionContext(
                 hour=hour,
                 is_night=is_night,
-                bravery=npc.bravery,
-                faction=npc.faction,
-                health_share=npc.health_share,
-                stamina_share=npc.stamina_share,
-                at_home=(home is not None and npc.sector_id == home),
+                bravery=round(sum(npc.bravery for npc in members) / len(members)),
+                faction=leader.faction,
+                health_share=sum(npc.health_share for npc in members) / len(members),
+                stamina_share=sum(npc.stamina_share for npc in members) / len(members),
+                at_home=(home is not None and group.sector_id == home),
                 home_sector_id=home,
-                distance_to_border=self._distance_to_border(npc.sector_id),
+                distance_to_border=self._distance_to_border(group.sector_id),
                 has_known_anomaly=any(
                     self.state.anomalies[f.subject_id].status == AnomalyStatus.ACTIVE
                     for f in researchable if f.subject_id in self.state.anomalies
@@ -318,42 +350,52 @@ class SimulationEngine:
                 ),
                 known_has_artifact=any(f.payload.get("has_artifact") for f in researchable),
             )
-            npc.intention = choose_intention(ctx, self.state.rng)
+            group.intention = choose_intention(ctx, self.state.rng)
+            for member in members:
+                if member.status == EntityStatus.ACTIVE:
+                    member.intention = group.intention
 
     def _phase5_movement(self, hour: int, is_night: bool) -> None:
         """Фаза 5: Перемещение по намерениям (1 ребро в час, §6.2)."""
         self._moved_human_ids: set[int] = set()
         border_ids = {s.id for s in self.state.sectors.values() if s.is_border}
 
-        for npc in self.state.humans:
-            if npc.status != EntityStatus.ACTIVE:
+        npcs = {npc.id: npc for npc in self.state.humans}
+        for group in self.state.human_groups.values():
+            leader = npcs.get(group.leader_id) if group.leader_id is not None else None
+            if leader is None:
                 continue
+            members = [npcs[mid] for mid in group.members if mid in npcs]
+            if not members or any(npc.status != EntityStatus.ACTIVE for npc in members):
+                continue  # группа не оставляет спящих и бессознательных членов
 
             destination: int | None = None
-            if npc.intention == EXPLORE:
-                memory = self.state.visit_memory.setdefault(npc.id, {})
+            if group.intention == EXPLORE:
+                memory = self.state.visit_memory.setdefault(leader.id, {})
                 destination = choose_explore_target(
-                    self.state.sectors, npc.sector_id, memory, hour,
-                    self._known_anomaly_sectors(npc), self.state.rng,
+                    self.state.sectors, group.sector_id, memory, hour,
+                    self._known_anomaly_sectors(leader), self.state.rng,
                 )
-            elif npc.intention == EXIT:
+            elif group.intention == EXIT:
                 destination = next_step_towards(
-                    self.state.sectors, npc.sector_id, border_ids,
-                    avoid_ids=self._known_anomaly_sectors(npc),
+                    self.state.sectors, group.sector_id, border_ids,
+                    avoid_ids=self._known_anomaly_sectors(leader),
                 )
-            elif npc.intention == REST:
-                home = self._home_sector_id(npc.faction)
-                if home is not None and npc.sector_id != home:
+            elif group.intention == REST:
+                home = self._home_sector_id(leader.faction)
+                if home is not None and group.sector_id != home:
                     destination = next_step_towards(
-                        self.state.sectors, npc.sector_id, {home},
-                        avoid_ids=self._known_anomaly_sectors(npc),
+                        self.state.sectors, group.sector_id, {home},
+                        avoid_ids=self._known_anomaly_sectors(leader),
                     )
 
-            if destination is not None and destination != npc.sector_id:
-                npc.sector_id = destination
-                self._moved_human_ids.add(npc.id)
-                update_stamina(npc, STAMINA_COST_MOVEMENT, "movement", self.state.time)
-                self.state.visit_memory.setdefault(npc.id, {})[destination] = hour
+            if destination is not None and destination != group.sector_id:
+                group.sector_id = destination
+                for npc in members:
+                    npc.sector_id = destination
+                    self._moved_human_ids.add(npc.id)
+                    update_stamina(npc, STAMINA_COST_MOVEMENT, "movement", self.state.time)
+                    self.state.visit_memory.setdefault(npc.id, {})[destination] = hour
 
         for monster in self.state.monsters:
             if monster.status in (EntityStatus.SLEEPING, EntityStatus.UNCONSCIOUS, EntityStatus.DEAD):
@@ -469,10 +511,19 @@ class SimulationEngine:
             return set()
         return known_anomaly_sectors(kb.get_facts(KnowledgeType.ANOMALY))
 
+    def _sector_humans(self, sector_id: int) -> dict[int, HumanNPC]:
+        return {
+            npc.id: npc
+            for npc in self.state.humans + self.state.stationary_humans
+            if npc.sector_id == sector_id
+        }
+
     def _sleep_tick(self, npc: HumanNPC) -> None:
         """Сон: восстановление выносливости по §14.1 (комфорт 4 ч / иначе 6 ч)."""
         group = HumanGroup(id=-(npc.id + 1), members=[npc.id], sector_id=npc.sector_id)
-        human_sleep_recover(group, {npc.id: npc}, self.state.time, self.state.rng)
+        human_sleep_recover(
+            group, self._sector_humans(npc.sector_id), self.state.time, self.state.rng,
+        )
 
     def _unconscious_tick(self, npc: HumanNPC, hour: int) -> None:
         """Бессознательные состояния (§11.10, §14.2)."""
@@ -489,7 +540,9 @@ class SimulationEngine:
             return
         # Истощение: минимум час, затем пробуждение с 10% выносливости (§14.2)
         group = HumanGroup(id=-(npc.id + 1), members=[npc.id], sector_id=npc.sector_id)
-        human_sleep_recover(group, {npc.id: npc}, self.state.time, self.state.rng)
+        human_sleep_recover(
+            group, self._sector_humans(npc.sector_id), self.state.time, self.state.rng,
+        )
 
     def _rest_tick(self, npc: HumanNPC) -> None:
         """Отдых и лечение на базе (§14.3).
@@ -688,8 +741,8 @@ class SimulationEngine:
                     )
 
     def _phase9_consequences(self, hour: int) -> None:
-        """Фаза 9: Последствия (добыча, плен, отношения — по мере готовности систем)."""
-        pass
+        """Фаза 9: последствия и актуализация состава групп."""
+        self._sync_human_groups()
 
     def _phase10_report(self, hour: int) -> None:
         """Фаза 10: Отчёт."""
@@ -707,6 +760,8 @@ class SimulationEngine:
             "phase": self.state.time.current_phase.value,
             "is_night": self.state.time.is_night(),
             "active_humans": active_humans,
+            "stationary_humans": len(self.state.stationary_humans),
+            "human_groups": len(self.state.human_groups),
             "active_monsters": active_monsters,
             "active_anomalies": active_anomalies,
             "total_events": self.state.news_manager.get_total_count(),

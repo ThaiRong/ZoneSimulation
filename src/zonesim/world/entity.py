@@ -53,6 +53,8 @@ class HumanNPC(BaseEntity):
     name: str = "Unknown"
     intention: str = ""  # выбранное намерение (фаза 4, §9)
     artifacts: list[int] = field(default_factory=list)  # id переносимых артефактов
+    is_stationary: bool = False
+    stationary_role: str | None = None  # trader / guard
 
     @property
     def health_share(self) -> float:

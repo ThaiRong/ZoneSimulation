@@ -7,6 +7,7 @@ from typing import Any
 from zonesim.anomalies.core import Anomaly, AnomalyType
 from zonesim.core.time import SeededRNG
 from zonesim.world.entity import HumanNPC, Monster
+from zonesim.world.group import HumanGroup
 from zonesim.world.sector import Sector, get_distance
 
 
@@ -14,7 +15,9 @@ def generate_world(seed: int = 42, config: dict[str, Any] | None = None) -> dict
     """
     Генерирует мир, возвращая словарь с ключами:
     - sectors: dict[int, Sector]
-    - humans: list[HumanNPC]
+    - humans: list[HumanNPC] — только мобильные люди
+    - stationary_humans: list[HumanNPC] — персонал баз
+    - human_groups: dict[int, HumanGroup]
     - monsters: list[Monster]
     - anomalies: list[Anomaly]
     """
@@ -30,13 +33,16 @@ def generate_world(seed: int = 42, config: dict[str, Any] | None = None) -> dict
     _assign_border_sectors(sectors)
     _ensure_start_proximity_to_border(sectors, start_ids, rng)
 
-    humans = _spawn_humans(sectors, start_ids, humans_count, rng)
+    humans, human_groups = _spawn_humans(sectors, start_ids, humans_count, rng)
+    stationary_humans = _spawn_stationary_humans(sectors, start_ids, len(humans), rng)
     monsters = _spawn_monsters(sectors, start_ids, monsters_count, rng)
     anomalies = _spawn_anomalies(sectors, start_ids, anomalies_count, rng)
 
     return {
         "sectors": sectors,
         "humans": humans,
+        "stationary_humans": stationary_humans,
+        "human_groups": human_groups,
         "monsters": monsters,
         "anomalies": anomalies,
     }
@@ -137,21 +143,91 @@ def _ensure_start_proximity_to_border(sectors: dict[int, Sector], start_ids: lis
             sectors[sid].is_border = True
 
 
-def _spawn_humans(sectors: dict[int, Sector], start_ids: list[int], count: int, rng: SeededRNG) -> list[HumanNPC]:
+def _spawn_humans(
+    sectors: dict[int, Sector],
+    start_ids: list[int],
+    count: int,
+    rng: SeededRNG,
+) -> tuple[list[HumanNPC], dict[int, HumanGroup]]:
+    """Создаёт однофракционные мобильные группы по 1–4 человека (§6.3)."""
     factions = ["Бродяги", "Борзые", "Серая лига"]
+    shares = [0.4, 0.45, 0.15]
+    faction_counts = [int(count * share) for share in shares]
+    remainder = count - sum(faction_counts)
+    order = sorted(range(3), key=lambda i: (-(count * shares[i] - faction_counts[i]), i))
+    for i in order[:remainder]:
+        faction_counts[i] += 1
+
     humans: list[HumanNPC] = []
+    groups: dict[int, HumanGroup] = {}
     sector_ids = list(sectors.keys())
 
-    for i in range(count):
-        faction = factions[i % len(factions)]
-        sec_id = rng.choice(sector_ids)
-        humans.append(HumanNPC(
-            id=i,
-            sector_id=sec_id,
-            faction=faction,
-            name=f"Человек-{i+1}",
-        ))
-    return humans
+    for faction, faction_count in zip(factions, faction_counts):
+        remaining = faction_count
+        while remaining > 0:
+            size = rng.randint(1, min(4, remaining))
+            sector_id = rng.choice(sector_ids)
+            group = HumanGroup(id=len(groups), sector_id=sector_id)
+            group_members: list[HumanNPC] = []
+
+            for _ in range(size):
+                npc_id = len(humans)
+                npc = HumanNPC(
+                    id=npc_id,
+                    sector_id=sector_id,
+                    faction=faction,
+                    group_id=group.id,
+                    name=f"Человек-{npc_id + 1}",
+                    **_random_human_stats(rng),
+                )
+                if faction == "Серая лига":
+                    npc.attentiveness = min(60, npc.attentiveness + 5)
+                humans.append(npc)
+                group.members.append(npc_id)
+                group_members.append(npc)
+
+            group.select_leader({npc.id: npc for npc in group_members})
+            groups[group.id] = group
+            remaining -= size
+
+    return humans, groups
+
+
+def _random_human_stats(rng: SeededRNG) -> dict[str, int]:
+    return {
+        "attack": rng.randint(45, 60),
+        "defense": rng.randint(45, 60),
+        "attentiveness": rng.randint(45, 60),
+        "bravery": rng.randint(45, 60),
+    }
+
+
+def _spawn_stationary_humans(
+    sectors: dict[int, Sector],
+    start_ids: list[int],
+    first_id: int,
+    rng: SeededRNG,
+) -> list[HumanNPC]:
+    """Торговец и два охранника на каждой стартовой базе (§6.2)."""
+    staff: list[HumanNPC] = []
+    for sector_id in start_ids:
+        faction = sectors[sector_id].controller_faction or "Бродяги"
+        for role in ("trader", "guard", "guard"):
+            npc_id = first_id + len(staff)
+            npc = HumanNPC(
+                id=npc_id,
+                sector_id=sector_id,
+                faction=faction,
+                name=f"{'Торговец' if role == 'trader' else 'Охранник'}-{npc_id + 1}",
+                is_stationary=True,
+                stationary_role=role,
+                **_random_human_stats(rng),
+            )
+            if role == "guard":
+                npc.attack = min(100, npc.attack + 10)
+                npc.defense = min(100, npc.defense + 10)
+            staff.append(npc)
+    return staff
 
 
 def _spawn_monsters(sectors: dict[int, Sector], start_ids: list[int], count: int, rng: SeededRNG) -> list[Monster]:

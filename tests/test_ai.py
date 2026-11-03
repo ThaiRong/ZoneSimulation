@@ -125,15 +125,21 @@ class TestEngineIntegration:
     def test_low_stamina_leads_to_sleep(self):
         engine = SimulationEngine(seed=42)
         npc = next(h for h in engine.state.humans if h.status == EntityStatus.ACTIVE)
-        npc.stamina = 5
-        npc.health = 100
+        group = engine.state.human_groups[npc.group_id]
+        for member_id in group.members:
+            member = next(h for h in engine.state.humans if h.id == member_id)
+            member.stamina = 5
+            member.health = 100
         engine.simulate_hour()
         assert npc.status == EntityStatus.SLEEPING
 
     def test_sleeping_recovers_stamina(self):
         engine = SimulationEngine(seed=42)
         npc = next(h for h in engine.state.humans if h.status == EntityStatus.ACTIVE)
-        npc.stamina = 20
+        group = engine.state.human_groups[npc.group_id]
+        for member_id in group.members:
+            member = next(h for h in engine.state.humans if h.id == member_id)
+            member.stamina = 20
         engine.simulate_hour()
         assert npc.status == EntityStatus.SLEEPING
         for _ in range(6):

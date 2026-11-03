@@ -28,14 +28,12 @@ class HumanGroup:
 
     @property
     def active_member_ids(self) -> list[int]:
-        return [m for m in self.members if self._is_active(m)]
+        """Члены группы; пленные хранятся отдельно и сюда не входят."""
+        return list(self.members)
 
     @property
     def member_count(self) -> int:
-        return len(self.active_member_ids)
-
-    def _is_active(self, npc_id: int) -> bool:
-        return True  # placeholder
+        return len(self.members)
 
     def add_member(self, npc_id: int) -> None:
         if npc_id not in self.members and self.member_count < 4:
@@ -48,12 +46,25 @@ class HumanGroup:
                 self.leader_id = None
 
     def select_leader(self, npcs: dict[int, HumanNPC]) -> None:
-        """Выбирает лидера по храбрости, внимательности и фракции. (§9.2)"""
-        active = self.active_member_ids
-        if not active:
+        """Выбирает лидера по храбрости и внимательности (§7.5)."""
+        candidates = [
+            mid for mid in self.members
+            if mid in npcs and getattr(npcs[mid], "status", EntityStatus.ACTIVE)
+            not in (EntityStatus.DEAD, EntityStatus.EXILED, EntityStatus.PRISONER)
+        ]
+        awake = [
+            mid for mid in candidates
+            if getattr(npcs[mid], "status", EntityStatus.ACTIVE) == EntityStatus.ACTIVE
+        ]
+        if awake:
+            candidates = awake
+        if not candidates:
             self.leader_id = None
             return
-        self.leader_id = max(active, key=lambda mid: npcs[mid].bravery + npcs[mid].attentiveness)
+        self.leader_id = max(
+            candidates,
+            key=lambda mid: npcs[mid].bravery + npcs[mid].attentiveness,
+        )
 
     def is_comfort_sleep_possible(self, npcs: dict[int, HumanNPC], sector_id: int) -> bool:
         """Комфортный сон: база с охранником или убежище. (§14.1)
@@ -64,20 +75,23 @@ class HumanGroup:
         # Проверяем членов группы
         for mid in self.members:
             npc = npcs.get(mid)
-            if npc and npc.status == EntityStatus.ACTIVE:
+            if npc and npc.status == EntityStatus.ACTIVE and npc.sector_id == sector_id:
                 return True
 
         # Если все спят/бессознательны — проверяем внешних NPC в том же секторе
         for npc_id, npc in npcs.items():
             if npc_id in self.members:
                 continue
-            if npc and npc.status == EntityStatus.ACTIVE:
+            if npc and npc.status == EntityStatus.ACTIVE and npc.sector_id == sector_id:
                 return True
 
         return False
 
-    def has_awake_member(self) -> bool:
-        return True  # placeholder
+    def has_awake_member(self, npcs: dict[int, HumanNPC]) -> bool:
+        return any(
+            mid in npcs and npcs[mid].status == EntityStatus.ACTIVE
+            for mid in self.members
+        )
 
 
 @dataclass
