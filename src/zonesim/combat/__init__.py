@@ -62,6 +62,7 @@ class CombatSystem:
         defender_is_monster: bool = False,
         attacker_ambush: bool = False,
         defender_ambush: bool = False,
+        battle_sector_id: int = 0,
     ):
         self.attackers = attackers
         self.defenders = defenders
@@ -73,6 +74,7 @@ class CombatSystem:
         self.defender_is_monster = defender_is_monster
         self.attacker_ambush = attacker_ambush
         self.defender_ambush = defender_ambush
+        self.battle_sector_id = battle_sector_id
 
         self.battle_log: list[dict] = []
         self.rounds_fought: int = 0
@@ -236,7 +238,7 @@ class CombatSystem:
                 retreat_score=retreat_score,
                 retreat_chance=50.0,
                 rng_value=rng_func(),
-                current_sector_id=alive[0].id % 100,
+                current_sector_id=self.battle_sector_id,
                 sectors=self.sectors,
                 has_shelter=alive[0] in (self.attackers if side == "attacker" else self.defenders)
                               and (self.attacker_shelter if side == "attacker" else self.defender_shelter),

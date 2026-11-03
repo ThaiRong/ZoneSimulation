@@ -71,6 +71,7 @@ class SimulationState:
     monster_migration: MonsterMigrationManager = field(default_factory=MonsterMigrationManager)
 
     next_human_id: int = 0
+    next_monster_id: int = 0
     next_group_id: int = 0
     next_anomaly_id: int = 0
     next_stash_id: int = 0
@@ -100,6 +101,7 @@ class SimulationEngine:
 
         # Инициализация ID
         self.state.next_human_id = max((h.id for h in self.state.humans), default=0) + 1
+        self.state.next_monster_id = max((m.id for m in self.state.monsters), default=0) + 1
         self.state.next_anomaly_id = max((a.id for a in self.state.anomalies.values()), default=0) + 1
 
     def simulate_hour(self) -> dict[str, Any]:
@@ -180,11 +182,14 @@ class SimulationEngine:
         )
 
         for entity in new_entities:
-            if hasattr(entity, "status") and entity.status == EntityStatus.DEAD:
-                continue
-            if isinstance(entity, MonsterEntity):
+            # ID назначаются детерминированно счётчиками движка (без коллизий)
+            if isinstance(entity, (MonsterEntity, Monster)):
+                entity.id = self.state.next_monster_id
+                self.state.next_monster_id += 1
                 self.state.monsters.append(entity)
             elif isinstance(entity, HumanNPC):
+                entity.id = self.state.next_human_id
+                self.state.next_human_id += 1
                 self.state.humans.append(entity)
 
         # Монстры: пополнение численности
@@ -196,6 +201,9 @@ class SimulationEngine:
             hour=hour,
             rng=self.state.rng,
         )
+        for m in new_monsters:
+            m.id = self.state.next_monster_id
+            self.state.next_monster_id += 1
         self.state.monsters.extend(new_monsters)
 
     def _phase2_environment(self, hour: int) -> None:
@@ -254,7 +262,8 @@ class SimulationEngine:
         self._moved_human_ids: set[int] = set()
 
         for npc in self.state.humans:
-            if npc.status in (EntityStatus.SLEEPING, EntityStatus.UNCONSCIOUS, EntityStatus.DEAD):
+            if npc.status in (EntityStatus.SLEEPING, EntityStatus.UNCONSCIOUS,
+                              EntityStatus.DEAD, EntityStatus.EXILED, EntityStatus.PRISONER):
                 continue
             # Случайное перемещение для демонстрации
             if self.state.rng.random() < 0.3:

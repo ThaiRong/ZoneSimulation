@@ -82,24 +82,17 @@ def resolve_retreat(
         result["reason"] = "not_enecessary"
         return result
 
-    # Проверка шанса
-    p_retreat = calculate_retreat_chance(
-        speed_ratio=1.0,
-        escape_att=50,
-        pursuer_att=50,
-        terrain_bonus=10 if has_shelter else 0,
-        shelter_bonus=0.1 if has_shelter else 0,
-    )
-    p_retreat = max(5.0, min(p_retreat, 95.0))
+    # Проверка шанса (§11.7): используем переданный retreat_chance
+    p_retreat = max(5.0, min(retreat_chance, 95.0))
 
     roll = rng_value * 100
     if roll < p_retreat:
         result["success"] = True
-        # Перемещение в соседний сектор
+        # Перемещение в соседний сектор — детерминированно по rng_value
         sector = sectors.get(current_sector_id)
         if sector and sector.neighbors:
-            import random
-            new_id = random.choice(sector.neighbors)
+            neighbors = sector.neighbors
+            new_id = neighbors[int(rng_value * len(neighbors)) % len(neighbors)]
             result["new_sector_id"] = new_id
             result["retreated"] = True
             result["reason"] = "success"

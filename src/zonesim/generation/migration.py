@@ -50,7 +50,7 @@ def process_migration(
     _process_monster_migration(sectors, monsters, time, migration_state, rng, config, new_monsters)
 
     # Обработка выхода людей (§14.6)
-    _process_human_departure(humans, time, rng)
+    _process_human_departure(sectors, humans, time, rng)
 
     return new_humans + new_monsters
 
@@ -146,14 +146,18 @@ def _process_monster_migration(
 
 
 def _process_human_departure(
+    sectors: dict[int, object],
     humans: list[HumanNPC],
     time,
     rng: random.Random,
 ) -> None:
-    """Обработка выхода людей из Зоны (§14.6)."""
+    """Обработка выхода людей из Зоны (§14.6).
+
+    Выход возможен только с внешней границы; тяжелораненые чаще решаются.
+    """
+    border_ids = {sid for sid, s in sectors.items() if s.is_border}
     for npc in humans:
-        if npc.status == EntityStatus.ACTIVE and npc.health < 20:
-            # Тяжелораненые могут попытаться выйти
+        if npc.status == EntityStatus.ACTIVE and npc.health < 20 \
+                and npc.sector_id in border_ids:
             if rng.random() < 0.05:  # 5% шанс попытаться выйти
-                # В полной версии здесь была бы проверка пути к границе
                 npc.status = EntityStatus.EXILED

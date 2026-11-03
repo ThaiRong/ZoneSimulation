@@ -53,6 +53,7 @@ class SurrenderManager:
         captor_faction: str,
         target_faction: str,
         bravery: float,
+        rng_value: float = 0.5,
     ) -> dict[str, Any]:
         """
         Определяет исход: убить, пленить всех/частично, отпустить. (§11.9)
@@ -83,8 +84,7 @@ class SurrenderManager:
         if captor_count < surrendering_count:
             capture_chance += 0.1
 
-        import random
-        if random.random() < capture_chance:
+        if rng_value < capture_chance:
             # Пленят
             if surrendering_count <= captor_count or relation > 0:
                 # Пленяют всех

@@ -70,5 +70,13 @@ class SeededRNG:
     def uniform(self, a: float, b: float) -> float:
         return self.rng.uniform(a, b)
 
+    def get_state(self) -> tuple:
+        """Состояние генератора для сохранения (§20.3)."""
+        return self.rng.getstate()
+
+    def set_state(self, state: tuple) -> None:
+        """Восстановление состояния генератора при загрузке."""
+        self.rng.setstate(state)
+
     def clamp(self, value: float, min_val: float, max_val: float) -> float:
         return max(min_val, min(value, max_val))
