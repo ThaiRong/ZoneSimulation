@@ -16,16 +16,18 @@ import networkx as nx
 SLEEP = "sleep"
 REST = "rest"
 RESEARCH = "research_anomaly"
+DESTROY = "destroy_anomaly"
+CAPTURE = "capture_monster"
 EXPLORE = "explore"
 EXIT = "exit_zone"
 
-ALL_ACTIONS = (SLEEP, REST, RESEARCH, EXPLORE, EXIT)
+ALL_ACTIONS = (SLEEP, REST, RESEARCH, DESTROY, CAPTURE, EXPLORE, EXIT)
 
 # Фракционные приоритеты F (§7.3). Меняют вероятность, не запрещают действия.
 FACTION_FLAVOR: dict[str, dict[str, float]] = {
     "Бродяги": {RESEARCH: 8.0, EXPLORE: 5.0},
     "Борзые": {EXPLORE: 3.0, RESEARCH: 2.0},
-    "Серая лига": {RESEARCH: 4.0, EXPLORE: 4.0},
+    "Серая лига": {RESEARCH: 4.0, EXPLORE: 4.0, CAPTURE: 4.0, DESTROY: 3.0},
 }
 
 
@@ -44,6 +46,8 @@ class IntentionContext:
     has_known_anomaly: bool = False
     known_anomaly_concealment: int = 0
     known_has_artifact: bool = False
+    can_destroy: bool = False       # исправный комплект разрушения и цель в секторе
+    can_capture: bool = False       # комплект захвата и ослабленная цель в секторе
 
 
 def evaluate_actions(ctx: IntentionContext) -> dict[str, float]:
@@ -87,6 +91,19 @@ def evaluate_actions(ctx: IntentionContext) -> dict[str, float]:
                 E += 10.0
             E += 4.0  # потенциальная находка: тропа, свежие сведения
             R += ctx.known_anomaly_concealment / 3.0
+        elif action == DESTROY:
+            # Без исправного комплекта намерение недоступно (§12.4)
+            if not ctx.can_destroy:
+                u[action] = float("-inf")
+                continue
+            E += 14.0  # части аномалии и доступ к артефакту — экспортная ценность
+            R += 6.0
+        elif action == CAPTURE:
+            if not ctx.can_capture:
+                u[action] = float("-inf")
+                continue
+            E += 16.0  # живой монстр ценнее частей (§16.8)
+            R += 10.0  # опасная добыча может контратаковать
         elif action == EXPLORE:
             E += 2.0  # ценность сведений о неисследованном секторе
             R += 6.0  # базовая неопределённость неисследованного маршрута (§9.3)

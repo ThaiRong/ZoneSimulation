@@ -170,7 +170,12 @@ class LootManager:
 
     @staticmethod
     def _item_score(item) -> float:
-        power = item.properties.get("damage", item.properties.get("armor", 1.0) * 20)
+        power = item.properties.get(
+            "base_damage",
+            item.properties.get(
+                "damage", item.properties.get("armor_factor", item.properties.get("armor", 1.0)) * 20
+            ),
+        )
         return power * max(0.25, item.condition / 100)
 
     @staticmethod

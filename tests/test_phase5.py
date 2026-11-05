@@ -159,25 +159,25 @@ class TestAnomalyDestroy:
     """Тесты разрушения аномалий (§12.4)."""
 
     def test_calculate_destroy_damage(self):
-        damage = calculate_destroy_damage("destroy_kit_subtle", 100, 50, 1)
+        damage = calculate_destroy_damage(35, 100, 1.0, 50, 1)
         assert damage >= 1
 
     def test_attempt_destroy_success(self):
         a = Anomaly(1, 5, AnomalyType.SUBTLE, stability=40)
-        result = attempt_destroy_anomaly(a, "destroy_kit_subtle", 100, 50, 1, 0.5)
+        result = attempt_destroy_anomaly(a, 35, 100, 1.0, 50, 1)
         assert result["success"] is True
         assert result["damage_dealt"] > 0
 
     def test_destroy_anomaly_complete(self):
         a = Anomaly(1, 5, AnomalyType.SUBTLE, stability=5)
-        result = attempt_destroy_anomaly(a, "destroy_kit_subtle", 100, 50, 1, 0.5)
+        result = attempt_destroy_anomaly(a, 35, 100, 1.0, 50, 1)
         assert result["destroyed"] is True
         assert a.status == AnomalyStatus.DESTROYED
 
     def test_destroy_already_destroyed(self):
         a = Anomaly(1, 5, AnomalyType.SUBTLE, stability=0)
         a.status = AnomalyStatus.DESTROYED
-        result = attempt_destroy_anomaly(a, "destroy_kit_subtle", 100, 50, 1)
+        result = attempt_destroy_anomaly(a, 35, 100, 1.0, 50, 1)
         assert result["success"] is False
 
     def test_get_anomaly_parts(self):

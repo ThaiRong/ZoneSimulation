@@ -2,6 +2,8 @@
 
 from zonesim.ai.intentions import (
     ALL_ACTIONS,
+    CAPTURE,
+    DESTROY,
     EXIT,
     EXPLORE,
     FACTION_FLAVOR,
@@ -18,6 +20,8 @@ from zonesim.ai.intentions import (
 
 __all__ = [
     "ALL_ACTIONS",
+    "CAPTURE",
+    "DESTROY",
     "EXIT",
     "EXPLORE",
     "FACTION_FLAVOR",

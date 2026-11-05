@@ -183,17 +183,19 @@ class CaptureManager:
         attacker_att: int,
         target_att: int,
         num_attackers: int = 1,
+        kit_bonus: float = 0.0,
     ) -> float:
         """
         P_capture = clamp(25 + 35 × (1 - HealthShare)
-                         + 0.25 × (Att - TargetAtt) + 10 × (N - 1), 5; 85)
+                         + 0.25 × (Att - TargetAtt) + 10 × (N - 1) + BonusKit, 5; 85)
         (§16.8)
         """
         p = (
             25 +
             35 * (1.0 - health_share) +
             0.25 * (attacker_att - target_att) +
-            10 * min(num_attackers - 1, 3)
+            10 * min(num_attackers - 1, 3) +
+            kit_bonus
         )
         return max(5.0, min(p, 85.0))
 

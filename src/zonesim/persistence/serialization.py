@@ -112,6 +112,7 @@ def state_to_dict(state: SimulationState) -> dict[str, Any]:
         "knowledge_bases": _encode({key: vars(value) for key, value in state.knowledge_bases.items()}),
         "stashs": _encode([vars(value) for value in state.stashs]),
         "shelter_count": state.shelter_count,
+        "trader_stock": _encode({str(key): value for key, value in state.trader_stock.items()}),
         "migration_state": _object_data(state.migration_state),
         "monster_migration": _object_data(state.monster_migration),
         "next_human_id": state.next_human_id,
@@ -239,6 +240,9 @@ def state_from_dict(data: dict[str, Any]) -> SimulationState:
         knowledge_bases=knowledge_bases,
         stashs=[_restore(Stash, value) for value in _decode(data["stashs"])],
         shelter_count=data["shelter_count"],
+        trader_stock={
+            int(key): value for key, value in _decode(data["trader_stock"]).items()
+        },
         migration_state=_restore(MigrationState, data["migration_state"]),
         monster_migration=_restore(MonsterMigrationManager, data["monster_migration"]),
         next_human_id=data["next_human_id"],

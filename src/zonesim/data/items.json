@@ -1,0 +1,382 @@
+{
+  "version": 1,
+  "items": [
+    {
+      "id": "weapon.pistol.p9",
+      "name": "Пистолет П-9",
+      "category": "weapon",
+      "slot": "weapon",
+      "quality": 1.0,
+      "base_value": 120,
+      "durability_max": 100,
+      "durability_loss": 2,
+      "import_required": false,
+      "tags": [
+        "common"
+      ],
+      "ammo_type": "ammo.pistol",
+      "base_damage": 14,
+      "weapon_factor": 0.95,
+      "ammo_per_round": 1
+    },
+    {
+      "id": "weapon.carbine.k20",
+      "name": "Карабин К-20",
+      "category": "weapon",
+      "slot": "weapon",
+      "quality": 1.0,
+      "base_value": 250,
+      "durability_max": 100,
+      "durability_loss": 2,
+      "import_required": true,
+      "tags": [
+        "common",
+        "standard"
+      ],
+      "ammo_type": "ammo.rifle",
+      "base_damage": 20,
+      "weapon_factor": 1.0,
+      "ammo_per_round": 1
+    },
+    {
+      "id": "weapon.auto.serp",
+      "name": "Автомат «Серп»",
+      "category": "weapon",
+      "slot": "weapon",
+      "quality": 1.0,
+      "base_value": 380,
+      "durability_max": 100,
+      "durability_loss": 3,
+      "import_required": true,
+      "tags": [
+        "medium"
+      ],
+      "ammo_type": "ammo.rifle",
+      "base_damage": 18,
+      "weapon_factor": 1.08,
+      "ammo_per_round": 2
+    },
+    {
+      "id": "weapon.rifle.sokol",
+      "name": "Винтовка «Сокол»",
+      "category": "weapon",
+      "slot": "weapon",
+      "quality": 1.0,
+      "base_value": 550,
+      "durability_max": 100,
+      "durability_loss": 2,
+      "import_required": true,
+      "tags": [
+        "limited"
+      ],
+      "ammo_type": "ammo.rifle",
+      "base_damage": 30,
+      "weapon_factor": 1.2,
+      "ammo_per_round": 1
+    },
+    {
+      "id": "weapon.lmg.grad",
+      "name": "Пулемёт «Град»",
+      "category": "weapon",
+      "slot": "weapon",
+      "quality": 1.0,
+      "base_value": 850,
+      "durability_max": 100,
+      "durability_loss": 5,
+      "import_required": true,
+      "tags": [
+        "rare"
+      ],
+      "ammo_type": "ammo.heavy",
+      "base_damage": 24,
+      "weapon_factor": 1.12,
+      "ammo_per_round": 3
+    },
+    {
+      "id": "weapon.melee.klyk",
+      "name": "Нож «Клык»",
+      "category": "weapon",
+      "slot": "weapon",
+      "quality": 1.0,
+      "base_value": 50,
+      "durability_max": 100,
+      "durability_loss": 1,
+      "import_required": false,
+      "tags": [
+        "common",
+        "melee"
+      ],
+      "ammo_type": null,
+      "base_damage": 10,
+      "weapon_factor": 0.5,
+      "ammo_per_round": 0
+    },
+    {
+      "id": "ammo.pistol",
+      "name": "Пистолетный патрон",
+      "category": "ammo",
+      "slot": "ammo",
+      "quality": 1.0,
+      "base_value": 1,
+      "durability_max": 0,
+      "durability_loss": 0,
+      "import_required": true,
+      "tags": [
+        "common",
+        "resource"
+      ]
+    },
+    {
+      "id": "ammo.rifle",
+      "name": "Винтовочный патрон",
+      "category": "ammo",
+      "slot": "ammo",
+      "quality": 1.0,
+      "base_value": 2,
+      "durability_max": 0,
+      "durability_loss": 0,
+      "import_required": true,
+      "tags": [
+        "medium",
+        "resource"
+      ]
+    },
+    {
+      "id": "ammo.heavy",
+      "name": "Пулемётный патрон",
+      "category": "ammo",
+      "slot": "ammo",
+      "quality": 1.0,
+      "base_value": 3,
+      "durability_max": 0,
+      "durability_loss": 0,
+      "import_required": true,
+      "tags": [
+        "rare",
+        "resource"
+      ]
+    },
+    {
+      "id": "armor.uniform.jacket",
+      "name": "Форменная куртка",
+      "category": "body_armor",
+      "slot": "body_armor",
+      "quality": 1.0,
+      "base_value": 80,
+      "durability_max": 100,
+      "durability_loss": 3,
+      "import_required": false,
+      "tags": [
+        "common"
+      ],
+      "armor_factor": 1.02,
+      "damage_reduction": 3
+    },
+    {
+      "id": "armor.vest.reinforced",
+      "name": "Усиленный жилет",
+      "category": "body_armor",
+      "slot": "body_armor",
+      "quality": 1.0,
+      "base_value": 300,
+      "durability_max": 100,
+      "durability_loss": 4,
+      "import_required": true,
+      "tags": [
+        "standard"
+      ],
+      "armor_factor": 1.1,
+      "damage_reduction": 10
+    },
+    {
+      "id": "armor.body.b2",
+      "name": "Бронежилет Б-2",
+      "category": "body_armor",
+      "slot": "body_armor",
+      "quality": 1.0,
+      "base_value": 700,
+      "durability_max": 100,
+      "durability_loss": 5,
+      "import_required": true,
+      "tags": [
+        "rare"
+      ],
+      "armor_factor": 1.18,
+      "damage_reduction": 18,
+      "combat_stamina_cost": 1
+    },
+    {
+      "id": "armor.outer.scout",
+      "name": "Разведывательный плащ",
+      "category": "outer_layer",
+      "slot": "outer_layer",
+      "quality": 1.0,
+      "base_value": 350,
+      "durability_max": 100,
+      "durability_loss": 2,
+      "import_required": true,
+      "tags": [
+        "grey_league"
+      ],
+      "armor_factor": 1.05,
+      "damage_reduction": 2,
+      "ambush_bonus": 5
+    },
+    {
+      "id": "armor.head.light",
+      "name": "Лёгкий шлем",
+      "category": "head_armor",
+      "slot": "head_armor",
+      "quality": 1.0,
+      "base_value": 180,
+      "durability_max": 100,
+      "durability_loss": 2,
+      "import_required": true,
+      "tags": [
+        "standard"
+      ],
+      "armor_factor": 1.03,
+      "damage_reduction": 3
+    },
+    {
+      "id": "gear.medkit.sanitar2",
+      "name": "Аптечка «Санитар-2»",
+      "category": "medical",
+      "slot": "equipment",
+      "quality": 1.0,
+      "base_value": 180,
+      "durability_max": 100,
+      "durability_loss": 0,
+      "import_required": true,
+      "tags": [
+        "standard"
+      ],
+      "charges": 2,
+      "heal_amount": 30
+    },
+    {
+      "id": "gear.optics.zritel3",
+      "name": "Оптический монокуляр «Зритель-3»",
+      "category": "optics",
+      "slot": "equipment",
+      "quality": 1.0,
+      "base_value": 260,
+      "durability_max": 100,
+      "durability_loss": 0,
+      "import_required": true,
+      "tags": [
+        "grey_league"
+      ],
+      "attentiveness_bonus": 8
+    },
+    {
+      "id": "capture.kit.predator",
+      "name": "КЗ-Л «Лёгкий»",
+      "category": "capture_kit",
+      "slot": "equipment",
+      "quality": 1.0,
+      "base_value": 425,
+      "durability_max": 100,
+      "durability_loss": 0,
+      "import_required": true,
+      "tags": [
+        "common"
+      ],
+      "uses": 1,
+      "target_species": "territorial_predator",
+      "capture_bonus": 5,
+      "danger_rank": 1
+    },
+    {
+      "id": "capture.kit.scavenger",
+      "name": "КЗ-С «Осторожный»",
+      "category": "capture_kit",
+      "slot": "equipment",
+      "quality": 1.0,
+      "base_value": 725,
+      "durability_max": 100,
+      "durability_loss": 0,
+      "import_required": true,
+      "tags": [
+        "medium"
+      ],
+      "uses": 1,
+      "target_species": "scavenger_pack",
+      "capture_bonus": 10,
+      "danger_rank": 2
+    },
+    {
+      "id": "capture.kit.migrator",
+      "name": "КЗ-Т «Тяжёлый»",
+      "category": "capture_kit",
+      "slot": "equipment",
+      "quality": 1.0,
+      "base_value": 1750,
+      "durability_max": 100,
+      "durability_loss": 0,
+      "import_required": true,
+      "tags": [
+        "rare",
+        "grey_league"
+      ],
+      "uses": 1,
+      "target_species": "large_migrator",
+      "capture_bonus": 15,
+      "danger_rank": 3
+    },
+    {
+      "id": "anomaly.kit.subtle",
+      "name": "Слабый аномальный заряд",
+      "category": "anomaly_destruction_kit",
+      "slot": "equipment",
+      "quality": 1.0,
+      "base_value": 425,
+      "durability_max": 100,
+      "durability_loss": 0,
+      "import_required": true,
+      "tags": [
+        "common"
+      ],
+      "uses": 1,
+      "target_anomaly_type": "subtle",
+      "stability_damage": 35,
+      "danger_rank": 1
+    },
+    {
+      "id": "anomaly.kit.visible",
+      "name": "Мощный аномальный заряд",
+      "category": "anomaly_destruction_kit",
+      "slot": "equipment",
+      "quality": 1.0,
+      "base_value": 725,
+      "durability_max": 100,
+      "durability_loss": 0,
+      "import_required": true,
+      "tags": [
+        "medium"
+      ],
+      "uses": 1,
+      "target_anomaly_type": "visible",
+      "stability_damage": 52,
+      "danger_rank": 2
+    },
+    {
+      "id": "anomaly.kit.large",
+      "name": "Тяжёлый аномальный заряд",
+      "category": "anomaly_destruction_kit",
+      "slot": "equipment",
+      "quality": 1.0,
+      "base_value": 1025,
+      "durability_max": 100,
+      "durability_loss": 0,
+      "import_required": true,
+      "tags": [
+        "rare"
+      ],
+      "uses": 1,
+      "target_anomaly_type": "large",
+      "stability_damage": 75,
+      "danger_rank": 3
+    }
+  ]
+}

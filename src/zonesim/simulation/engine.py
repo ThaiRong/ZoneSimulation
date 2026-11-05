@@ -22,6 +22,8 @@ from zonesim.combat.unconscious import calculate_unconscious_chance, resolve_unc
 from zonesim.actions.detection import check_anomaly_detection
 
 from zonesim.ai import (
+    CAPTURE,
+    DESTROY,
     EXIT,
     EXPLORE,
     RESEARCH,
@@ -45,17 +47,19 @@ from zonesim.needs.sleep import (
 from zonesim.anomalies.research import research_anomaly
 
 from zonesim.world.group import HumanGroup, MonsterGroup
+from zonesim.world.catalog import ItemCatalog
 from zonesim.monsters.behavior import choose_group_intention, select_weakest_target, species_value
 from zonesim.monsters.feed import FeedManager
 from zonesim.monsters.hunt import should_pursue
 
 from zonesim.economy.contracts import ContractManager
-from zonesim.economy.trade import ImportExportManager
+from zonesim.economy.trade import CaptureManager, ImportExportManager
 
 from zonesim.anomalies.core import Anomaly as AnomalyEntity, AnomalyType, AnomalyStatus
 from zonesim.anomalies.damage import apply_anomaly_damage, check_anomaly_contact
 from zonesim.anomalies.artifact import ArtifactManager
 from zonesim.anomalies.migration import check_anomaly_migration
+from zonesim.anomalies.destroy import attempt_destroy_anomaly, get_anomaly_parts_after_destruction
 
 from zonesim.monsters.migration import MonsterMigrationManager
 from zonesim.monsters.hunt import calculate_hunt_chance
@@ -67,6 +71,13 @@ from zonesim.relations.news import NewsManager
 
 from zonesim.knowledge.fact import KnowledgeBase, KnowledgeType
 from zonesim.persistence import SaveManager
+
+
+CAPTURE_KIT_REF = {
+    "territorial_predator": "capture.kit.predator",
+    "scavenger_pack": "capture.kit.scavenger",
+    "large_migrator": "capture.kit.migrator",
+}
 
 
 @dataclass
@@ -99,6 +110,7 @@ class SimulationState:
 
     stashs: list[Stash] = field(default_factory=list)
     shelter_count: int = 0
+    trader_stock: dict[int, dict[str, int]] = field(default_factory=dict)  # npc торговца -> item_ref -> количество
 
     migration_state: MigrationState = field(default_factory=MigrationState)
     monster_migration: MonsterMigrationManager = field(default_factory=MonsterMigrationManager)
@@ -123,6 +135,7 @@ class SimulationEngine:
     def __init__(self, seed: int = 42, config: dict | None = None, save_directory=None):
         self.state = SimulationState(rng=SeededRNG(seed), config=config or {})
         self.save_manager = SaveManager(save_directory) if save_directory is not None else None
+        self.catalog = ItemCatalog.load((self.state.config or {}).get("catalog_path"))
         self._home_cache: dict[str, int | None] = {}
         self._border_dist: dict[int, int] | None = None
         self._pending_battles: list[dict] = []
@@ -139,6 +152,7 @@ class SimulationEngine:
         engine = cls.__new__(cls)
         engine.state = state
         engine.save_manager = SaveManager(save_directory) if save_directory is not None else None
+        engine.catalog = ItemCatalog.load((state.config or {}).get("catalog_path"))
         engine._home_cache = {}
         engine._border_dist = None
         engine._pending_battles = []
@@ -183,14 +197,16 @@ class SimulationEngine:
         self.state.next_group_id = max(self.state.human_groups, default=-1) + 1
         for npc in all_humans:
             self._give_starting_equipment(npc)
+        self._init_trader_stock()
         self._sync_monster_groups()
 
     def _sync_monster_groups(self) -> None:
         monsters = {monster.id: monster for monster in self.state.monsters}
+        gone = (EntityStatus.DEAD, EntityStatus.EXILED)
         for group_id, group in list(self.state.monster_groups.items()):
             group.members = [
                 member_id for member_id in group.members
-                if member_id in monsters and monsters[member_id].status != EntityStatus.DEAD
+                if member_id in monsters and monsters[member_id].status not in gone
             ]
             if not group.members:
                 del self.state.monster_groups[group_id]
@@ -202,7 +218,7 @@ class SimulationEngine:
                 group.home_sector_id = members[0].home_sector_id
 
         for monster in self.state.monsters:
-            if monster.status == EntityStatus.DEAD:
+            if monster.status in gone:
                 monster.group_id = None
                 continue
             if monster.group_id in self.state.monster_groups:
@@ -237,6 +253,172 @@ class SimulationEngine:
             members = [monster for monster in members if monster.status == EntityStatus.ACTIVE]
         return members
 
+    # Наценка торговцев поверх каталога
+    TRADE_MARKUP = 1.2
+    # Стартовое количество в запасе по категориям
+    TRADER_START_QTY = {
+        "weapon": 2,
+        "body_armor": 2,
+        "head_armor": 1,
+        "outer_layer": 1,
+        "medical": 4,
+        "optics": 1,
+        "capture_kit": 2,
+        "anomaly_destruction_kit": 2,
+    }
+    TRADER_AMMO_QTY = {"ammo.pistol": 40, "ammo.rifle": 60, "ammo.heavy": 20}
+
+    def _init_trader_stock(self) -> None:
+        """Стартовый запас торговцев: импортные позиции каталога. (§16)"""
+        for trader in self.state.stationary_humans:
+            if trader.stationary_role != "trader":
+                continue
+            stock: dict[str, int] = {}
+            for entry in self.catalog.entries():
+                if not entry.get("import_required"):
+                    continue
+                qty = self.TRADER_AMMO_QTY.get(
+                    entry["id"], self.TRADER_START_QTY.get(entry["category"], 1),
+                )
+                if qty > 0:
+                    stock[entry["id"]] = qty
+            self.state.trader_stock[trader.id] = stock
+
+    def trade_price(self, item_ref: str, quantity: int = 1) -> float:
+        """Цена покупки у торговца: каталог × качество × наценку. (§16)"""
+        entry = self.catalog.get(item_ref)
+        return round(
+            entry["base_value"] * entry.get("quality", 1.0) * self.TRADE_MARKUP * quantity, 1,
+        )
+
+    # Скупочная цена ценностей (доля базовой стоимости)
+    SELL_PRICE_SHARE = 0.6
+    # Семейства комплектов для проактивной закупки: (тип, самая дешёвая модель)
+    PROACTIVE_KITS = (
+        (ItemType.CAPTURE_KIT, "capture.kit.predator"),
+        (ItemType.DESTROY_KIT, "anomaly.kit.subtle"),
+    )
+
+    def _purchase_plan(
+        self, group: HumanGroup, members: list[HumanNPC], stock: dict[str, int],
+    ) -> list[tuple[str, int]]:
+        """Приоритетный список покупок группы у торговца."""
+        plan: list[tuple[str, int]] = []
+        has_medkit = any(
+            self.state.items[item_id].type is ItemType.MEDICINE
+            for npc in members for item_id in npc.inventory
+            if item_id in self.state.items
+        )
+        if not has_medkit and stock.get("gear.medkit.sanitar2", 0) > 0:
+            plan.append(("gear.medkit.sanitar2", 1))
+        anomaly = next(
+            (
+                a for a in self.state.anomalies.values()
+                if a.sector_id == group.sector_id and a.status == AnomalyStatus.ACTIVE
+            ),
+            None,
+        )
+        if anomaly is not None:
+            kit_ref = f"anomaly.kit.{anomaly.anomaly_type.value}"
+            owned = any(
+                item.properties.get("target_anomaly_type") == anomaly.anomaly_type.value
+                for npc in members for item_id in npc.inventory
+                if (item := self.state.items.get(item_id)) is not None
+                and item.type is ItemType.DESTROY_KIT and item.condition > 0
+            )
+            if not owned and stock.get(kit_ref, 0) > 0:
+                plan.append((kit_ref, 1))
+        target = self._capture_target(group)
+        if target is not None:
+            kit_ref = CAPTURE_KIT_REF.get(species_value(target))
+            owned = any(
+                item.properties.get("target_species") == species_value(target)
+                for npc in members for item_id in npc.inventory
+                if (item := self.state.items.get(item_id)) is not None
+                and item.type is ItemType.CAPTURE_KIT and item.condition > 0
+            )
+            if kit_ref and not owned and stock.get(kit_ref, 0) > 0:
+                plan.append((kit_ref, 1))
+        leader = self._group_leader(group, members)
+        weapon = self.state.items.get(leader.equipped_weapon_id)
+        ammo_ref = weapon.properties.get("ammo_type") if weapon else None
+        if ammo_ref:
+            total_ammo = sum(
+                self.state.items[item_id].quantity
+                for npc in members for item_id in npc.inventory
+                if item_id in self.state.items
+                and self.state.items[item_id].type is ItemType.AMMO
+            )
+            if total_ammo < 6 and stock.get(ammo_ref, 0) >= 12:
+                plan.append((ammo_ref, 12))
+        # проактивная закупка комплектов при свободных деньгах
+        for kit_type, default_ref in self.PROACTIVE_KITS:
+            owned_any = any(
+                self.state.items[item_id].type is kit_type and self.state.items[item_id].condition > 0
+                for npc in members for item_id in npc.inventory
+                if item_id in self.state.items
+            )
+            if owned_any or stock.get(default_ref, 0) <= 0:
+                continue
+            price = self.trade_price(default_ref)
+            if leader.money >= price * 1.5:
+                plan.append((default_ref, 1))
+        return plan
+
+    def _sell_loot(self, leader: HumanNPC, trader: HumanNPC) -> float:
+        """Скупка ценностей у лидера группы. (§16.3)"""
+        sellable = (
+            ItemType.ARTIFACT, ItemType.MONSTER_PART,
+            ItemType.ANOMALY_PART, ItemType.LIVE_MONSTER,
+        )
+        total = 0.0
+        for item_id in list(leader.inventory):
+            item = self.state.items.get(item_id)
+            if item is None or item.type not in sellable:
+                continue
+            price = round(item.base_value * self.SELL_PRICE_SHARE, 1)
+            leader.money += price
+            total += price
+            self._consume_item(item, [leader])
+        if total > 0:
+            trader.money = getattr(trader, "money", 0.0) - total
+        return total
+
+    def _process_npc_trade(self, hour: int) -> None:
+        """Покупки и продажи групп у торговцев в общем секторе. (§16.1)"""
+        traders = [
+            npc for npc in self.state.stationary_humans
+            if npc.stationary_role == "trader" and npc.status == EntityStatus.ACTIVE
+        ]
+        if not traders:
+            return
+        for group in self.state.human_groups.values():
+            members = self._active_members(group)
+            if not members:
+                continue
+            trader = next(
+                (t for t in traders if t.sector_id == group.sector_id), None,
+            )
+            if trader is None:
+                continue
+            stock = self.state.trader_stock.setdefault(trader.id, {})
+            leader = self._group_leader(group, members)
+            for item_ref, quantity in self._purchase_plan(group, members, stock):
+                price = self.trade_price(item_ref, quantity)
+                if leader.money < price or stock.get(item_ref, 0) < quantity:
+                    continue
+                stock[item_ref] -= quantity
+                leader.money -= price
+                trader.money = getattr(trader, "money", 0) + price
+                item = self.catalog.create_item(
+                    self.state.next_item_id, item_ref, quantity=quantity,
+                )
+                self.state.next_item_id += 1
+                self.state.items[item.id] = item
+                give_item(item, leader.id, leader.inventory)
+                self._sync_npc_from_items(leader)
+            self._sell_loot(leader, trader)
+
     def _create_item(
         self,
         item_type: ItemType,
@@ -268,28 +450,43 @@ class SimulationEngine:
         if npc.inventory:
             return
         npc.money = 100
-        weapon = self._create_item(
-            ItemType.WEAPON, "Оружие", 200.0, npc.id,
-            properties={"damage": 24 if npc.faction == "Серая лига" else 20},
-        )
-        armor = self._create_item(
-            ItemType.ARMOR, "Защитное снаряжение", 80.0, npc.id,
-            properties={"armor": 1.1},
-        )
+        if npc.faction == "Серая лига":
+            weapon_ref, armor_ref = "weapon.rifle.sokol", "armor.outer.scout"
+        else:
+            weapon_ref, armor_ref = "weapon.carbine.k20", "armor.uniform.jacket"
+        weapon = self._spawn_catalog_item(weapon_ref, npc.id)
+        armor = self._spawn_catalog_item(armor_ref, npc.id)
         npc.equipped_weapon_id = weapon.id
         npc.equipped_armor_id = armor.id
-        self._create_item(ItemType.AMMO, "Боеприпасы", 5.0, npc.id, quantity=12)
-        self._create_item(ItemType.MEDICINE, "Медикаменты", 20.0, npc.id)
+        ammo_ref = weapon.properties.get("ammo_type")
+        if ammo_ref:
+            self._spawn_catalog_item(ammo_ref, npc.id, quantity=12)
+        self._spawn_catalog_item("gear.medkit.sanitar2", npc.id)
         self._sync_npc_from_items(npc)
+
+    def _spawn_catalog_item(self, item_ref: str, owner_id: int, quantity: int = 1) -> Item:
+        item = self.catalog.create_item(self.state.next_item_id, item_ref, quantity=quantity)
+        self.state.next_item_id += 1
+        self.state.items[item.id] = item
+        owner = next(
+            npc for npc in self.state.humans + self.state.stationary_humans
+            if npc.id == owner_id
+        )
+        give_item(item, owner_id, owner.inventory)
+        return item
 
     def _sync_npc_from_items(self, npc: HumanNPC) -> None:
         weapon = self.state.items.get(npc.equipped_weapon_id)
         armor = self.state.items.get(npc.equipped_armor_id)
         npc.weapon_condition = weapon.condition if weapon else 0
-        npc.weapon_damage = weapon.properties.get("damage", 20) if weapon else 5
+        npc.weapon_damage = (
+            weapon.properties.get("base_damage", weapon.properties.get("damage", 20))
+            if weapon else 5
+        )
         npc.armor_condition = armor.condition if armor else 0
         npc.armor_value = (
-            armor.properties.get("armor", 1.0) * EquipmentManager.get_armor_effectiveness(armor.condition)
+            armor.properties.get("armor_factor", armor.properties.get("armor", 1.0))
+            * EquipmentManager.get_armor_effectiveness(armor.condition)
             if armor else 1.0
         )
         npc.ammo = sum(
@@ -454,6 +651,7 @@ class SimulationEngine:
         expired = self.state.contracts.expire_inactive_contracts(hour)
         for cid in expired:
             pass  # просрочка контрактов
+        self._process_npc_trade(hour)
 
     def _phase3_knowledge(self, hour: int, is_night: bool) -> None:
         """Фаза 3: Наблюдение и распространение сведений.
@@ -534,6 +732,8 @@ class SimulationEngine:
                     (f.payload.get("concealment", 50) for f in researchable), default=0
                 ),
                 known_has_artifact=any(f.payload.get("has_artifact") for f in researchable),
+                can_destroy=self._group_can_destroy(group, members),
+                can_capture=self._group_can_capture(group, members),
             )
             group.intention = choose_intention(ctx, self.state.rng)
             for member in members:
@@ -579,6 +779,84 @@ class SimulationEngine:
             group.target_id = target.id if target is not None else None
             group.target_sector_id = target.sector_id if target is not None else None
             group.target_memory_hour = max(monster.target_memory_hour for monster in members)
+
+    def _group_kit(self, members, item_type: ItemType, predicate=None):
+        """Первый подходящий исправный комплект в инвентарях членов группы."""
+        for npc in members:
+            for item_id in npc.inventory:
+                item = self.state.items.get(item_id)
+                if item is None or item.type is not item_type or item.condition <= 0:
+                    continue
+                if predicate is None or predicate(item):
+                    return npc, item
+        return None, None
+
+    def _capture_target(self, group: HumanGroup) -> Monster | None:
+        """Ослабленный монстр в секторе группы. (§16.8: здоровье ≤ 35%)"""
+        candidates = [
+            monster for monster in self.state.monsters
+            if monster.sector_id == group.sector_id
+            and monster.status in (EntityStatus.ACTIVE, EntityStatus.UNCONSCIOUS)
+            and monster.health_share <= 0.35
+        ]
+        if not candidates:
+            return None
+        # активное сопротивление других монстров рядом запрещает захват
+        resisting = any(
+            monster.status == EntityStatus.ACTIVE
+            for monster in self.state.monsters
+            if monster.sector_id == group.sector_id and monster not in candidates
+        )
+        if resisting:
+            return None
+        return min(candidates, key=lambda monster: monster.health_share)
+
+    def _group_can_capture(self, group: HumanGroup, members) -> bool:
+        target = self._capture_target(group)
+        if target is None:
+            return False
+        _, kit = self._group_kit(
+            members, ItemType.CAPTURE_KIT,
+            lambda item: item.properties.get("target_species") == species_value(target),
+        )
+        return kit is not None
+
+    def _group_can_destroy(self, group: HumanGroup, members) -> bool:
+        anomaly = next(
+            (
+                a for a in self.state.anomalies.values()
+                if a.sector_id == group.sector_id and a.status == AnomalyStatus.ACTIVE
+            ),
+            None,
+        )
+        if anomaly is None:
+            return False
+        _, kit = self._group_kit(
+            members, ItemType.DESTROY_KIT,
+            lambda item: item.properties.get("target_anomaly_type") == anomaly.anomaly_type.value,
+        )
+        return kit is not None
+
+    def _active_members(self, group: HumanGroup) -> list[HumanNPC]:
+        npcs = {npc.id: npc for npc in self.state.humans}
+        return [
+            npcs[mid] for mid in group.members
+            if mid in npcs and npcs[mid].status == EntityStatus.ACTIVE
+        ]
+
+    def _group_leader(self, group: HumanGroup, members: list[HumanNPC]) -> HumanNPC:
+        return next((npc for npc in members if npc.id == group.leader_id), members[0])
+
+    def _consume_item(self, item: Item, members: list[HumanNPC]) -> None:
+        """Удаляет израсходованный предмет из инвентаря и реестра."""
+        owner = next((npc for npc in members if item.id in npc.inventory), None)
+        if owner is not None:
+            owner.inventory.remove(item.id)
+            if owner.equipped_weapon_id == item.id:
+                owner.equipped_weapon_id = None
+            if owner.equipped_armor_id == item.id:
+                owner.equipped_armor_id = None
+        self.state.items.pop(item.id, None)
 
     def _phase5_movement(self, hour: int, is_night: bool) -> None:
         """Фаза 5: Перемещение по намерениям (1 ребро в час, §6.2)."""
@@ -1505,6 +1783,174 @@ class SimulationEngine:
                     monster.status = EntityStatus.ACTIVE
                     monster.stamina = min(monster.max_stamina, monster.stamina + 50)
 
+    def _process_destroy_anomaly(
+        self, group: HumanGroup, hour: int, is_night: bool,
+    ) -> bool:
+        """Разрушение аномалии комплектом — основное действие часа (§12.4)."""
+        members = self._active_members(group)
+        if not members or any(npc.id in self._combat_human_ids for npc in members):
+            return False
+        anomaly = next(
+            (
+                a for a in self.state.anomalies.values()
+                if a.sector_id == group.sector_id and a.status == AnomalyStatus.ACTIVE
+            ),
+            None,
+        )
+        if anomaly is None:
+            return False
+        _, kit = self._group_kit(
+            members, ItemType.DESTROY_KIT,
+            lambda item: item.properties.get("target_anomaly_type") == anomaly.anomaly_type.value,
+        )
+        if kit is None:
+            return False
+        leader = self._group_leader(group, members)
+        attentiveness = round(sum(npc.attentiveness for npc in members) / len(members))
+        result = attempt_destroy_anomaly(
+            anomaly,
+            base_damage=kit.properties["stability_damage"],
+            kit_condition=kit.condition,
+            quality=kit.properties.get("quality", 1.0),
+            group_attentiveness=attentiveness,
+            participants_count=len(members),
+        )
+        kit.condition = result["kit_new_condition"]
+        if kit.condition <= 0:
+            self._consume_item(kit, members)
+        for member in members:
+            update_stamina(member, STAMINA_COST_RESEARCH, "destroy", self.state.time)
+
+        # Каждая попытка сопровождается проверкой воздействия аномалии (§12.4)
+        contact = check_anomaly_contact(
+            entity_sector=group.sector_id,
+            anomaly=anomaly,
+            rng_func=self.state.rng.random,
+            attentiveness=attentiveness,
+            is_night=is_night,
+        )
+        if contact["result"] == "hit":
+            victim = self.state.rng.choice(members)
+            start = victim.health
+            damage_result = apply_anomaly_damage(
+                victim.health, victim.max_health, anomaly, self.state.rng.random(),
+            )
+            victim.health = damage_result.get("new_health", victim.health)
+            if victim.health <= 0:
+                self._set_unconscious_or_dead(victim, start, hour, cause="anomaly")
+
+        if result["destroyed"]:
+            parts = get_anomaly_parts_after_destruction(anomaly)
+            for _ in range(parts["quantity"]):
+                self._create_item(
+                    ItemType.ANOMALY_PART, "Часть аномалии", 40.0, leader.id,
+                    properties={
+                        "anomaly_type": anomaly.anomaly_type.value,
+                        "source_anomaly_id": anomaly.id,
+                    },
+                )
+            # уже сформировавшийся артефакт может быть извлечён (§12.4)
+            self._give_artifact(leader, anomaly, hour)
+            self.state.news_manager.create_event(
+                hour=hour, minute=40, sector_id=group.sector_id,
+                event_type="anomaly_destroyed",
+                participants=[npc.id for npc in members],
+                result="destroyed", importance=50,
+                summary=f"Группа {group.id} разрушила аномалию {anomaly.id}",
+                details={"anomaly_id": anomaly.id, "damage_dealt": result["damage_dealt"]},
+            )
+        else:
+            self.state.news_manager.create_event(
+                hour=hour, minute=40, sector_id=group.sector_id,
+                event_type="anomaly_destroyed",
+                participants=[npc.id for npc in members],
+                result="damaged", importance=20,
+                summary=(
+                    f"Группа {group.id} повредила аномалию {anomaly.id}"
+                    f" (устойчивость {result['new_stability']})"
+                ),
+                details={"anomaly_id": anomaly.id, "damage_dealt": result["damage_dealt"]},
+            )
+        return True
+
+    def _process_capture_monster(self, group: HumanGroup, hour: int) -> bool:
+        """Захват живого монстра — основное действие часа (§16.8)."""
+        members = self._active_members(group)
+        if not members or any(npc.id in self._combat_human_ids for npc in members):
+            return False
+        target = self._capture_target(group)
+        if target is None:
+            return False
+        _, kit = self._group_kit(
+            members, ItemType.CAPTURE_KIT,
+            lambda item: item.properties.get("target_species") == species_value(target),
+        )
+        if kit is None:
+            return False
+        leader = self._group_leader(group, members)
+        chance = CaptureManager.calculate_capture_chance(
+            health_share=target.health_share,
+            attacker_att=max(npc.attentiveness for npc in members),
+            target_att=target.attentiveness,
+            num_attackers=min(len(members), 4),
+            kit_bonus=kit.properties.get("capture_bonus", 0),
+        )
+        success = CaptureManager.resolve_capture(self.state.rng.random(), chance)
+        species = species_value(target)
+        if success:
+            rank = kit.properties.get("danger_rank", 1)
+            self._create_item(
+                ItemType.LIVE_MONSTER, f"Живой монстр ({species})",
+                200.0 + 300.0 * rank, leader.id,
+                properties={"species": species, "source_monster_id": target.id},
+            )
+            # монстр выводится из активной популяции, но остаётся в мире
+            monster_group = self.state.monster_groups.get(target.group_id)
+            if monster_group and target.id in monster_group.members:
+                monster_group.members.remove(target.id)
+            target.status = EntityStatus.EXILED
+            target.group_id = None
+            self.state.news_manager.create_event(
+                hour=hour, minute=40, sector_id=group.sector_id,
+                event_type="monster_captured",
+                participants=[npc.id for npc in members] + [target.id],
+                result="captured", importance=45,
+                summary=f"Группа {group.id} взяла в плен монстра {target.id} ({species})",
+                details={
+                    "monster_id": target.id, "species": species,
+                    "capture_chance": round(chance, 1),
+                },
+            )
+        else:
+            wear = self.state.rng.randint(*CaptureManager.get_kit_damage_on_failure())
+            kit.condition = max(0, kit.condition - wear)
+            if kit.condition <= 0:
+                self._consume_item(kit, members)
+            if self.state.rng.random() < 0.5:
+                victim = self.state.rng.choice(members)
+                start = victim.health
+                victim.health = max(0, victim.health - max(5, round(target.attack * 0.5)))
+                if victim.health <= 0:
+                    self._set_unconscious_or_dead(victim, start, hour, cause="capture")
+                outcome = "counterattack"
+            else:
+                sector = self.state.sectors.get(target.sector_id)
+                if sector and sector.neighbors:
+                    target.sector_id = self.state.rng.choice(list(sector.neighbors))
+                outcome = "escaped"
+            self.state.news_manager.create_event(
+                hour=hour, minute=40, sector_id=group.sector_id,
+                event_type="monster_captured",
+                participants=[npc.id for npc in members] + [target.id],
+                result="failed", importance=20,
+                summary=f"Группа {group.id} не смогла взять монстра {target.id}: {outcome}",
+                details={
+                    "monster_id": target.id, "outcome": outcome,
+                    "capture_chance": round(chance, 1),
+                },
+            )
+        return True
+
     def _phase7_actions(self, hour: int, is_night: bool) -> None:
         """Фаза 7: сначала бои, затем остальные основные действия (§8)."""
         self._execute_battles(hour)
@@ -1512,6 +1958,15 @@ class SimulationEngine:
         acted_groups = set()
         for group in self.state.human_groups.values():
             if self._process_corpse_action(group, hour) is not None:
+                acted_groups.add(group.id)
+        for group in self.state.human_groups.values():
+            if group.id in acted_groups or group.intention not in (DESTROY, CAPTURE):
+                continue
+            if group.intention == DESTROY:
+                done = self._process_destroy_anomaly(group, hour, is_night)
+            else:
+                done = self._process_capture_monster(group, hour)
+            if done:
                 acted_groups.add(group.id)
         for npc in self.state.humans:
             if npc.id in self._combat_human_ids or npc.group_id in acted_groups:
