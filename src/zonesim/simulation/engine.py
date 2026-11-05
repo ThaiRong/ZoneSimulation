@@ -62,6 +62,7 @@ from zonesim.relations.development import DevelopmentManager, ExileManager, Fact
 from zonesim.relations.news import NewsManager
 
 from zonesim.knowledge.fact import KnowledgeBase, KnowledgeType
+from zonesim.persistence import SaveManager
 
 
 @dataclass
@@ -112,14 +113,39 @@ class SimulationState:
 class SimulationEngine:
     """Главный движок симуляции. Интегрирует все модули."""
 
-    def __init__(self, seed: int = 42, config: dict | None = None):
+    def __init__(self, seed: int = 42, config: dict | None = None, save_directory=None):
         self.state = SimulationState(rng=SeededRNG(seed), config=config or {})
+        self.save_manager = SaveManager(save_directory) if save_directory is not None else None
         self._home_cache: dict[str, int | None] = {}
         self._border_dist: dict[int, int] | None = None
         self._pending_battles: list[dict] = []
         self._combat_human_ids: set[int] = set()
         self._combat_monster_ids: set[int] = set()
+        self._moved_human_ids: set[int] = set()
         self._generate_world()
+
+    @classmethod
+    def from_state(cls, state: SimulationState, save_directory=None) -> SimulationEngine:
+        engine = cls.__new__(cls)
+        engine.state = state
+        engine.save_manager = SaveManager(save_directory) if save_directory is not None else None
+        engine._home_cache = {}
+        engine._border_dist = None
+        engine._pending_battles = []
+        engine._combat_human_ids = set()
+        engine._combat_monster_ids = set()
+        engine._moved_human_ids = set()
+        return engine
+
+    @classmethod
+    def load(cls, slot: str, directory) -> SimulationEngine:
+        manager = SaveManager(directory)
+        return cls.from_state(manager.load(slot), save_directory=directory)
+
+    def save(self, slot: str):
+        if self.save_manager is None:
+            raise RuntimeError("Каталог сохранений не настроен")
+        return self.save_manager.save(slot, self.state)
 
     def _generate_world(self) -> None:
         """Генерирует мир по seed и config."""
@@ -185,10 +211,9 @@ class SimulationEngine:
         # Фаза 9: Последствия
         self._phase9_consequences(hour)
 
-        # Фаза 10: Отчёт и автосохранение
-        self._phase10_report(hour)
-
+        # Фаза 10: сначала фиксируется следующий час, затем выполняется автосохранение
         self.state.time.advance()
+        self._phase10_report(hour)
 
         return {
             "hour": hour,
@@ -1023,8 +1048,18 @@ class SimulationEngine:
         self._sync_human_groups()
 
     def _phase10_report(self, hour: int) -> None:
-        """Фаза 10: Отчёт."""
-        pass
+        """Фаза 10: автосохранение после завершённого часа."""
+        if self.save_manager is None:
+            return
+        settings = self.state.config.get("persistence", {})
+        if not settings.get("autosave_enabled", True):
+            return
+        interval = settings.get("autosave_interval", 6)
+        slot_count = settings.get("autosave_slots", 3)
+        if interval <= 0 or slot_count <= 0 or self.state.time.hour % interval != 0:
+            return
+        slot_index = (self.state.time.hour // interval - 1) % slot_count
+        self.save(f"autosave_{slot_index}")
 
     def get_state_summary(self) -> dict[str, Any]:
         """Получает сводку текущего состояния."""

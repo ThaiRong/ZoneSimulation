@@ -50,6 +50,7 @@ class SeededRNG:
     """Обёртка для воспроизводимого генератора случайных чисел. §20.3"""
 
     def __init__(self, seed: int | None = None):
+        self.seed = seed
         self.rng = random.Random(seed)
 
     def random(self) -> float:
