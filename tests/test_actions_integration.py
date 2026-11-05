@@ -264,7 +264,7 @@ class TestTrading:
         npc.money = 500.0
         stock_before = engine.state.trader_stock[trader.id]["gear.medkit.sanitar2"]
 
-        engine._process_npc_trade(engine.state.time.hour)
+        engine._process_rest_trade(engine.state.time.hour, [group])
 
         price = engine.trade_price("gear.medkit.sanitar2")
         assert npc.money == pytest.approx(500.0 - price)
@@ -288,7 +288,7 @@ class TestTrading:
         artifact = engine._create_item(ItemType.ARTIFACT, "Артефакт", 500.0, npc.id)
         npc.money = 0.0
 
-        engine._process_npc_trade(engine.state.time.hour)
+        engine._process_rest_trade(engine.state.time.hour, [group])
 
         assert npc.money == pytest.approx(300.0)  # 500 × 0.6
         assert artifact.id not in engine.state.items

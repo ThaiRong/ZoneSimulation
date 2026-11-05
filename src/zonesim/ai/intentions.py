@@ -48,6 +48,8 @@ class IntentionContext:
     known_has_artifact: bool = False
     can_destroy: bool = False       # исправный комплект разрушения и цель в секторе
     can_capture: bool = False       # комплект захвата и ослабленная цель в секторе
+    can_rest: bool = False          # отдых требует комфорта (§14.3)
+    hours_awake: float = 0.0        # часов с последнего пробуждения
 
 
 def evaluate_actions(ctx: IntentionContext) -> dict[str, float]:
@@ -75,13 +77,20 @@ def evaluate_actions(ctx: IntentionContext) -> dict[str, float]:
                 N += 60.0 * (1.0 - ctx.stamina_share)
             if ctx.is_night:
                 N += 15.0
+            # Сон необходим: бодрствование дольше 24 часов (§14.1)
+            if ctx.hours_awake >= 24:
+                N += 60.0
             if not ctx.at_home:
                 R += 8.0  # сон вне базы опаснее
         elif action == REST:
-            # Критическое здоровье — приоритет лечения (§9.4)
-            if ctx.health_share < 0.45:
-                N += 70.0 * (1.0 - ctx.health_share)
-            R += 4.0
+            # Отдых: ½ темпа комфортного сна, требует комфорта и
+            # применяется при выносливости ниже 80% (§14.3)
+            if not ctx.can_rest:
+                u[action] = float("-inf")
+                continue
+            if ctx.stamina_share < 0.8:
+                N += 40.0 * (0.8 - ctx.stamina_share)
+            R += 2.0
         elif action == RESEARCH:
             if not ctx.has_known_anomaly:
                 u[action] = float("-inf")  # нечего исследовать в секторе

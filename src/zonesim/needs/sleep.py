@@ -95,6 +95,7 @@ def human_sleep_recover(group: HumanGroup, npcs: dict[int, object], time, rng) -
             # Проверка пробуждения
             if npc.stamina >= getattr(npc, "max_stamina", 100):
                 npc.status = EntityStatus.ACTIVE
+                npc.awake_since_hour = time.hour  # сон необходим раз в 24 часа (§14.1)
 
         elif npc.status == EntityStatus.UNCONSCIOUS:
             # Бессознательные тоже медленно приходят в себя

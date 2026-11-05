@@ -61,6 +61,7 @@ class HumanNPC(BaseEntity):
     equipped_armor_id: int | None = None
     is_stationary: bool = False
     stationary_role: str | None = None  # trader / guard
+    awake_since_hour: int = 0  # час последнего пробуждения (сон необходим раз в 24 ч)
 
     @property
     def health_share(self) -> float:

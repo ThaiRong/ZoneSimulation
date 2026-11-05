@@ -37,6 +37,7 @@ from zonesim.ai import (
 )
 
 from zonesim.needs.sleep import (
+    HUMAN_COMFORT_HOURS,
     STAMINA_COST_AWAKE,
     STAMINA_COST_MOVEMENT,
     STAMINA_COST_RESEARCH,
@@ -384,25 +385,32 @@ class SimulationEngine:
             trader.money = getattr(trader, "money", 0.0) - total
         return total
 
-    def _process_npc_trade(self, hour: int) -> None:
-        """Покупки и продажи групп у торговцев в общем секторе. (§16.1)"""
+    # Обмен в час отдыха: пороги отношений фракций
+    REST_EXCHANGE_RELATION = 20   # обмен информацией
+    REST_TRADE_RELATION = 40      # меновая торговля ценностями
+    REST_TRADE_PRICE_SHARE = 0.8  # цена меновой сделки от базовой стоимости
+
+    def _process_rest_trade(self, hour: int, resting_groups: list[HumanGroup]) -> None:
+        """Торговля как час отдыха у торговца: сначала продажа, потом закупка. (§16)"""
         traders = [
             npc for npc in self.state.stationary_humans
             if npc.stationary_role == "trader" and npc.status == EntityStatus.ACTIVE
         ]
         if not traders:
             return
-        for group in self.state.human_groups.values():
+        for group in resting_groups:
             members = self._active_members(group)
-            if not members:
+            if not members or any(npc.id in self._combat_human_ids for npc in members):
                 continue
             trader = next(
                 (t for t in traders if t.sector_id == group.sector_id), None,
             )
             if trader is None:
                 continue
-            stock = self.state.trader_stock.setdefault(trader.id, {})
             leader = self._group_leader(group, members)
+            stock = self.state.trader_stock.setdefault(trader.id, {})
+            # сначала продажа добычи — освобождает деньги для закупки
+            self._sell_loot(leader, trader)
             for item_ref, quantity in self._purchase_plan(group, members, stock):
                 price = self.trade_price(item_ref, quantity)
                 if leader.money < price or stock.get(item_ref, 0) < quantity:
@@ -417,7 +425,88 @@ class SimulationEngine:
                 self.state.items[item.id] = item
                 give_item(item, leader.id, leader.inventory)
                 self._sync_npc_from_items(leader)
-            self._sell_loot(leader, trader)
+
+    def _process_rest_exchanges(self, hour: int, resting_groups: list[HumanGroup]) -> None:
+        """Обмен информацией и ценностями между отдыхающими группами. (§14.3)"""
+        by_sector: dict[int, list[HumanGroup]] = {}
+        for group in resting_groups:
+            by_sector.setdefault(group.sector_id, []).append(group)
+        for sector_id, groups in by_sector.items():
+            for index, first in enumerate(groups):
+                for second in groups[index + 1:]:
+                    first_faction = self._group_faction(first)
+                    second_faction = self._group_faction(second)
+                    if first_faction is None or second_faction is None:
+                        continue
+                    relation = self.state.faction_relations.get(first_faction, second_faction)
+                    if relation >= self.REST_EXCHANGE_RELATION:
+                        self._exchange_knowledge(first, second, hour)
+                    if relation >= self.REST_TRADE_RELATION:
+                        self._barter_groups(first, second, sector_id, hour)
+
+    def _group_faction(self, group: HumanGroup) -> str | None:
+        npcs = {npc.id: npc for npc in self.state.humans}
+        leader = npcs.get(group.leader_id)
+        return leader.faction if leader is not None else None
+
+    def _exchange_knowledge(self, group_a: HumanGroup, group_b: HumanGroup, hour: int) -> None:
+        """Обмен сведениями между лидерами отдыхающих групп. (§17)"""
+        npcs = {npc.id: npc for npc in self.state.humans}
+        leader_a = npcs.get(group_a.leader_id)
+        leader_b = npcs.get(group_b.leader_id)
+        if leader_a is None or leader_b is None:
+            return
+        kb_a = self.state.knowledge_bases.get(leader_a.id)
+        kb_b = self.state.knowledge_bases.get(leader_b.id)
+        if kb_a is None or kb_b is None:
+            return
+        for source, target, owner in ((kb_a, kb_b, leader_b), (kb_b, kb_a, leader_a)):
+            existing = {(f.fact_type, f.subject_id) for f in target.facts}
+            for fact in source.facts:
+                if (fact.fact_type, fact.subject_id) in existing:
+                    continue
+                target.add_manual(
+                    owner.id, fact.fact_type, fact.subject_id,
+                    dict(fact.payload), hour, source="conversation",
+                )
+
+    def _barter_groups(
+        self, group_a: HumanGroup, group_b: HumanGroup, sector_id: int, hour: int,
+    ) -> None:
+        """Меновая торговля ценностью между отдыхающими группами. (§14.3)"""
+        npcs = {npc.id: npc for npc in self.state.humans}
+        leader_a = npcs.get(group_a.leader_id)
+        leader_b = npcs.get(group_b.leader_id)
+        if leader_a is None or leader_b is None:
+            return
+        sellable = (
+            ItemType.ARTIFACT, ItemType.MONSTER_PART,
+            ItemType.ANOMALY_PART, ItemType.LIVE_MONSTER,
+        )
+        seller, buyer = (leader_a, leader_b) if leader_a.money <= leader_b.money else (leader_b, leader_a)
+        goods = [
+            self.state.items[item_id] for item_id in seller.inventory
+            if item_id in self.state.items
+            and self.state.items[item_id].type in sellable
+        ]
+        if not goods:
+            return
+        item = max(goods, key=lambda entry: entry.base_value)
+        price = round(item.base_value * self.REST_TRADE_PRICE_SHARE, 1)
+        if buyer.money < price:
+            return
+        seller.inventory.remove(item.id)
+        give_item(item, buyer.id, buyer.inventory)
+        seller.money += price
+        buyer.money -= price
+        self.state.news_manager.create_event(
+            hour=hour, minute=50, sector_id=sector_id,
+            event_type="rest_trade",
+            participants=[seller.id, buyer.id],
+            result="barter", importance=10,
+            summary=f"NPC {buyer.id} купил «{item.name}» у NPC {seller.id} за {price}",
+            details={"item_id": item.id, "price": price},
+        )
 
     def _create_item(
         self,
@@ -651,7 +740,6 @@ class SimulationEngine:
         expired = self.state.contracts.expire_inactive_contracts(hour)
         for cid in expired:
             pass  # просрочка контрактов
-        self._process_npc_trade(hour)
 
     def _phase3_knowledge(self, hour: int, is_night: bool) -> None:
         """Фаза 3: Наблюдение и распространение сведений.
@@ -705,6 +793,8 @@ class SimulationEngine:
                 continue
 
             members = [npcs[mid] for mid in group.members if mid in npcs]
+            if not members:
+                continue
             facts = []
             for member in members:
                 kb = self.state.knowledge_bases.get(member.id)
@@ -713,6 +803,10 @@ class SimulationEngine:
             here = [f for f in facts if f.payload.get("sector_id") == group.sector_id]
             researchable = [f for f in here if not f.payload.get("researched")]
             home = self._home_sector_id(leader.faction)
+            all_npcs = {n.id: n for n in self.state.humans + self.state.stationary_humans}
+            hours_awake = max(
+                hour - getattr(member, "awake_since_hour", hour) for member in members
+            )
 
             ctx = IntentionContext(
                 hour=hour,
@@ -734,6 +828,8 @@ class SimulationEngine:
                 known_has_artifact=any(f.payload.get("has_artifact") for f in researchable),
                 can_destroy=self._group_can_destroy(group, members),
                 can_capture=self._group_can_capture(group, members),
+                can_rest=group.is_comfort_sleep_possible(all_npcs, group.sector_id),
+                hours_awake=hours_awake,
             )
             group.intention = choose_intention(ctx, self.state.rng)
             for member in members:
@@ -1386,17 +1482,21 @@ class SimulationEngine:
         )
 
     def _rest_tick(self, npc: HumanNPC) -> None:
-        """Отдых и лечение на базе (§14.3).
-
-        Временная мера до системы медикаментов: медленное восстановление
-        с потолком 70% — полное мгновенное восстановление невозможно.
-        """
-        home = self._home_sector_id(npc.faction)
-        if home is None or npc.sector_id != home:
+        """Отдых: восстановление ½ темпа комфортного сна при комфорте. (§14.3)"""
+        group = self.state.human_groups.get(npc.group_id)
+        member_ids = set(group.members) if group else set()
+        # Комфорт отдыха — посторонний активный NPC в секторе (персонал базы,
+        # другая группа); собственное присутствие группы комфортом не считается.
+        comfort = any(
+            other.status == EntityStatus.ACTIVE
+            and other.sector_id == npc.sector_id
+            and other.id not in member_ids
+            for other in self.state.humans + self.state.stationary_humans
+        )
+        if not comfort:
             return
-        cap = int(npc.max_health * 0.7)
-        if npc.health < cap:
-            npc.health = min(cap, npc.health + 2)
+        max_st = npc.max_stamina
+        npc.stamina = min(max_st, npc.stamina + max_st * 0.5 / HUMAN_COMFORT_HOURS)
 
     def _research_tick(self, npc: HumanNPC, hour: int) -> None:
         """Исследование известной аномалии — основное действие часа (§12.3)."""
@@ -1968,6 +2068,13 @@ class SimulationEngine:
                 done = self._process_capture_monster(group, hour)
             if done:
                 acted_groups.add(group.id)
+
+        resting_groups = [
+            group for group in self.state.human_groups.values()
+            if group.intention == REST
+        ]
+        self._process_rest_exchanges(hour, resting_groups)
+        self._process_rest_trade(hour, resting_groups)
         for npc in self.state.humans:
             if npc.id in self._combat_human_ids or npc.group_id in acted_groups:
                 continue
