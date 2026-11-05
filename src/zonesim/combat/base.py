@@ -35,6 +35,7 @@ class Combatant:
     weapon_damage: int = 20
     weapon_condition: int = 100
     armor_value: float = 1.0
+    armor_condition: int = 100
     bravery: int = 50
     attentiveness: int = 50
     faction: str = ""
@@ -66,7 +67,10 @@ class CombatFactory:
             bravery=npc.bravery,
             attentiveness=npc.attentiveness,
             faction=npc.faction,
+            weapon_damage=getattr(npc, "weapon_damage", 20),
             weapon_condition=getattr(npc, "weapon_condition", 100),
+            armor_value=getattr(npc, "armor_value", 1.0),
+            armor_condition=getattr(npc, "armor_condition", 100),
             ammo=getattr(npc, "ammo", 0),
             medicines=getattr(npc, "medicines", 0),
         )

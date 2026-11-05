@@ -54,6 +54,11 @@ class HumanNPC(BaseEntity):
     name: str = "Unknown"
     intention: str = ""  # выбранное намерение (фаза 4, §9)
     artifacts: list[int] = field(default_factory=list)  # id переносимых артефактов
+    inventory: list[int] = field(default_factory=list)
+    money: int = 0
+    debt: int = 0
+    equipped_weapon_id: int | None = None
+    equipped_armor_id: int | None = None
     is_stationary: bool = False
     stationary_role: str | None = None  # trader / guard
 

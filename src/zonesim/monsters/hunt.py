@@ -68,7 +68,7 @@ def decide_hunt_action(
         return {"should_hunt": False, "reason": "no_targets"}
 
     # Наилучшая цель — наиболее уязвимая
-    best_target = max(
+    best_target = min(
         targets_in_sector,
         key=lambda t: getattr(t, "health_share", 0.5),
     )
@@ -136,15 +136,12 @@ def should_pursue(
     Решает, преследовать ли существо, нанёсшее урон.
     Крупные мигранты запоминают на 24 часа.
     """
-    if monster.species != MonsterSpecies.LARGE_MIGRATOR:
+    from zonesim.monsters.behavior import species_value
+
+    if species_value(monster) != MonsterSpecies.LARGE_MIGRATOR.value:
         return False
 
     if not target_damaged_by:
         return False
 
-    if hours_since_damage >= memory_hours:
-        return False
-
-    # Шанс преследования снижается со временем
-    persistence_chance = max(0, 100 - hours_since_damage * (100 / memory_hours))
-    return True  # placeholder — caller должен бросить rng
+    return 0 <= hours_since_damage < memory_hours

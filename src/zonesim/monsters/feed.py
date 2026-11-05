@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from zonesim.combat.loot import Corpse
+from zonesim.monsters.behavior import species_value
 
 
 __all__ = ["Corpse", "FeedManager"]
 
 
 class FeedManager:
-    """Поедание трупов монстрами. (§13.5)"""
+    """Поедание одного трупа за основное действие группы."""
 
     def process_feeding(
         self,
@@ -18,52 +19,49 @@ class FeedManager:
         hour: int,
         rng_values: list[float] = None,
     ) -> list[dict]:
-        """
-        Обрабатывает поедание трупов монстрами в секторе.
-        Один труп обрабатывается за действие.
-        Конкурирующие группы — инициатива.
-        """
-        rng_values = rng_values or []
         results = []
-
-        for i, monster in enumerate(monsters_in_sector):
+        rng_values = rng_values or []
+        for index, monster in enumerate(monsters_in_sector):
             if not available_corpses:
                 break
-
-            # Шанс поедания
-            feed_chance = 70.0  # базовый шанс
-            if rng_values and i < len(rng_values):
-                if rng_values[i] * 100 < feed_chance:
-                    corpse = available_corpses.pop(0)
-                    corpse.status = "consumed"
-
-                    results.append({
-                        "monster_id": monster.id,
-                        "species": monster.species.value if hasattr(monster, 'species') else "unknown",
-                        "corpse_id": corpse.id,
-                        "corpse_type": corpse.original_entity_type,
-                        "consumed_hour": hour,
-                    })
-
+            chance = rng_values[index] if index < len(rng_values) else 0.0
+            if chance * 100 < 70.0:
+                corpse = available_corpses[0]
+                result = self.consume(corpse, monster, hour)
+                available_corpses.pop(0)
+                results.append(result)
         return results
 
-    def can_consume(self, monster_species: str, corpse: Corpse) -> bool:
-        """
-        Проверяет, может ли монстр данного вида съесть труп.
-        """
-        if corpse.status != "available":
-            return False
+    def consume(self, corpse: Corpse, monster, hour: int, items: dict | None = None) -> dict:
+        if not self.can_consume(species_value(monster), corpse):
+            return {"success": False, "reason": "corpse_unavailable"}
+        lost_items = list(corpse.items)
+        if items is not None:
+            for item_id in lost_items:
+                items.pop(item_id, None)
+        corpse.items.clear()
+        corpse.monster_parts.clear()
+        corpse.money = 0
+        corpse.status = "consumed"
+        corpse.consumed_by = monster.id
+        corpse.consumed_hour = hour
+        monster.stamina = min(monster.max_stamina, monster.stamina + 30)
+        return {
+            "success": True,
+            "monster_id": monster.id,
+            "species": species_value(monster),
+            "corpse_id": corpse.id,
+            "corpse_type": corpse.original_entity_type,
+            "consumed_hour": hour,
+            "lost_items": lost_items,
+        }
 
-        # Монстры едят всё, что могут
-        return True
+    def can_consume(self, monster_species: str, corpse: Corpse) -> bool:
+        return corpse.status == "available"
 
     def get_consumption_reward(self, corpse: Corpse) -> dict:
-        """
-        Возвращает результат поедания: труп исчезает, снаряжение портится.
-        (§11.8, §7.11)
-        """
         return {
             "corpse_destroyed": True,
-            "items_corrupted": len(corpse.monster_parts),
+            "items_corrupted": len(corpse.items) + len(corpse.monster_parts),
             "note": "оставшиеся вещи утрачены полностью",
         }

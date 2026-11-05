@@ -26,6 +26,7 @@ from zonesim.relations.news import NewsManager, WorldEvent
 from zonesim.relations.personal import PersonalRelations
 from zonesim.world.entity import EntityStatus, EntityType, HumanNPC, Monster, MonsterSpecies
 from zonesim.world.group import HumanGroup, MonsterGroup
+from zonesim.world.item import Item, ItemType
 from zonesim.world.sector import Sector
 from zonesim.world.stash import Stash
 
@@ -99,6 +100,7 @@ def state_to_dict(state: SimulationState) -> dict[str, Any]:
         "anomalies": _encode({key: vars(value) for key, value in state.anomalies.items()}),
         "artifacts": _object_data(state.artifacts),
         "corpses": _encode([vars(value) for value in state.corpses]),
+        "items": _encode({key: vars(value) for key, value in state.items.items()}),
         "contracts": _object_data(state.contracts),
         "import_export": _object_data(state.import_export),
         "personal_relations": _object_data(state.personal_relations),
@@ -115,9 +117,11 @@ def state_to_dict(state: SimulationState) -> dict[str, Any]:
         "next_human_id": state.next_human_id,
         "next_monster_id": state.next_monster_id,
         "next_group_id": state.next_group_id,
+        "next_monster_group_id": state.next_monster_group_id,
         "next_anomaly_id": state.next_anomaly_id,
         "next_stash_id": state.next_stash_id,
         "next_corpse_id": state.next_corpse_id,
+        "next_item_id": state.next_item_id,
         "visit_memory": _encode(state.visit_memory),
         "config": _encode(state.config),
     }
@@ -220,6 +224,10 @@ def state_from_dict(data: dict[str, Any]) -> SimulationState:
         anomalies=anomalies,
         artifacts=artifacts,
         corpses=[_restore(Corpse, value) for value in _decode(data["corpses"])],
+        items={
+            key: _restore(Item, value, {"type": ItemType})
+            for key, value in _decode(data["items"]).items()
+        },
         contracts=contracts,
         import_export=import_export,
         personal_relations=_restore(PersonalRelations, data["personal_relations"]),
@@ -236,9 +244,11 @@ def state_from_dict(data: dict[str, Any]) -> SimulationState:
         next_human_id=data["next_human_id"],
         next_monster_id=data["next_monster_id"],
         next_group_id=data["next_group_id"],
+        next_monster_group_id=data["next_monster_group_id"],
         next_anomaly_id=data["next_anomaly_id"],
         next_stash_id=data["next_stash_id"],
         next_corpse_id=data["next_corpse_id"],
+        next_item_id=data["next_item_id"],
         visit_memory=_decode(data["visit_memory"]),
         config=_decode(data["config"]),
     )

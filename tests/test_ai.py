@@ -124,6 +124,9 @@ class TestEngineIntegration:
 
     def test_low_stamina_leads_to_sleep(self):
         engine = SimulationEngine(seed=42)
+        for monster in engine.state.monsters:
+            monster.status = EntityStatus.DEAD
+        engine._sync_monster_groups()
         npc = next(h for h in engine.state.humans if h.status == EntityStatus.ACTIVE)
         group = engine.state.human_groups[npc.group_id]
         for member_id in group.members:
@@ -135,6 +138,9 @@ class TestEngineIntegration:
 
     def test_sleeping_recovers_stamina(self):
         engine = SimulationEngine(seed=42)
+        for monster in engine.state.monsters:
+            monster.status = EntityStatus.DEAD
+        engine._sync_monster_groups()
         npc = next(h for h in engine.state.humans if h.status == EntityStatus.ACTIVE)
         group = engine.state.human_groups[npc.group_id]
         for member_id in group.members:

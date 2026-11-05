@@ -101,13 +101,13 @@ class MonsterGroup:
     members: list[int] = field(default_factory=list)  # id Monster
     sector_id: int = 0
     species: str = ""
+    intention: str = "roam"
+    target_id: int | None = None
+    target_sector_id: int | None = None
     target_memory_hour: int = 0
+    home_sector_id: int | None = None
     status: str = "active"  # active, dispersing
 
     @property
     def member_count(self) -> int:
         return len(self.members)
-
-    @property
-    def combat_power(self) -> float:
-        return sum(m.attack * m.health / m.max_health for m in self.members) if self.members else 0.0

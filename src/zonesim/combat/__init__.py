@@ -97,6 +97,7 @@ class CombatSystem:
             c.id: c.health / c.max_health if c.max_health > 0 else 0.0
             for c in attackers + defenders
         }
+        self._damage_received = {c.id: 0 for c in attackers + defenders}
         self._failed_retreat = {"attacker": False, "defender": False}
         self._retreat_sectors: dict[str, int] = {}
 
@@ -193,6 +194,7 @@ class CombatSystem:
                 defender = defender_map[entry["defender_id"]]
                 if attacker.is_alive and defender.is_alive:
                     defender.health = max(0, defender.health - entry["damage"])
+                    self._damage_received[defender.id] += entry["damage"]
 
     def _check_zero_health(self, rng_func) -> None:
         for combatant in self.attackers + self.defenders:
@@ -375,10 +377,26 @@ class CombatSystem:
             self.equipment_wear.append({
                 "id": combatant.id,
                 "name": combatant.name,
+                "item_type": "weapon",
                 "old_condition": old_condition,
                 "new_condition": wear.new_condition,
                 "destroyed": wear.destroyed,
             })
+            damage_received = self._damage_received[combatant.id]
+            if combatant.is_human and damage_received > 0:
+                old_armor = combatant.armor_condition
+                armor_wear = EquipmentManager.apply_armor_damage(
+                    old_armor, damage_received, rng_func()
+                )
+                combatant.armor_condition = armor_wear.new_condition
+                self.equipment_wear.append({
+                    "id": combatant.id,
+                    "name": combatant.name,
+                    "item_type": "armor",
+                    "old_condition": old_armor,
+                    "new_condition": armor_wear.new_condition,
+                    "destroyed": armor_wear.destroyed,
+                })
 
     def _compile_result(self) -> BattleResult:
         attackers_active = self._active(self.attackers)

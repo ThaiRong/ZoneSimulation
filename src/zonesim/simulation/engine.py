@@ -8,7 +8,8 @@ from typing import Any
 from zonesim.core.time import GameTime, SeededRNG
 from zonesim.world.sector import Sector
 from zonesim.world.entity import HumanNPC, Monster, MonsterSpecies, EntityStatus
-from zonesim.combat.loot import Corpse
+from zonesim.combat.loot import Corpse, EquipmentManager, LootManager
+from zonesim.world.item import Item, ItemType, give_item, place_item_on_corpse
 
 from zonesim.core.config import GameConfig
 from zonesim.generation.worldgen import generate_world
@@ -43,7 +44,10 @@ from zonesim.needs.sleep import (
 
 from zonesim.anomalies.research import research_anomaly
 
-from zonesim.world.group import HumanGroup
+from zonesim.world.group import HumanGroup, MonsterGroup
+from zonesim.monsters.behavior import choose_group_intention, select_weakest_target, species_value
+from zonesim.monsters.feed import FeedManager
+from zonesim.monsters.hunt import should_pursue
 
 from zonesim.economy.contracts import ContractManager
 from zonesim.economy.trade import ImportExportManager
@@ -79,6 +83,7 @@ class SimulationState:
     anomalies: dict[int, AnomalyEntity] = field(default_factory=dict)
     artifacts: ArtifactManager = field(default_factory=ArtifactManager)
     corpses: list[Corpse] = field(default_factory=list)
+    items: dict[int, Item] = field(default_factory=dict)
 
     contracts: ContractManager = field(default_factory=ContractManager)
     import_export: ImportExportManager = field(default_factory=ImportExportManager)
@@ -101,9 +106,11 @@ class SimulationState:
     next_human_id: int = 0
     next_monster_id: int = 0
     next_group_id: int = 0
+    next_monster_group_id: int = 0
     next_anomaly_id: int = 0
     next_stash_id: int = 0
     next_corpse_id: int = 0
+    next_item_id: int = 0
 
     visit_memory: dict[int, dict[int, int]] = field(default_factory=dict)  # npc_id -> sector -> hour
 
@@ -122,6 +129,9 @@ class SimulationEngine:
         self._combat_human_ids: set[int] = set()
         self._combat_monster_ids: set[int] = set()
         self._moved_human_ids: set[int] = set()
+        self._moved_monster_ids: set[int] = set()
+        self._feeding_claims: dict[int, int] = {}
+        self._feed_manager = FeedManager()
         self._generate_world()
 
     @classmethod
@@ -135,6 +145,9 @@ class SimulationEngine:
         engine._combat_human_ids = set()
         engine._combat_monster_ids = set()
         engine._moved_human_ids = set()
+        engine._moved_monster_ids = set()
+        engine._feeding_claims = {}
+        engine._feed_manager = FeedManager()
         return engine
 
     @classmethod
@@ -168,6 +181,143 @@ class SimulationEngine:
         self.state.next_monster_id = max((m.id for m in self.state.monsters), default=0) + 1
         self.state.next_anomaly_id = max((a.id for a in self.state.anomalies.values()), default=0) + 1
         self.state.next_group_id = max(self.state.human_groups, default=-1) + 1
+        for npc in all_humans:
+            self._give_starting_equipment(npc)
+        self._sync_monster_groups()
+
+    def _sync_monster_groups(self) -> None:
+        monsters = {monster.id: monster for monster in self.state.monsters}
+        for group_id, group in list(self.state.monster_groups.items()):
+            group.members = [
+                member_id for member_id in group.members
+                if member_id in monsters and monsters[member_id].status != EntityStatus.DEAD
+            ]
+            if not group.members:
+                del self.state.monster_groups[group_id]
+                continue
+            members = [monsters[member_id] for member_id in group.members]
+            group.sector_id = members[0].sector_id
+            group.species = species_value(members[0])
+            if group.home_sector_id is None:
+                group.home_sector_id = members[0].home_sector_id
+
+        for monster in self.state.monsters:
+            if monster.status == EntityStatus.DEAD:
+                monster.group_id = None
+                continue
+            if monster.group_id in self.state.monster_groups:
+                continue
+            monster.group_id = None
+            species = species_value(monster)
+            max_size = monster.species_params.get("normal_group_size", (1, 1))[1]
+            group = next(
+                (
+                    candidate for candidate in self.state.monster_groups.values()
+                    if candidate.species == species and candidate.sector_id == monster.sector_id
+                    and candidate.member_count < max_size
+                ),
+                None,
+            )
+            if group is None:
+                group = MonsterGroup(
+                    id=self.state.next_monster_group_id,
+                    sector_id=monster.sector_id,
+                    species=species,
+                    home_sector_id=monster.home_sector_id,
+                )
+                self.state.next_monster_group_id += 1
+                self.state.monster_groups[group.id] = group
+            group.members.append(monster.id)
+            monster.group_id = group.id
+
+    def _monster_group_members(self, group: MonsterGroup, active_only: bool = True) -> list[Monster]:
+        monsters = {monster.id: monster for monster in self.state.monsters}
+        members = [monsters[member_id] for member_id in group.members if member_id in monsters]
+        if active_only:
+            members = [monster for monster in members if monster.status == EntityStatus.ACTIVE]
+        return members
+
+    def _create_item(
+        self,
+        item_type: ItemType,
+        name: str,
+        base_value: float,
+        owner_id: int | None = None,
+        quantity: int = 1,
+        properties: dict | None = None,
+    ) -> Item:
+        item = Item(
+            id=self.state.next_item_id,
+            type=item_type,
+            name=name,
+            base_value=base_value,
+            quantity=quantity,
+            properties=properties or {},
+        )
+        self.state.next_item_id += 1
+        self.state.items[item.id] = item
+        if owner_id is not None:
+            owner = next(
+                npc for npc in self.state.humans + self.state.stationary_humans
+                if npc.id == owner_id
+            )
+            give_item(item, owner_id, owner.inventory)
+        return item
+
+    def _give_starting_equipment(self, npc: HumanNPC) -> None:
+        if npc.inventory:
+            return
+        npc.money = 100
+        weapon = self._create_item(
+            ItemType.WEAPON, "Оружие", 200.0, npc.id,
+            properties={"damage": 24 if npc.faction == "Серая лига" else 20},
+        )
+        armor = self._create_item(
+            ItemType.ARMOR, "Защитное снаряжение", 80.0, npc.id,
+            properties={"armor": 1.1},
+        )
+        npc.equipped_weapon_id = weapon.id
+        npc.equipped_armor_id = armor.id
+        self._create_item(ItemType.AMMO, "Боеприпасы", 5.0, npc.id, quantity=12)
+        self._create_item(ItemType.MEDICINE, "Медикаменты", 20.0, npc.id)
+        self._sync_npc_from_items(npc)
+
+    def _sync_npc_from_items(self, npc: HumanNPC) -> None:
+        weapon = self.state.items.get(npc.equipped_weapon_id)
+        armor = self.state.items.get(npc.equipped_armor_id)
+        npc.weapon_condition = weapon.condition if weapon else 0
+        npc.weapon_damage = weapon.properties.get("damage", 20) if weapon else 5
+        npc.armor_condition = armor.condition if armor else 0
+        npc.armor_value = (
+            armor.properties.get("armor", 1.0) * EquipmentManager.get_armor_effectiveness(armor.condition)
+            if armor else 1.0
+        )
+        npc.ammo = sum(
+            item.quantity for item_id in npc.inventory
+            if (item := self.state.items[item_id]).type is ItemType.AMMO
+        )
+        npc.medicines = sum(
+            item.quantity for item_id in npc.inventory
+            if (item := self.state.items[item_id]).type is ItemType.MEDICINE
+        )
+
+    def _sync_items_from_npc(self, npc: HumanNPC) -> None:
+        weapon = self.state.items.get(npc.equipped_weapon_id)
+        armor = self.state.items.get(npc.equipped_armor_id)
+        if weapon:
+            weapon.condition = max(0, min(100, npc.weapon_condition))
+        if armor:
+            armor.condition = max(0, min(100, npc.armor_condition))
+        for item_type, amount in (
+            (ItemType.AMMO, getattr(npc, "ammo", 0)),
+            (ItemType.MEDICINE, getattr(npc, "medicines", 0)),
+        ):
+            stacks = [
+                self.state.items[item_id] for item_id in npc.inventory
+                if self.state.items[item_id].type is item_type
+            ]
+            for index, item in enumerate(stacks):
+                item.quantity = max(0, amount) if index == 0 else 0
 
     def simulate_hour(self) -> dict[str, Any]:
         """
@@ -226,6 +376,7 @@ class SimulationEngine:
     def _phase0_check(self, hour: int) -> None:
         """Фаза 0: Проверка состояния мира и состава групп."""
         self._sync_human_groups()
+        self._sync_monster_groups()
 
     def _sync_human_groups(self) -> None:
         """Убирает выбывших и удаляет пустые группы, сохраняя инварианты §7.5."""
@@ -278,6 +429,7 @@ class SimulationEngine:
                 entity.group_id = group.id
                 self.state.human_groups[group.id] = group
                 self.state.humans.append(entity)
+                self._give_starting_equipment(entity)
 
         # Монстры: пополнение численности
         active_monsters = sum(1 for m in self.state.monsters if m.status == EntityStatus.ACTIVE)
@@ -292,6 +444,9 @@ class SimulationEngine:
             m.id = self.state.next_monster_id
             self.state.next_monster_id += 1
         self.state.monsters.extend(new_monsters)
+        if new_entities or new_monsters:
+            # мигранты сразу получают группу, как и люди
+            self._sync_monster_groups()
 
     def _phase2_environment(self, hour: int) -> None:
         """Фаза 2: Окружающая среда и торговля."""
@@ -384,6 +539,46 @@ class SimulationEngine:
             for member in members:
                 if member.status == EntityStatus.ACTIVE:
                     member.intention = group.intention
+        self._phase4_monster_intentions(hour)
+
+    def _phase4_monster_intentions(self, hour: int) -> None:
+        entities = {
+            entity.id: entity
+            for entity in self.state.humans + self.state.stationary_humans + self.state.monsters
+        }
+        for group in self.state.monster_groups.values():
+            members = self._monster_group_members(group)
+            if not members:
+                continue
+            target = None
+            for monster in members:
+                candidate = entities.get(monster.target_id)
+                if candidate is None or candidate.status in (EntityStatus.DEAD, EntityStatus.EXILED):
+                    continue
+                age = hour - monster.target_memory_hour
+                is_large = species_value(monster) == "large_migrator"
+                is_scavenger = species_value(monster) == "scavenger_pack"
+                if should_pursue(monster, True, age) or (
+                    is_scavenger and 0 <= age < 12 and candidate.health_share <= 0.7
+                ):
+                    target = candidate
+                    break
+            has_corpse = any(
+                corpse.sector_id == group.sector_id and corpse.status == "available"
+                for corpse in self.state.corpses
+            )
+            group.intention = choose_group_intention(
+                members, has_corpse, target,
+                target_in_sector=target is not None and target.sector_id == group.sector_id,
+            )
+            if (
+                group.intention == "roam" and species_value(members[0]) == "territorial_predator"
+                and group.home_sector_id is not None and group.sector_id != group.home_sector_id
+            ):
+                group.intention = "return_home"
+            group.target_id = target.id if target is not None else None
+            group.target_sector_id = target.sector_id if target is not None else None
+            group.target_memory_hour = max(monster.target_memory_hour for monster in members)
 
     def _phase5_movement(self, hour: int, is_night: bool) -> None:
         """Фаза 5: Перемещение по намерениям (1 ребро в час, §6.2)."""
@@ -430,14 +625,66 @@ class SimulationEngine:
                     if prisoner_id in npcs:
                         npcs[prisoner_id].sector_id = destination
 
-        for monster in self.state.monsters:
-            if monster.status in (EntityStatus.SLEEPING, EntityStatus.UNCONSCIOUS, EntityStatus.DEAD):
+        self._move_monster_groups()
+
+    def _move_monster_groups(self) -> None:
+        from zonesim.world.sector import get_distance
+
+        self._moved_monster_ids = set()
+        for group in self.state.monster_groups.values():
+            all_members = self._monster_group_members(group, active_only=False)
+            members = [monster for monster in all_members if monster.status == EntityStatus.ACTIVE]
+            if not members or len(members) != len(all_members):
                 continue
-            if self.state.rng.random() < 0.4:
-                sector = self.state.sectors.get(monster.sector_id)
-                if sector and sector.neighbors:
-                    new_sector = self.state.rng.choice(sector.neighbors)
-                    monster.sector_id = new_sector
+            if group.intention in ("feed", "hunt", "rest"):
+                continue
+            speed = 2 if group.species == "territorial_predator" else 1
+            for _ in range(speed):
+                destination = None
+                if group.intention == "stalk" and group.target_sector_id is not None:
+                    destination = next_step_towards(
+                        self.state.sectors, group.sector_id, {group.target_sector_id}
+                    )
+                elif group.intention == "return_home" and group.home_sector_id is not None:
+                    destination = next_step_towards(
+                        self.state.sectors, group.sector_id, {group.home_sector_id}
+                    )
+                elif group.intention == "roam":
+                    sector = self.state.sectors[group.sector_id]
+                    candidates = list(sector.neighbors)
+                    if group.species == "scavenger_pack":
+                        corpse_sectors = [
+                            sector_id for sector_id in candidates
+                            if any(corpse.sector_id == sector_id and corpse.status == "available"
+                                   for corpse in self.state.corpses)
+                        ]
+                        if corpse_sectors:
+                            candidates = corpse_sectors
+                    if group.species == "territorial_predator" and group.home_sector_id is not None:
+                        nearby = []
+                        for sector_id in candidates:
+                            distance = get_distance(
+                                self.state.sectors, sector_id, group.home_sector_id
+                            )
+                            if distance is not None and distance <= 2:
+                                nearby.append(sector_id)
+                        if nearby:
+                            candidates = nearby
+                    if candidates and self.state.rng.random() < 0.4:
+                        destination = self.state.rng.choice(candidates)
+                if destination is None or destination == group.sector_id:
+                    break
+                group.sector_id = destination
+                for monster in members:
+                    monster.sector_id = destination
+                    monster.stamina = max(0, monster.stamina - 5)
+                    self._moved_monster_ids.add(monster.id)
+                if group.intention in ("stalk", "return_home"):
+                    target_sector = (
+                        group.target_sector_id if group.intention == "stalk" else group.home_sector_id
+                    )
+                    if destination == target_sector:
+                        break
 
     def _phase6_detections(self, hour: int) -> None:
         """Фаза 6: Обнаружение и встречи.
@@ -498,13 +745,53 @@ class SimulationEngine:
                 details={"damage": result["damage"], "anomaly_id": anomaly.id},
             )
 
+        self._check_monster_anomaly_contacts(hour, is_night)
         self._schedule_encounters(is_night)
+
+    def _check_monster_anomaly_contacts(self, hour: int, is_night: bool) -> None:
+        for monster in self.state.monsters:
+            if monster.id not in self._moved_monster_ids or monster.status != EntityStatus.ACTIVE:
+                continue
+            anomalies = [
+                anomaly for anomaly in self.state.anomalies.values()
+                if anomaly.sector_id == monster.sector_id and anomaly.status == AnomalyStatus.ACTIVE
+            ]
+            if not anomalies:
+                continue
+            anomaly = self.state.rng.choice(anomalies)
+            group = self.state.monster_groups.get(monster.group_id)
+            group_size = group.member_count if group else 1
+            contact = check_anomaly_contact(
+                entity_sector=monster.sector_id,
+                anomaly=anomaly,
+                rng_func=self.state.rng.random,
+                attentiveness=max(1, monster.attentiveness - 2 * (group_size - 1)),
+                is_night=is_night,
+            )
+            if contact["result"] != "hit":
+                continue
+            result = apply_anomaly_damage(
+                monster.health, monster.max_health, anomaly, self.state.rng.random()
+            )
+            monster.health = result["new_health"]
+            if monster.health <= 0:
+                monster.status = EntityStatus.DEAD
+                self._create_corpse(monster, hour)
+            self.state.news_manager.create_event(
+                hour=hour, minute=5, sector_id=monster.sector_id,
+                event_type="anomaly_hit", participants=[monster.id],
+                result="dead" if monster.status == EntityStatus.DEAD else "hit",
+                importance=60 if monster.status == EntityStatus.DEAD else 30,
+                summary=f"Монстр {monster.id} попал в аномалию {anomaly.id}",
+                details={"damage": result["damage"], "anomaly_id": anomaly.id},
+            )
 
     def _schedule_encounters(self, is_night: bool) -> None:
         """Определяет боевые встречи; сами бои исполняются в фазе 7 (§8)."""
         self._pending_battles = []
         self._combat_human_ids = set()
         self._combat_monster_ids = set()
+        self._feeding_claims = {}
         humans = {npc.id: npc for npc in self.state.humans}
         engaged_groups: set[int] = set()
         engaged_monsters: set[int] = set()
@@ -526,28 +813,56 @@ class SimulationEngine:
                 + self.state.rng.uniform(-10, 10),
                 reverse=True,
             )
-            monsters = [
-                monster for monster in self.state.monsters
-                if monster.sector_id == sector_id and monster.status == EntityStatus.ACTIVE
-                and monster.id not in engaged_monsters
-            ]
-
-            for group, members in ordered:
-                available = [m for m in monsters if m.id not in engaged_monsters]
-                if not available or not self._monsters_attack(available, members, is_night):
+            monster_groups = []
+            for group in self.state.monster_groups.values():
+                if group.sector_id != sector_id:
                     continue
-                guards = self._base_guards(sector_id, members[0].faction)
-                self._pending_battles.append({
-                    "sector_id": sector_id,
-                    "attackers": available,
-                    "defenders": members + guards,
-                    "attacker_is_monster": True,
-                    "defender_is_monster": False,
-                    "attacker_group_id": None,
-                    "defender_group_id": group.id,
-                })
-                engaged_groups.add(group.id)
-                engaged_monsters.update(m.id for m in available)
+                members = [
+                    monster for monster in self._monster_group_members(group)
+                    if monster.id not in engaged_monsters
+                ]
+                if members:
+                    monster_groups.append((group, members))
+
+            for monster_group, monsters in monster_groups:
+                if monster_group.intention in ("feed", "rest"):
+                    continue
+                candidates = [
+                    (group, members) for group, members in ordered
+                    if group.id not in engaged_groups
+                ]
+                if monster_group.target_id is not None:
+                    preferred = [
+                        (group, members) for group, members in candidates
+                        if any(npc.id == monster_group.target_id for npc in members)
+                    ]
+                    if preferred:
+                        candidates = preferred
+                if candidates:
+                    target_group, target_members = min(
+                        candidates,
+                        key=lambda item: sum(npc.health_share for npc in item[1]) / len(item[1]),
+                    )
+                    if self._monsters_attack(monsters, target_members, is_night):
+                        guards = self._base_guards(sector_id, target_members[0].faction)
+                        self._schedule_monster_attack(
+                            monster_group, monsters, target_members + guards,
+                            target_group.id, sector_id, False,
+                        )
+                        engaged_groups.add(target_group.id)
+                        engaged_monsters.update(monster.id for monster in monsters)
+                        continue
+                if not groups:
+                    guards = [
+                        npc for npc in self.state.stationary_humans
+                        if npc.sector_id == sector_id and npc.stationary_role == "guard"
+                        and npc.status == EntityStatus.ACTIVE
+                    ]
+                    if guards and self._monsters_attack(monsters, guards, is_night):
+                        self._schedule_monster_attack(
+                            monster_group, monsters, guards, None, sector_id, False,
+                        )
+                        engaged_monsters.update(monster.id for monster in monsters)
 
             for index, (first_group, first_members) in enumerate(ordered):
                 if first_group.id in engaged_groups:
@@ -582,24 +897,104 @@ class SimulationEngine:
                     engaged_groups.update((attacker_group.id, defender_group.id))
                     break
 
-            if not groups:
-                guards = [
-                    npc for npc in self.state.stationary_humans
-                    if npc.sector_id == sector_id and npc.stationary_role == "guard"
-                    and npc.status == EntityStatus.ACTIVE
-                ]
-                available = [m for m in monsters if m.id not in engaged_monsters]
-                if guards and available and self._monsters_attack(available, guards, is_night):
-                    self._pending_battles.append({
-                        "sector_id": sector_id,
-                        "attackers": available,
-                        "defenders": guards,
-                        "attacker_is_monster": True,
-                        "defender_is_monster": False,
-                        "attacker_group_id": None,
-                        "defender_group_id": None,
-                    })
-                    engaged_monsters.update(m.id for m in available)
+            for index, (attacker_group, attackers) in enumerate(monster_groups):
+                if attacker_group.intention in ("feed", "rest") or any(
+                    monster.id in engaged_monsters for monster in attackers
+                ):
+                    continue
+                for defender_group, defenders in monster_groups[index + 1:]:
+                    if attacker_group.species == defender_group.species or any(
+                        monster.id in engaged_monsters for monster in defenders
+                    ):
+                        continue
+                    if not self._monsters_attack(attackers, defenders, is_night):
+                        continue
+                    self._schedule_monster_attack(
+                        attacker_group, attackers, defenders, None, sector_id, True,
+                        defender_monster_group_id=defender_group.id,
+                    )
+                    engaged_monsters.update(
+                        monster.id for monster in attackers + defenders
+                    )
+                    break
+
+        self._resolve_feeding_competition(engaged_monsters)
+
+    def _schedule_monster_attack(
+        self, attacker_group: MonsterGroup, attackers: list[Monster], defenders: list,
+        defender_group_id: int | None, sector_id: int, defender_is_monster: bool,
+        defender_monster_group_id: int | None = None, feed_corpse_id: int | None = None,
+    ) -> None:
+        ambush = False
+        if attacker_group.species == "scavenger_pack":
+            target = select_weakest_target(defenders)
+            for monster in attackers:
+                monster.target_id = target.id
+                monster.target_memory_hour = self.state.time.hour
+            attacker_att = max(monster.attentiveness for monster in attackers)
+            defender_att = max(target.attentiveness for target in defenders)
+            chance = max(10, min(90, 55 + 0.5 * (attacker_att - defender_att)))
+            ambush = self.state.rng.random() * 100 < chance
+        self._pending_battles.append({
+            "sector_id": sector_id,
+            "attackers": attackers,
+            "defenders": defenders,
+            "attacker_is_monster": True,
+            "defender_is_monster": defender_is_monster,
+            "attacker_group_id": None,
+            "defender_group_id": defender_group_id,
+            "attacker_monster_group_id": attacker_group.id,
+            "defender_monster_group_id": defender_monster_group_id,
+            "attacker_ambush": ambush,
+            "feed_corpse_id": feed_corpse_id,
+        })
+
+    def _monster_group_power(self, members: list[Monster]) -> float:
+        total = 0.0
+        for monster in members:
+            health = 0.35 + 0.65 * monster.health_share
+            stamina = 0.5 + 0.5 * monster.stamina_share
+            total += monster.species_params.get("species_power", 0.33) * (
+                0.5 + monster.attack / 100
+            ) * health * stamina
+        return total * min(1.15, 1 + 0.03 * (len(members) - 1))
+
+    def _resolve_feeding_competition(self, engaged_monsters: set[int]) -> None:
+        claims: dict[int, list[tuple[MonsterGroup, list[Monster]]]] = {}
+        for group in self.state.monster_groups.values():
+            if group.intention != "feed":
+                continue
+            members = self._monster_group_members(group)
+            if not members or any(monster.id in engaged_monsters for monster in members):
+                continue  # частично вовлечённая в бой группа не участвует в борьбе за труп
+            corpse = next(
+                (
+                    corpse for corpse in sorted(self.state.corpses, key=lambda item: item.id)
+                    if corpse.sector_id == group.sector_id and corpse.status == "available"
+                ),
+                None,
+            )
+            if corpse is not None:
+                claims.setdefault(corpse.id, []).append((group, members))
+
+        for corpse_id, competitors in claims.items():
+            competitors.sort(key=lambda item: self._monster_group_power(item[1]), reverse=True)
+            strongest = competitors[0]
+            if len(competitors) > 1:
+                challenger = competitors[1]
+                strong_power = self._monster_group_power(strongest[1])
+                weak_power = self._monster_group_power(challenger[1])
+                difference = abs(strong_power - weak_power) / max(strong_power, weak_power, 0.001)
+                if difference <= 0.15:
+                    self._schedule_monster_attack(
+                        strongest[0], strongest[1], challenger[1], None,
+                        strongest[0].sector_id, True,
+                        defender_monster_group_id=challenger[0].id,
+                        feed_corpse_id=corpse_id,
+                    )
+                    continue
+                challenger[0].intention = "roam"
+            self._feeding_claims[strongest[0].id] = corpse_id
 
     def _base_guards(self, sector_id: int, faction: str) -> list[HumanNPC]:
         sector = self.state.sectors[sector_id]
@@ -611,21 +1006,25 @@ class SimulationEngine:
             and npc.status == EntityStatus.ACTIVE
         ]
 
-    def _monsters_attack(self, monsters: list, humans: list[HumanNPC], is_night: bool) -> bool:
+    def _monsters_attack(self, monsters: list[Monster], prey: list, is_night: bool) -> bool:
         predator = monsters[0]
-        species = predator.species.value if hasattr(predator.species, "value") else predator.species
-        health_share = sum(npc.health_share for npc in humans) / len(humans)
-        if species == "TerritorialPredator" and health_share > 0.8:
+        species = species_value(predator)
+        health_share = sum(target.health_share for target in prey) / len(prey)
+        predator_health = sum(monster.health_share for monster in monsters) / len(monsters)
+        prey_is_monster = isinstance(prey[0], Monster)
+        if predator_health <= 0.2:
             return False
-        if species == "ScavengerPack" and health_share > 0.6:
+        if species == "territorial_predator" and len(monsters) == 1 and health_share > 0.8:
+            return False
+        if species == "scavenger_pack" and health_share > 0.6 and len(monsters) <= len(prey):
             return False
         chance = calculate_hunt_chance(
             predator=predator,
             prey_health_share=health_share,
-            prey_is_monster=False,
+            prey_is_monster=prey_is_monster,
             distance=0,
             is_night=is_night,
-            group_advantage=len(monsters) - 1,
+            group_advantage=len(monsters) - len(prey),
         )
         return self.state.rng.random() * 100 < chance
 
@@ -783,6 +1182,10 @@ class SimulationEngine:
             if art.anomaly_id == anomaly.id and not art.discovered:
                 art.discovered = True
                 npc.artifacts.append(art.id)
+                self._create_item(
+                    ItemType.ARTIFACT, f"Артефакт ({art.rarity})", art.value, npc.id,
+                    properties={"artifact_id": art.id},
+                )
                 self.state.news_manager.create_event(
                     hour=hour, minute=45, sector_id=npc.sector_id,
                     event_type="artifact_found", participants=[npc.id], result="picked_up",
@@ -822,6 +1225,9 @@ class SimulationEngine:
 
     def _execute_battles(self, hour: int) -> None:
         for battle in self._pending_battles:
+            for entity in battle["attackers"] + battle["defenders"]:
+                if isinstance(entity, HumanNPC):
+                    self._sync_npc_from_items(entity)
             attackers = [
                 CombatFactory.from_monster(entity) if battle["attacker_is_monster"]
                 else CombatFactory.from_human(entity)
@@ -840,6 +1246,7 @@ class SimulationEngine:
                 defender_is_monster=battle["defender_is_monster"],
                 battle_sector_id=battle["sector_id"],
                 relation=battle.get("relation", 0),
+                attacker_ambush=battle.get("attacker_ambush", False),
             )
             result = combat.fight(self.state.rng.random)
             self._apply_battle_result(battle, combat, result, hour)
@@ -853,9 +1260,12 @@ class SimulationEngine:
             entity = entities[combatant.id]
             entity.health = combatant.health
             entity.stamina = combatant.stamina
-            for field_name in ("weapon_condition", "ammo", "medicines"):
+            for field_name in ("weapon_condition", "armor_condition", "ammo", "medicines"):
                 if combatant.is_human:
                     setattr(entity, field_name, getattr(combatant, field_name))
+            if combatant.is_human:
+                self._sync_items_from_npc(entity)
+                self._damage_carried_valuables(entity, combat, result)
             if not combatant.is_alive:
                 entity.status = EntityStatus.DEAD
             elif combatant.surrendered:
@@ -866,6 +1276,18 @@ class SimulationEngine:
                 entity.unconscious_start_hour = hour
             else:
                 entity.status = EntityStatus.ACTIVE
+
+        for combatant in combat.attackers + combat.defenders:
+            entity = entities[combatant.id]
+            if not isinstance(entity, Monster) or species_value(entity) != "large_migrator":
+                continue
+            attacks = [
+                entry for entry in result.battle_log
+                if entry.get("defender_id") == entity.id and entry.get("damage", 0) > 0
+            ]
+            if attacks:
+                entity.target_id = max(attacks, key=lambda entry: entry["damage"])["attacker_id"]
+                entity.target_memory_hour = hour
 
         for side, retreat_sector in (
             ("attackers", result.attacker_retreat_sector),
@@ -883,6 +1305,16 @@ class SimulationEngine:
                 for member_id in group.members + group.prisoners:
                     if member_id in entities and entities[member_id].status != EntityStatus.DEAD:
                         entities[member_id].sector_id = retreat_sector
+            monster_group_key = (
+                "attacker_monster_group_id" if side == "attackers" else "defender_monster_group_id"
+            )
+            monster_group_id = battle.get(monster_group_key)
+            monster_group = (
+                self.state.monster_groups.get(monster_group_id)
+                if monster_group_id is not None else None
+            )
+            if monster_group:
+                monster_group.sector_id = retreat_sector
 
         for prisoner_ids, captor_group_id in (
             (result.attacker_prisoners, battle["defender_group_id"]),
@@ -898,32 +1330,9 @@ class SimulationEngine:
                 if captor and npc_id not in captor.prisoners:
                     captor.prisoners.append(npc_id)
 
-        artifacts = {artifact.id: artifact for artifact in self.state.artifacts.artifacts}
         for combatant in combat.attackers + combat.defenders:
-            if combatant.is_alive:
-                continue
-            entity = entities[combatant.id]
-            items = []
-            for artifact_id in getattr(entity, "artifacts", []):
-                artifact = artifacts.get(artifact_id)
-                items.append({
-                    "type": "artifact",
-                    "id": artifact_id,
-                    "value": artifact.value if artifact else 0,
-                })
-            if hasattr(entity, "artifacts"):
-                entity.artifacts.clear()
-            species = getattr(entity, "species", "human")
-            species = species.value if hasattr(species, "value") else species
-            self.state.corpses.append(Corpse(
-                id=self.state.next_corpse_id,
-                original_entity_id=entity.id,
-                original_entity_type="human" if combatant.is_human else species,
-                sector_id=entity.sector_id,
-                created_hour=hour,
-                items=items,
-            ))
-            self.state.next_corpse_id += 1
+            if not combatant.is_alive:
+                self._create_corpse(entities[combatant.id], hour)
 
         participants = [entity.id for entity in battle["attackers"] + battle["defenders"]]
         self._combat_human_ids.update(
@@ -951,14 +1360,161 @@ class SimulationEngine:
                 "defender_prisoners": result.defender_prisoners,
                 "attacker_retreated": result.attacker_retreated,
                 "defender_retreated": result.defender_retreated,
+                "feed_corpse_id": battle.get("feed_corpse_id"),
             },
         )
+
+    def _damage_carried_valuables(self, npc: HumanNPC, combat: CombatSystem, result) -> None:
+        damage = max(
+            (entry["damage"] for entry in result.battle_log
+             if entry.get("defender_id") == npc.id and entry.get("type") is None),
+            default=0,
+        )
+        valuable_types = {
+            ItemType.ARTIFACT, ItemType.MONSTER_PART,
+            ItemType.ANOMALY_PART, ItemType.LIVE_MONSTER,
+        }
+        for item_id in npc.inventory:
+            item = self.state.items[item_id]
+            if item.type not in valuable_types:
+                continue
+            damaged, new_condition = EquipmentManager.check_value_damage(
+                item.condition, damage, self.state.rng.random()
+            )
+            if damaged:
+                item.condition = new_condition
+
+    def _create_corpse(self, entity, hour: int) -> Corpse:
+        species = getattr(entity, "species", "human")
+        species = species.value if hasattr(species, "value") else species
+        corpse = Corpse(
+            id=self.state.next_corpse_id,
+            original_entity_id=entity.id,
+            original_entity_type="human" if isinstance(entity, HumanNPC) else species,
+            sector_id=entity.sector_id,
+            created_hour=hour,
+            monster_parts=[] if isinstance(entity, HumanNPC) else LootManager.available_monster_parts(entity),
+        )
+        self.state.next_corpse_id += 1
+        self.state.corpses.append(corpse)
+        if isinstance(entity, HumanNPC):
+            for item_id in list(entity.inventory):
+                place_item_on_corpse(self.state.items[item_id], corpse.id, entity.inventory)
+                corpse.items.append(item_id)
+            corpse.money = max(0, entity.money)
+            entity.money = 0
+            entity.equipped_weapon_id = None
+            entity.equipped_armor_id = None
+            entity.artifacts.clear()
+        return corpse
+
+    def _process_corpse_action(self, group: HumanGroup, hour: int) -> dict | None:
+        npcs = {npc.id: npc for npc in self.state.humans}
+        members = [
+            npcs[member_id] for member_id in group.members
+            if member_id in npcs and npcs[member_id].status == EntityStatus.ACTIVE
+        ]
+        if not members or any(npc.id in self._combat_human_ids for npc in members):
+            return None
+        leader = npcs.get(group.leader_id)
+        if leader not in members:
+            leader = members[0]
+        corpses = sorted(
+            (
+                corpse for corpse in self.state.corpses
+                if corpse.sector_id == group.sector_id and corpse.status == "available"
+                and (corpse.items or corpse.money > 0 or corpse.monster_parts)
+            ),
+            key=lambda corpse: corpse.id,
+        )
+        if not corpses:
+            return None
+        corpse = corpses[0]
+        if corpse.items or corpse.money > 0:
+            result = LootManager.loot_corpse(corpse, leader, members, self.state.items)
+            action = "loot"
+        else:
+            result = LootManager.harvest_monster_parts(
+                corpse, leader, self.state.items, self.state.next_item_id
+            )
+            self.state.next_item_id = result.get("next_item_id", self.state.next_item_id)
+            action = "harvest"
+        if not result["success"]:
+            return None
+        self.state.news_manager.create_event(
+            hour=hour, minute=40, sector_id=group.sector_id,
+            event_type=action, participants=[npc.id for npc in members], result="success",
+            importance=15,
+            summary=f"Группа {group.id} обработала труп {corpse.id} ({action})",
+            details=result,
+        )
+        return result
+
+    def _process_monster_feeding(self, hour: int) -> set[int]:
+        fed_groups = set()
+        for group_id, corpse_id in self._feeding_claims.items():
+            group = self.state.monster_groups.get(group_id)
+            corpse = next((item for item in self.state.corpses if item.id == corpse_id), None)
+            if group is None or corpse is None or corpse.status != "available":
+                continue
+            members = self._monster_group_members(group)
+            if not members or any(monster.id in self._combat_monster_ids for monster in members):
+                continue  # группа не кормится частично: любой бой отменяет кормление всей группы
+            result = self._feed_manager.consume(corpse, members[0], hour, self.state.items)
+            if not result["success"]:
+                continue
+            for monster in members[1:]:
+                monster.stamina = min(monster.max_stamina, monster.stamina + 30)
+            fed_groups.add(group_id)
+            self.state.news_manager.create_event(
+                hour=hour, minute=45, sector_id=group.sector_id,
+                event_type="feeding", participants=[monster.id for monster in members],
+                result="consumed", importance=15,
+                summary=f"Группа монстров {group.id} съела труп {corpse.id}",
+                details=result,
+            )
+        return fed_groups
+
+    def _process_monster_rest(self, fed_groups: set[int], is_night: bool) -> None:
+        for group in self.state.monster_groups.values():
+            if group.id in fed_groups:
+                continue
+            members = self._monster_group_members(group, active_only=False)
+            if not members or any(monster.id in self._combat_monster_ids for monster in members):
+                continue
+            if group.intention == "rest":
+                for monster in members:
+                    monster.stamina = min(monster.max_stamina, monster.stamina + 20)
+                continue
+            active = [monster for monster in members if monster.status == EntityStatus.ACTIVE]
+            sleeping = [monster for monster in members if monster.status == EntityStatus.SLEEPING]
+            unconscious = [monster for monster in members if monster.status == EntityStatus.UNCONSCIOUS]
+            for monster in unconscious:
+                monster.stamina = min(monster.max_stamina, monster.stamina + 20)
+                if monster.stamina >= 10:
+                    monster.status = EntityStatus.ACTIVE
+            for monster in active:
+                if monster.stamina <= 0:
+                    monster.status = EntityStatus.UNCONSCIOUS
+            if active and is_night and self.state.rng.random() < 0.3:
+                for monster in active:
+                    monster.status = EntityStatus.SLEEPING
+                    monster.stamina = min(monster.max_stamina, monster.stamina + 50)
+            elif sleeping and self.state.rng.random() < 0.5:
+                for monster in sleeping:
+                    monster.status = EntityStatus.ACTIVE
+                    monster.stamina = min(monster.max_stamina, monster.stamina + 50)
 
     def _phase7_actions(self, hour: int, is_night: bool) -> None:
         """Фаза 7: сначала бои, затем остальные основные действия (§8)."""
         self._execute_battles(hour)
+        fed_monster_groups = self._process_monster_feeding(hour)
+        acted_groups = set()
+        for group in self.state.human_groups.values():
+            if self._process_corpse_action(group, hour) is not None:
+                acted_groups.add(group.id)
         for npc in self.state.humans:
-            if npc.id in self._combat_human_ids:
+            if npc.id in self._combat_human_ids or npc.group_id in acted_groups:
                 continue
             if npc.status == EntityStatus.SLEEPING:
                 self._sleep_tick(npc)
@@ -983,17 +1539,7 @@ class SimulationEngine:
             elif npc.intention == EXIT:
                 self._exit_tick(npc, hour)
 
-        # Монстры: временное простое поведение (видовое поведение — отдельный этап)
-        for monster in self.state.monsters:
-            if monster.id in self._combat_monster_ids:
-                continue
-            if monster.status == EntityStatus.ACTIVE and is_night and self.state.rng.random() < 0.3:
-                monster.status = EntityStatus.SLEEPING
-                monster.stamina = min(monster.stamina + 50, monster.max_stamina)
-            elif monster.status == EntityStatus.SLEEPING:
-                if self.state.rng.random() < 0.5:
-                    monster.status = EntityStatus.ACTIVE
-                    monster.stamina = min(monster.stamina + 50, monster.max_stamina)
+        self._process_monster_rest(fed_monster_groups, is_night)
 
     def _phase8_environment(self, hour: int) -> None:
         """Фаза 8: Воздействие окружающей среды."""

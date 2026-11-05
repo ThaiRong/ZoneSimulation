@@ -113,6 +113,7 @@ class TestEngineCombat:
         monster.health = 100
         monster.attack = 70
         engine.state.anomalies = {}
+        engine._sync_monster_groups()
         engine._moved_human_ids = set()
         engine.state.rng.random = lambda: 0.0
         return npc, monster
