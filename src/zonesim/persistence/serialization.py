@@ -27,6 +27,7 @@ from zonesim.relations.personal import PersonalRelations
 from zonesim.world.entity import EntityStatus, EntityType, HumanNPC, Monster, MonsterSpecies
 from zonesim.world.group import HumanGroup, MonsterGroup
 from zonesim.world.item import Item, ItemType
+from zonesim.world.shelter import StormShelter
 from zonesim.world.sector import Sector
 from zonesim.world.stash import Stash
 
@@ -113,6 +114,13 @@ def state_to_dict(state: SimulationState) -> dict[str, Any]:
         "stashs": _encode([vars(value) for value in state.stashs]),
         "shelter_count": state.shelter_count,
         "trader_stock": _encode({str(key): value for key, value in state.trader_stock.items()}),
+        "trails": state.trails,
+        "shelters": _encode({str(key): vars(value) for key, value in state.shelters.items()}),
+        "next_emission_hour": state.next_emission_hour,
+        "emission_start_hour": state.emission_start_hour,
+        "emission_end_hour": state.emission_end_hour,
+        "emission_warning_hour": state.emission_warning_hour,
+        "emission_exposed": _encode({str(key): value for key, value in state.emission_exposed.items()}),
         "migration_state": _object_data(state.migration_state),
         "monster_migration": _object_data(state.monster_migration),
         "next_human_id": state.next_human_id,
@@ -242,6 +250,18 @@ def state_from_dict(data: dict[str, Any]) -> SimulationState:
         shelter_count=data["shelter_count"],
         trader_stock={
             int(key): value for key, value in _decode(data["trader_stock"]).items()
+        },
+        trails=data["trails"],
+        shelters={
+            int(key): _restore(StormShelter, value)
+            for key, value in _decode(data["shelters"]).items()
+        },
+        next_emission_hour=data["next_emission_hour"],
+        emission_start_hour=data["emission_start_hour"],
+        emission_end_hour=data["emission_end_hour"],
+        emission_warning_hour=data["emission_warning_hour"],
+        emission_exposed={
+            int(key): value for key, value in _decode(data["emission_exposed"]).items()
         },
         migration_state=_restore(MigrationState, data["migration_state"]),
         monster_migration=_restore(MonsterMigrationManager, data["monster_migration"]),

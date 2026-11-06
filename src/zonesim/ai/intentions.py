@@ -20,8 +20,10 @@ DESTROY = "destroy_anomaly"
 CAPTURE = "capture_monster"
 EXPLORE = "explore"
 EXIT = "exit_zone"
+SHELTER = "shelter"        # укрытие от выброса (§12.7)
+HELP = "help_distress"     # помощь по сигналу бедствия (§16.10)
 
-ALL_ACTIONS = (SLEEP, REST, RESEARCH, DESTROY, CAPTURE, EXPLORE, EXIT)
+ALL_ACTIONS = (SLEEP, REST, RESEARCH, DESTROY, CAPTURE, EXPLORE, EXIT, SHELTER, HELP)
 
 # Фракционные приоритеты F (§7.3). Меняют вероятность, не запрещают действия.
 FACTION_FLAVOR: dict[str, dict[str, float]] = {
@@ -50,6 +52,8 @@ class IntentionContext:
     can_capture: bool = False       # комплект захвата и ослабленная цель в секторе
     can_rest: bool = False          # отдых требует комфорта (§14.3)
     hours_awake: float = 0.0        # часов с последнего пробуждения
+    can_help: bool = False          # известен активный сигнал бедствия (§16.10)
+    distress_distance: int = 6      # рёбер до сектора сигнала
 
 
 def evaluate_actions(ctx: IntentionContext) -> dict[str, float]:
@@ -124,6 +128,17 @@ def evaluate_actions(ctx: IntentionContext) -> dict[str, float]:
             if ctx.health_share < 0.15:
                 N += 30.0  # тяжёлое состояние — уходить из Зоны (§9.4)
             R += (ctx.distance_to_border or 0) / 2.0
+        elif action == SHELTER:
+            # Принудительное намерение выброса: назначается в фазе 4 (§12.7)
+            u[action] = float("-inf")
+            continue
+        elif action == HELP:
+            # Помощь по сигналу бедствия (§16.10)
+            if not ctx.can_help:
+                u[action] = float("-inf")
+                continue
+            N += 30.0 - 3.0 * (ctx.distress_distance or 6)
+            R += 4.0
 
         u[action] = F + G + E + C + I + N - R * risk_factor
 
@@ -147,11 +162,25 @@ def known_anomaly_sectors(knowledge_facts) -> set[int]:
     }
 
 
+def edge_key(a: int, b: int) -> tuple[int, int]:
+    """Канонический ключ ребра."""
+    return (a, b) if a < b else (b, a)
+
+
+def edge_cost(trails: set[tuple[int, int]] | None, a: int, b: int) -> float:
+    """Стоимость ребра: тропа 0,5 пункта, обычное — 1,0. (§10.4)"""
+    if trails and edge_key(a, b) in trails:
+        return 0.5
+    return 1.0
+
+
 def next_step_towards(sectors: dict[int, object], current_id: int,
-                      target_ids: set[int], avoid_ids: set[int] | None = None) -> int | None:
+                      target_ids: set[int], avoid_ids: set[int] | None = None,
+                      trails: set[tuple[int, int]] | None = None) -> int | None:
     """
     Первый шаг маршрута к ближайшей из целевых секторов (§10.1).
-    Сектора с известными аномалиями обходятся, пока есть разумная альтернатива.
+    Тропы дешевле; сектора с известными аномалиями обходятся,
+    пока есть разумная альтернатива.
     """
     avoid_ids = avoid_ids or set()
     if current_id in target_ids:
@@ -160,7 +189,9 @@ def next_step_towards(sectors: dict[int, object], current_id: int,
     graph = nx.Graph()
     for sid, sector in sectors.items():
         for nid in sector.neighbors:
-            weight = 1.0 + (4.0 if nid in avoid_ids else 0.0)
+            weight = edge_cost(trails, sid, nid)
+            if nid in avoid_ids:
+                weight += 4.0
             graph.add_edge(sid, nid, weight=weight)
 
     try:

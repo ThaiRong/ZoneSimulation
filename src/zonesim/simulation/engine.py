@@ -26,12 +26,16 @@ from zonesim.ai import (
     DESTROY,
     EXIT,
     EXPLORE,
+    HELP,
     RESEARCH,
     REST,
+    SHELTER,
     SLEEP,
     IntentionContext,
     choose_explore_target,
     choose_intention,
+    edge_cost,
+    edge_key,
     known_anomaly_sectors,
     next_step_towards,
 )
@@ -49,6 +53,7 @@ from zonesim.anomalies.research import research_anomaly
 
 from zonesim.world.group import HumanGroup, MonsterGroup
 from zonesim.world.catalog import ItemCatalog
+from zonesim.world.shelter import StormShelter
 from zonesim.monsters.behavior import choose_group_intention, select_weakest_target, species_value
 from zonesim.monsters.feed import FeedManager
 from zonesim.monsters.hunt import should_pursue
@@ -61,6 +66,21 @@ from zonesim.anomalies.damage import apply_anomaly_damage, check_anomaly_contact
 from zonesim.anomalies.artifact import ArtifactManager
 from zonesim.anomalies.migration import check_anomaly_migration
 from zonesim.anomalies.destroy import attempt_destroy_anomaly, get_anomaly_parts_after_destruction
+from zonesim.anomalies.emission import (
+    EMISSION_ARTIFACT_ACCELERATION,
+    EMISSION_EXPOSURE_DAMAGE,
+    EMISSION_EXPOSURE_KILL_HOUR,
+    EMISSION_MONSTER_SHELTER_CHANCE,
+    EMISSION_MONSTER_STAY_MAX,
+    EMISSION_MONSTER_STAY_MIN,
+    EMISSION_TRAIL_BLOCK_CHANCE,
+    SHELTER_COUNT,
+    is_emission_active,
+    is_emission_known,
+    roll_duration,
+    roll_warning_lead,
+    schedule_next_emission,
+)
 
 from zonesim.monsters.migration import MonsterMigrationManager
 from zonesim.monsters.hunt import calculate_hunt_chance
@@ -120,6 +140,13 @@ class SimulationState:
     stashs: list[Stash] = field(default_factory=list)
     shelter_count: int = 0
     trader_stock: dict[int, dict[str, int]] = field(default_factory=dict)  # npc торговца -> item_ref -> количество
+    trails: list[list[int]] = field(default_factory=list)  # рёбра-тропы [a, b] (§10.4)
+    shelters: dict[int, "StormShelter"] = field(default_factory=dict)  # укрытия (§7.16)
+    next_emission_hour: int = -1      # час начала следующего выброса (§12.7)
+    emission_start_hour: int = -1
+    emission_end_hour: int = -1
+    emission_warning_hour: int = -1   # когда всем стало известно
+    emission_exposed: dict[int, int] = field(default_factory=dict)  # group_id -> первый час под выбросом
 
     migration_state: MigrationState = field(default_factory=MigrationState)
     monster_migration: MonsterMigrationManager = field(default_factory=MonsterMigrationManager)
@@ -207,6 +234,10 @@ class SimulationEngine:
         for npc in all_humans:
             self._give_starting_equipment(npc)
         self._init_trader_stock()
+        self._init_trails()
+        self._init_shelters()
+        self._roll_trail_blockages()
+        self.state.next_emission_hour = schedule_next_emission(self.state.rng)
         self._sync_monster_groups()
 
     def _sync_monster_groups(self) -> None:
@@ -293,6 +324,442 @@ class SimulationEngine:
                 if qty > 0:
                     stock[entry["id"]] = qty
             self.state.trader_stock[trader.id] = stock
+
+    def _init_trails(self) -> None:
+        """Тропы: около 40% рёбер графа. (§10.4)"""
+        edges = {
+            edge_key(sid, nid)
+            for sid, sector in self.state.sectors.items()
+            for nid in sector.neighbors
+        }
+        trails = [list(edge) for edge in sorted(edges) if self.state.rng.random() < 0.4]
+        self.state.trails = trails
+
+    @property
+    def _trail_set(self) -> set[tuple[int, int]]:
+        return {edge_key(pair[0], pair[1]) for pair in self.state.trails}
+
+    def _roll_trail_blockage(self, anomaly) -> None:
+        """Аномалия может перекрыть тропу у своего сектора. (§10.5)"""
+        anomaly.blocks_trail = None
+        if self.state.rng.random() >= EMISSION_TRAIL_BLOCK_CHANCE:
+            return
+        incident = [
+            edge for edge in self._trail_set
+            if anomaly.sector_id in edge
+            and not any(self.state.sectors[s].is_faction_start for s in edge)
+        ]
+        if incident:
+            anomaly.blocks_trail = list(self.state.rng.choice(sorted(incident)))
+
+    def _roll_trail_blockages(self) -> None:
+        for anomaly in self.state.anomalies.values():
+            self._roll_trail_blockage(anomaly)
+
+    def _init_shelters(self) -> None:
+        """Стационарные укрытия: 8 шт, не более одного в секторе,
+        любой сектор в двух рёбрах от укрытия. (§7.16)"""
+        from zonesim.world.sector import get_distance
+
+        start_ids = {s.id for s in self.state.sectors.values() if s.is_faction_start}
+        candidates = [sid for sid in self.state.sectors if sid not in start_ids]
+        chosen: list[int] = []
+        all_ids = set(self.state.sectors)
+        while len(chosen) < SHELTER_COUNT:
+            uncovered = [
+                sid for sid in all_ids
+                if not any(
+                    (dist := get_distance(self.state.sectors, sid, c)) is not None and dist <= 2
+                    for c in chosen
+                )
+            ]
+            if not uncovered:
+                break
+            # жадный выбор: сектор, покрывающий больше всего непокрытых
+            best = max(
+                candidates,
+                key=lambda sid: sum(
+                    1 for u in uncovered
+                    if (dist := get_distance(self.state.sectors, sid, u)) is not None and dist <= 2
+                ),
+            )
+            chosen.append(best)
+            candidates.remove(best)
+        # дозаполняем до стартового количества разбросанными укрытиями
+        while len(chosen) < SHELTER_COUNT and candidates:
+            pick = self.state.rng.choice(candidates)
+            chosen.append(pick)
+            candidates.remove(pick)
+        self.state.shelters = {
+            index: StormShelter(
+                id=index,
+                sector_id=sector_id,
+                capacity=self.state.rng.randint(2, 6),
+            )
+            for index, sector_id in enumerate(chosen)
+        }
+        self.state.shelter_count = len(self.state.shelters)
+
+    def _shelter_sector_ids(self) -> set[int]:
+        """Сектора, дающие защиту: укрытия, базы, торговцы. (§12.7)"""
+        ids = {s.sector_id for s in self.state.shelters.values()}
+        ids |= {s.id for s in self.state.sectors.values() if s.is_faction_start}
+        ids |= {
+            npc.sector_id for npc in self.state.stationary_humans
+            if npc.stationary_role == "trader" and npc.status == EntityStatus.ACTIVE
+        }
+        return ids
+
+    def _group_in_shelter(self, group: HumanGroup) -> bool:
+        return group.sector_id in self._shelter_sector_ids()
+
+    def _emission_active(self, hour: int) -> bool:
+        return is_emission_active(
+            self.state.emission_start_hour, self.state.emission_end_hour, hour,
+        )
+
+    def _emission_known(self, hour: int) -> bool:
+        return is_emission_known(self.state.emission_warning_hour, hour)
+
+    def _shelter_targets(self, group: HumanGroup, hour: int) -> set[int]:
+        """Доступные укрытия: занятые монстрами не считаются. (§12.7, §13.7)"""
+        occupied = {
+            shelter.sector_id
+            for shelter in self.state.shelters.values()
+            if shelter.is_occupied and shelter.occupied_until > hour
+        }
+        targets = self._shelter_sector_ids() - occupied
+        return targets or self._shelter_sector_ids()
+
+    # --- Выброс (§12.7) ---
+
+    def _process_emission_schedule(self, hour: int) -> None:
+        state = self.state
+        if state.next_emission_hour < 0 and state.emission_start_hour < 0:
+            state.next_emission_hour = hour + schedule_next_emission(self.state.rng)
+            state.emission_warning_hour = -1
+        if state.emission_start_hour >= 0 and hour >= state.emission_end_hour:
+            # завершение выброса
+            state.emission_start_hour = -1
+            state.emission_end_hour = -1
+            state.emission_warning_hour = -1
+            state.emission_exposed.clear()
+            state.next_emission_hour = hour + schedule_next_emission(self.state.rng)
+            self.state.news_manager.create_event(
+                hour=hour, minute=0, sector_id=0,
+                event_type="emission", participants=[], result="ended",
+                importance=60, summary="Выброс завершился",
+                details={"next_emission_hour": state.next_emission_hour},
+            )
+        elif self._emission_active(hour):
+            pass  # выброс продолжается
+        elif state.next_emission_hour >= 0 and hour >= state.next_emission_hour:
+            state.emission_start_hour = hour
+            state.emission_end_hour = hour + roll_duration(self.state.rng)
+            state.next_emission_hour = -1  # перепланируется при завершении
+            self._move_all_anomalies(hour)
+            self.state.news_manager.create_event(
+                hour=hour, minute=0, sector_id=0,
+                event_type="emission", participants=[], result="started",
+                importance=70,
+                summary=f"Начался выброс (до часа {state.emission_end_hour})",
+                details={"end_hour": state.emission_end_hour},
+            )
+        elif state.emission_warning_hour < 0 and hour >= state.next_emission_hour - 6:
+            lead = roll_warning_lead(self.state.rng)
+            state.emission_warning_hour = state.next_emission_hour - lead
+            if hour >= state.emission_warning_hour:
+                self._broadcast_emission_warning(hour)
+
+    def _broadcast_emission_warning(self, hour: int) -> None:
+        for npc in self.state.humans:
+            if npc.status in (EntityStatus.DEAD, EntityStatus.EXILED):
+                continue
+            kb = self.state.knowledge_bases.setdefault(npc.id, KnowledgeBase())
+            kb.add_manual(
+                npc.id, KnowledgeType.EVENT, subject_id=self.state.next_emission_hour,
+                payload={
+                    "type": "emission",
+                    "start": self.state.next_emission_hour,
+                    "end": self.state.emission_end_hour
+                    if self._emission_active(hour) else -1,
+                },
+                hour=hour,
+            )
+        self.state.news_manager.create_event(
+            hour=hour, minute=0, sector_id=0,
+            event_type="emission", participants=[], result="warning",
+            importance=65,
+            summary=f"Предупреждение: выброс ожидается к часу {self.state.next_emission_hour}",
+            details={"start": self.state.next_emission_hour},
+        )
+
+    def _anomaly_move_candidates(self, anomaly) -> list[int]:
+        """Допустимые цели перемещения: текущий или соседний сектор (§12.6)."""
+        start_ids = {s.id for s in self.state.sectors.values() if s.is_faction_start}
+        candidates = {anomaly.sector_id, *self.state.sectors[anomaly.sector_id].neighbors}
+        return [sid for sid in candidates if sid not in start_ids]
+
+    def _move_all_anomalies(self, hour: int) -> None:
+        """Однократное перемещение всех активных аномалий в первый час выброса."""
+        start_ids = {s.id for s in self.state.sectors.values() if s.is_faction_start}
+        for anomaly in self.state.anomalies.values():
+            migration = check_anomaly_migration(
+                anomaly, hour, move_interval=0, move_chance=1.0,
+                sector_ids=self._anomaly_move_candidates(anomaly),
+                faction_start_ids=start_ids,
+                rng_value=self.state.rng.random(),
+            )
+            if migration["moved"]:
+                anomaly.sector_id = migration["to_sector"]
+                anomaly.move_timer = 0
+                self._roll_trail_blockage(anomaly)
+                self.state.news_manager.create_event(
+                    hour=hour, minute=0, sector_id=migration["to_sector"],
+                    event_type="anomaly_move", participants=[], result="moved",
+                    importance=20,
+                    summary=f"Аномалия {anomaly.id} переместилась (выброс)",
+                    details=migration,
+                )
+
+    def _apply_emission_exposure(self, hour: int) -> None:
+        """Урон группам, не успевшим укрыться. (§12.7)"""
+        for group in self.state.human_groups.values():
+            if self._group_in_shelter(group):
+                self.state.emission_exposed.pop(group.id, None)
+                continue
+            members = self._active_members(group)
+            if not members:
+                continue
+            first_hour = self.state.emission_exposed.get(group.id)
+            if first_hour is None:
+                self.state.emission_exposed[group.id] = hour
+                for npc in members:
+                    if npc.health_share < 0.5:
+                        self._emergency_medkit(npc, members)
+                    start = npc.health
+                    npc.health = max(0, npc.health - int(npc.max_health * EMISSION_EXPOSURE_DAMAGE))
+                    npc.stamina = max(1, npc.stamina - 5)  # гарантированная лёгкая травма
+                    npc.attentiveness = max(1, npc.attentiveness - 3)
+                    if npc.health <= 0:
+                        self._set_unconscious_or_dead(npc, start, hour, cause="emission")
+                self.state.news_manager.create_event(
+                    hour=hour, minute=30, sector_id=group.sector_id,
+                    event_type="emission", participants=[m.id for m in members],
+                    result="exposed", importance=50,
+                    summary=f"Группа {group.id} оказалась под выбросом без укрытия",
+                    details={"group_id": group.id},
+                )
+            elif hour - first_hour >= EMISSION_EXPOSURE_KILL_HOUR - 1:
+                for npc in members:
+                    npc.health = 0
+                    npc.status = EntityStatus.DEAD
+                    self._create_corpse(npc, hour)
+                self.state.emission_exposed.pop(group.id, None)
+                self.state.news_manager.create_event(
+                    hour=hour, minute=30, sector_id=group.sector_id,
+                    event_type="emission", participants=[m.id for m in members],
+                    result="wiped", importance=60,
+                    summary=f"Группа {group.id} погибла под выбросом",
+                    details={"group_id": group.id},
+                )
+
+    def _emergency_medkit(self, npc: HumanNPC, members: list[HumanNPC]) -> None:
+        """Экстренное применение на ходу: половина эффекта, без часа действия. (§14.3)"""
+        for other in members:
+            for item_id in other.inventory:
+                item = self.state.items.get(item_id)
+                if (
+                    item is not None
+                    and item.type is ItemType.MEDICINE
+                    and item.properties.get("charges", 0) > 0
+                ):
+                    npc.health = min(
+                        npc.max_health,
+                        npc.health + item.properties.get("heal_amount", 30) // 2,
+                    )
+                    self._use_medkit_charge(item, members)
+                    return
+
+    # --- Занятие укрытий монстрами (§13.7) ---
+
+    def _process_shelter_occupation(self, hour: int) -> None:
+        # истечение занятия проверяется каждый час
+        for shelter in self.state.shelters.values():
+            if shelter.is_occupied and hour >= shelter.occupied_until:
+                shelter.occupied_by = None
+                self.state.news_manager.create_event(
+                    hour=hour, minute=0, sector_id=shelter.sector_id,
+                    event_type="shelter", participants=[], result="freed",
+                    importance=15,
+                    summary=f"Монстры покинули укрытие в секторе {shelter.sector_id}",
+                    details={"shelter_id": shelter.id},
+                )
+        if hour % 24 != 0:
+            return
+        candidates = [
+            group for group in self.state.monster_groups.values()
+            if any(m.status == EntityStatus.ACTIVE for m in self._monster_group_members(group))
+        ]
+        if not candidates:
+            return
+        used_groups: set[int] = set()
+        for shelter in self.state.shelters.values():
+            if shelter.is_occupied:
+                continue
+            free_groups = [g for g in candidates if g.id not in used_groups]
+            if not free_groups:
+                break
+            if self.state.rng.random() >= EMISSION_MONSTER_SHELTER_CHANCE:
+                continue
+            group = self.state.rng.choice(free_groups)
+            members = self._monster_group_members(group)
+            if not members:
+                continue
+            used_groups.add(group.id)
+            shelter.occupied_by = group.id
+            shelter.occupied_until = hour + self.state.rng.randint(
+                EMISSION_MONSTER_STAY_MIN, EMISSION_MONSTER_STAY_MAX,
+            )
+            group.sector_id = shelter.sector_id
+            for monster in members:
+                monster.sector_id = shelter.sector_id
+            self.state.news_manager.create_event(
+                hour=hour, minute=0, sector_id=shelter.sector_id,
+                event_type="shelter", participants=[m.id for m in members],
+                result="occupied", importance=30,
+                summary=f"Монстры заняли укрытие в секторе {shelter.sector_id}",
+                details={"shelter_id": shelter.id, "group_id": group.id},
+            )
+
+    # --- Находки: срок жизни ~суток (§16.10) ---
+
+    def _expire_findings(self, hour: int) -> None:
+        remaining = []
+        for corpse in self.state.corpses:
+            if corpse.status == "available" and hour - corpse.created_hour >= 24:
+                for item_id in list(corpse.items):
+                    self.state.items.pop(item_id, None)
+                self.state.news_manager.create_event(
+                    hour=hour, minute=0, sector_id=corpse.sector_id,
+                    event_type="finding_expired", participants=[], result="expired",
+                    importance=5,
+                    summary=f"Находка в секторе {corpse.sector_id} исчезла",
+                    details={"corpse_id": corpse.id},
+                )
+                continue
+            remaining.append(corpse)
+        self.state.corpses = remaining
+
+    # --- Сигналы бедствия (§16.10) ---
+
+    def _process_distress_signals(self, hour: int) -> None:
+        from zonesim.world.sector import get_distance
+
+        for group in self.state.human_groups.values():
+            members = self._active_members(group)
+            if not members:
+                continue
+            if hour - getattr(group, "last_distress_hour", -100) < 24:
+                continue
+            avg_health = sum(m.health_share for m in members) / len(members)
+            if avg_health > 0.3 or self.state.rng.random() >= 0.5:
+                continue
+            group.last_distress_hour = hour
+            npcs = {npc.id: npc for npc in self.state.humans}
+            faction = npcs[group.leader_id].faction if group.leader_id in npcs else ""
+            for npc in self.state.humans:
+                if npc.status in (EntityStatus.DEAD, EntityStatus.EXILED):
+                    continue
+                distance = get_distance(self.state.sectors, npc.sector_id, group.sector_id)
+                if distance is None or distance > 3:
+                    continue
+                kb = self.state.knowledge_bases.setdefault(npc.id, KnowledgeBase())
+                kb.add_manual(
+                    npc.id, KnowledgeType.EVENT, subject_id=group.id,
+                    payload={
+                        "type": "distress",
+                        "sector_id": group.sector_id,
+                        "group_id": group.id,
+                        "faction": faction,
+                        "hour": hour,
+                    },
+                    hour=hour,
+                )
+            self.state.news_manager.create_event(
+                hour=hour, minute=5, sector_id=group.sector_id,
+                event_type="distress_signal",
+                participants=[m.id for m in members], result="sent", importance=45,
+                summary=f"Группа {group.id} подаёт сигнал бедствия",
+                details={"group_id": group.id, "sector_id": group.sector_id},
+            )
+
+    def _active_distress_for(self, group: HumanGroup, hour: int) -> dict | None:
+        """Самый свежий активный сигнал, известный группе."""
+        humans = {npc.id: npc for npc in self.state.humans}
+        best: dict | None = None
+        for member_id in group.members:
+            npc = humans.get(member_id)
+            if npc is None:
+                continue
+            kb = self.state.knowledge_bases.get(npc.id)
+            if kb is None:
+                continue
+            for fact in kb.get_facts(KnowledgeType.EVENT):
+                payload = fact.payload
+                if payload.get("type") != "distress":
+                    continue
+                if payload.get("group_id") == group.id:
+                    continue
+                if hour - payload.get("hour", -100) > 24:
+                    continue
+                if best is None or payload["hour"] > best["hour"]:
+                    best = payload
+        return best
+
+    def _aid_distress_group(
+        self, group: HumanGroup, members: list[HumanNPC], distress: dict, hour: int,
+    ) -> None:
+        """Помощь прибывшей группы: передать заряд аптечки самому раненому."""
+        target_group = self.state.human_groups.get(distress["group_id"])
+        if target_group is None:
+            return
+        victims = [m for m in self._active_members(target_group) if m.health_share < 0.95]
+        if not victims:
+            return
+        patient = min(victims, key=lambda npc: npc.health_share)
+        medkits = [
+            self.state.items[item_id]
+            for npc in members for item_id in npc.inventory
+            if item_id in self.state.items
+            and self.state.items[item_id].type is ItemType.MEDICINE
+            and self.state.items[item_id].properties.get("charges", 0) > 0
+        ]
+        if not medkits:
+            return
+        patient.health = min(
+            patient.max_health,
+            patient.health + medkits[0].properties.get("heal_amount", 30),
+        )
+        self._use_medkit_charge(medkits[0], members)
+        self.state.news_manager.create_event(
+            hour=hour, minute=50, sector_id=group.sector_id,
+            event_type="distress_aid",
+            participants=[m.id for m in members] + [patient.id],
+            result="aided", importance=30,
+            summary=f"Группа {group.id} помогла группе {target_group.id}",
+            details={"group_id": target_group.id, "patient_id": patient.id},
+        )
+        # сигнал считается отработанным
+        for kb in self.state.knowledge_bases.values():
+            kb.facts = [
+                f for f in kb.facts
+                if not (
+                    f.fact_type == KnowledgeType.EVENT
+                    and f.payload.get("type") == "distress"
+                    and f.payload.get("group_id") == target_group.id
+                )
+            ]
 
     def trade_price(self, item_ref: str, quantity: int = 1) -> float:
         """Цена покупки у торговца: каталог × качество × наценку. (§16)"""
@@ -712,6 +1179,7 @@ class SimulationEngine:
         """Фаза 0: Проверка состояния мира и состава групп."""
         self._sync_human_groups()
         self._sync_monster_groups()
+        self._expire_findings(hour)
 
     def _sync_human_groups(self) -> None:
         """Убирает выбывших и удаляет пустые группы, сохраняя инварианты §7.5."""
@@ -782,6 +1250,8 @@ class SimulationEngine:
         if new_entities or new_monsters:
             # мигранты сразу получают группу, как и люди
             self._sync_monster_groups()
+        self._process_emission_schedule(hour)
+        self._process_shelter_occupation(hour)
 
     def _phase2_environment(self, hour: int) -> None:
         """Фаза 2: Окружающая среда и торговля."""
@@ -834,6 +1304,8 @@ class SimulationEngine:
         """Фаза 4: лидер выбирает одно намерение для всей группы (§7.5, §9.2)."""
         is_night = self.state.time.is_night()
         npcs = {npc.id: npc for npc in self.state.humans}
+        self._process_distress_signals(hour)
+        emission_known = self._emission_known(hour)
 
         for group in self.state.human_groups.values():
             group.select_leader(npcs)
@@ -843,6 +1315,13 @@ class SimulationEngine:
 
             members = [npcs[mid] for mid in group.members if mid in npcs]
             if not members:
+                continue
+            if emission_known:
+                # Выброс: намерение «укрытие» приоритетно над любыми другими (§12.7)
+                group.intention = SHELTER
+                for member in members:
+                    if member.status == EntityStatus.ACTIVE:
+                        member.intention = SHELTER
                 continue
             facts = []
             for member in members:
@@ -856,6 +1335,18 @@ class SimulationEngine:
             hours_awake = max(
                 hour - getattr(member, "awake_since_hour", hour) for member in members
             )
+            distress = self._active_distress_for(group, hour)
+            avg_health = sum(npc.health_share for npc in members) / len(members)
+            can_help = False
+            distress_distance = 6
+            if distress is not None and avg_health >= 0.6:
+                from zonesim.world.sector import get_distance
+                distress_distance = get_distance(
+                    self.state.sectors, group.sector_id, distress["sector_id"],
+                ) or 6
+                can_help = self.state.faction_relations.get(
+                    leader.faction, distress.get("faction", ""),
+                ) >= 20
 
             ctx = IntentionContext(
                 hour=hour,
@@ -879,6 +1370,8 @@ class SimulationEngine:
                 can_capture=self._group_can_capture(group, members),
                 can_rest=group.is_comfort_sleep_possible(all_npcs, group.sector_id),
                 hours_awake=hours_awake,
+                can_help=can_help,
+                distress_distance=distress_distance,
             )
             group.intention = choose_intention(ctx, self.state.rng)
             for member in members:
@@ -1026,7 +1519,10 @@ class SimulationEngine:
         self.state.items.pop(item.id, None)
 
     def _phase5_movement(self, hour: int, is_night: bool) -> None:
-        """Фаза 5: Перемещение по намерениям (1 ребро в час, §6.2)."""
+        """Фаза 5: перемещение в пределах пунктов движения (§10.4).
+
+        Люди получают 1,0 пункта в час; обычное ребро стоит 1,0, тропа 0,5.
+        """
         self._moved_human_ids: set[int] = set()
         border_ids = {s.id for s in self.state.sectors.values() if s.is_border}
 
@@ -1038,44 +1534,184 @@ class SimulationEngine:
             members = [npcs[mid] for mid in group.members if mid in npcs]
             if not members or any(npc.status != EntityStatus.ACTIVE for npc in members):
                 continue  # группа не оставляет спящих и бессознательных членов
+            if self._emission_active(hour) and self._group_in_shelter(group):
+                continue  # покидать укрытие до завершения выброса нельзя (§12.7)
 
-            destination: int | None = None
+            avoid = self._known_anomaly_sectors(leader)
+            trails = self._trail_set
             if group.intention == EXPLORE:
                 memory = self.state.visit_memory.setdefault(leader.id, {})
                 destination = choose_explore_target(
                     self.state.sectors, group.sector_id, memory, hour,
-                    self._known_anomaly_sectors(leader), self.state.rng,
+                    avoid, self.state.rng,
                 )
-            elif group.intention == EXIT:
-                destination = next_step_towards(
-                    self.state.sectors, group.sector_id, border_ids,
-                    avoid_ids=self._known_anomaly_sectors(leader),
-                )
+                if destination is not None:
+                    cost = edge_cost(trails, group.sector_id, destination)
+                    if cost <= 1.0 + 1e-9:
+                        self._apply_human_move(group, members, [destination], npcs, hour)
+                continue
+
+            target_ids: set[int] | None = None
+            if group.intention == EXIT:
+                target_ids = border_ids
             elif group.intention == REST:
                 home = self._home_sector_id(leader.faction)
                 if home is not None and group.sector_id != home:
-                    destination = next_step_towards(
-                        self.state.sectors, group.sector_id, {home},
-                        avoid_ids=self._known_anomaly_sectors(leader),
-                    )
+                    target_ids = {home}
+            elif group.intention == HELP:
+                distress = self._active_distress_for(group, hour)
+                if distress is not None and group.sector_id != distress["sector_id"]:
+                    target_ids = {distress["sector_id"]}
+            elif group.intention == SHELTER:
+                target_ids = self._shelter_targets(group, hour)
+            if not target_ids:
+                continue
+            path = self._walk(group.sector_id, target_ids, avoid, points=1.0)
+            if path:
+                self._apply_human_move(group, members, path, npcs, hour)
 
-            if destination is not None and destination != group.sector_id:
-                group.sector_id = destination
-                for npc in members:
-                    npc.sector_id = destination
-                    self._moved_human_ids.add(npc.id)
-                    update_stamina(npc, STAMINA_COST_MOVEMENT, "movement", self.state.time)
-                    self.state.visit_memory.setdefault(npc.id, {})[destination] = hour
-                for prisoner_id in group.prisoners:
-                    if prisoner_id in npcs:
-                        npcs[prisoner_id].sector_id = destination
+        self._move_monster_groups(hour)
 
-        self._move_monster_groups()
+    def _walk(
+        self,
+        start: int,
+        target_ids: set[int],
+        avoid_ids: set[int],
+        points: float,
+    ) -> list[int]:
+        """Проходит маршрут, пока хватает пунктов движения. Возвращает пройденные сектора."""
+        trails = self._trail_set
+        path: list[int] = []
+        current = start
+        while points > 1e-9:
+            nxt = next_step_towards(
+                self.state.sectors, current, target_ids, avoid_ids, trails,
+            )
+            if nxt is None or nxt == current:
+                break
+            cost = edge_cost(trails, current, nxt)
+            if points + 1e-9 < cost:
+                break
+            points -= cost
+            current = nxt
+            path.append(nxt)
+            if current in target_ids:
+                break
+        return path
 
-    def _move_monster_groups(self) -> None:
+    def _apply_human_move(
+        self,
+        group: HumanGroup,
+        members: list[HumanNPC],
+        path: list[int],
+        npcs: dict[int, HumanNPC],
+        hour: int,
+    ) -> None:
+        crossed = []
+        prev = group.sector_id
+        for sector_id in path:
+            crossed.append(edge_key(prev, sector_id))
+            prev = sector_id
+        group.sector_id = path[-1]
+        for npc in members:
+            npc.sector_id = group.sector_id
+            self._moved_human_ids.add(npc.id)
+            update_stamina(
+                npc, STAMINA_COST_MOVEMENT * len(path), "movement", self.state.time,
+            )
+            self.state.visit_memory.setdefault(npc.id, {})[group.sector_id] = hour
+        for prisoner_id in group.prisoners:
+            if prisoner_id in npcs:
+                npcs[prisoner_id].sector_id = group.sector_id
+        self._check_blocked_trails(group, members, crossed, hour, is_monster=False)
+
+    def _blocked_trail_map(self) -> dict[tuple[int, int], AnomalyEntity]:
+        mapping: dict[tuple[int, int], AnomalyEntity] = {}
+        for anomaly in self.state.anomalies.values():
+            if anomaly.status == AnomalyStatus.ACTIVE and anomaly.blocks_trail:
+                mapping[edge_key(anomaly.blocks_trail[0], anomaly.blocks_trail[1])] = anomaly
+        return mapping
+
+    def _group_has_passage(self, group: HumanGroup, anomaly) -> bool:
+        edge = list(anomaly.blocks_trail)
+        humans = {npc.id: npc for npc in self.state.humans}
+        for member_id in group.members:
+            npc = humans.get(member_id)
+            if npc is None:
+                continue
+            kb = self.state.knowledge_bases.get(npc.id)
+            if kb is None:
+                continue
+            for fact in kb.get_facts(KnowledgeType.SAFE_PATH, subject_id=anomaly.id):
+                if fact.payload.get("edge") == edge:
+                    return True
+        return False
+
+    def _check_blocked_trails(
+        self,
+        group,
+        members: list,
+        crossed: list[tuple[int, int]],
+        hour: int,
+        is_monster: bool,
+    ) -> None:
+        """Перекрытые тропы: одна проверка на группу при переходе. (§10.5)"""
+        if not crossed:
+            return
+        blocked = self._blocked_trail_map()
+        is_night = self.state.time.is_night()
+        for edge in crossed:
+            anomaly = blocked.get(edge)
+            if anomaly is None:
+                continue
+            if not is_monster and self._group_has_passage(group, anomaly):
+                continue  # держатели прохода пересекают без проверки
+            attentiveness = max(member.attentiveness for member in members)
+            if is_monster:
+                bonus = (
+                    0 if species_value(members[0]) == "large_migrator"
+                    else MONSTER_NATIVE_ANOMALY_BONUS
+                )
+            else:
+                bonus = self._group_detector_bonus().get(group.id, 0)
+            contact = check_anomaly_contact(
+                entity_sector=members[0].sector_id,
+                anomaly=anomaly,
+                rng_func=self.state.rng.random,
+                attentiveness=attentiveness,
+                known_bonus=bonus,
+                is_night=is_night,
+            )
+            if contact["result"] != "hit":
+                continue
+            victim = self.state.rng.choice(members)
+            start = victim.health
+            result = apply_anomaly_damage(
+                victim.health, victim.max_health, anomaly, self.state.rng.random(),
+            )
+            victim.health = result["new_health"]
+            if is_monster:
+                if victim.health <= 0:
+                    victim.status = EntityStatus.DEAD
+                    self._create_corpse(victim, hour)
+            elif victim.health <= 0:
+                self._set_unconscious_or_dead(victim, start, hour, cause="anomaly")
+            self.state.news_manager.create_event(
+                hour=hour, minute=10, sector_id=victim.sector_id,
+                event_type="trail_block_hit",
+                participants=[victim.id], result="hit", importance=20,
+                summary=(
+                    f"{'Монстр' if is_monster else 'NPC'} {victim.id} прошёл"
+                    f" через блокированную тропу аномалии {anomaly.id}"
+                ),
+                details={"anomaly_id": anomaly.id, "edge": list(edge)},
+            )
+
+    def _move_monster_groups(self, hour: int) -> None:
         from zonesim.world.sector import get_distance
 
         self._moved_monster_ids = set()
+        trails = self._trail_set
         for group in self.state.monster_groups.values():
             all_members = self._monster_group_members(group, active_only=False)
             members = [monster for monster in all_members if monster.status == EntityStatus.ACTIVE]
@@ -1083,53 +1719,64 @@ class SimulationEngine:
                 continue
             if group.intention in ("feed", "hunt", "rest"):
                 continue
-            speed = 2 if group.species == "territorial_predator" else 1
-            for _ in range(speed):
-                destination = None
-                if group.intention == "stalk" and group.target_sector_id is not None:
-                    destination = next_step_towards(
-                        self.state.sectors, group.sector_id, {group.target_sector_id}
-                    )
-                elif group.intention == "return_home" and group.home_sector_id is not None:
-                    destination = next_step_towards(
-                        self.state.sectors, group.sector_id, {group.home_sector_id}
-                    )
-                elif group.intention == "roam":
-                    sector = self.state.sectors[group.sector_id]
+            # пункты движения: хищник 2,0, остальные 1,0 (§10.4)
+            points = 2.0 if group.species == "territorial_predator" else 1.0
+            path: list[int] = []
+            if group.intention == "stalk" and group.target_sector_id is not None:
+                path = self._walk(
+                    group.sector_id, {group.target_sector_id}, set(), points,
+                )
+            elif group.intention == "return_home" and group.home_sector_id is not None:
+                path = self._walk(
+                    group.sector_id, {group.home_sector_id}, set(), points,
+                )
+            elif group.intention == "roam":
+                current = group.sector_id
+                while points > 1e-9:
+                    sector = self.state.sectors[current]
                     candidates = list(sector.neighbors)
                     if group.species == "scavenger_pack":
                         corpse_sectors = [
-                            sector_id for sector_id in candidates
-                            if any(corpse.sector_id == sector_id and corpse.status == "available"
-                                   for corpse in self.state.corpses)
+                            sid for sid in candidates
+                            if any(
+                                corpse.sector_id == sid and corpse.status == "available"
+                                for corpse in self.state.corpses
+                            )
                         ]
                         if corpse_sectors:
                             candidates = corpse_sectors
                     if group.species == "territorial_predator" and group.home_sector_id is not None:
                         nearby = []
-                        for sector_id in candidates:
+                        for sid in candidates:
                             distance = get_distance(
-                                self.state.sectors, sector_id, group.home_sector_id
+                                self.state.sectors, sid, group.home_sector_id
                             )
                             if distance is not None and distance <= 2:
-                                nearby.append(sector_id)
+                                nearby.append(sid)
                         if nearby:
                             candidates = nearby
-                    if candidates and self.state.rng.random() < 0.4:
-                        destination = self.state.rng.choice(candidates)
-                if destination is None or destination == group.sector_id:
-                    break
-                group.sector_id = destination
-                for monster in members:
-                    monster.sector_id = destination
-                    monster.stamina = max(0, monster.stamina - 5)
-                    self._moved_monster_ids.add(monster.id)
-                if group.intention in ("stalk", "return_home"):
-                    target_sector = (
-                        group.target_sector_id if group.intention == "stalk" else group.home_sector_id
-                    )
-                    if destination == target_sector:
+                    if not candidates or self.state.rng.random() >= 0.4:
                         break
+                    destination = self.state.rng.choice(candidates)
+                    cost = edge_cost(trails, current, destination)
+                    if points + 1e-9 < cost:
+                        break
+                    points -= cost
+                    current = destination
+                    path.append(destination)
+            if not path:
+                continue
+            crossed = []
+            prev = group.sector_id
+            for sector_id in path:
+                crossed.append(edge_key(prev, sector_id))
+                prev = sector_id
+            group.sector_id = path[-1]
+            for monster in members:
+                monster.sector_id = group.sector_id
+                monster.stamina = max(0, monster.stamina - 5 * len(path))
+                self._moved_monster_ids.add(monster.id)
+            self._check_blocked_trails(group, members, crossed, hour, is_monster=True)
 
     def _phase6_detections(self, hour: int) -> None:
         """Фаза 6: Обнаружение и встречи.
@@ -2243,6 +2890,18 @@ class SimulationEngine:
         ]
         self._process_rest_exchanges(hour, resting_groups)
         self._process_rest_trade(hour, resting_groups)
+        for group in self.state.human_groups.values():
+            if group.id in acted_groups or group.intention != HELP:
+                continue
+            distress = self._active_distress_for(group, hour)
+            members = self._active_members(group)
+            if distress is None or not members:
+                continue
+            if group.sector_id == distress["sector_id"]:
+                self._aid_distress_group(group, members, distress, hour)
+                acted_groups.add(group.id)
+        if self._emission_active(hour):
+            self._apply_emission_exposure(hour)
         for npc in self.state.humans:
             if npc.id in self._combat_human_ids or npc.group_id in acted_groups:
                 continue
@@ -2275,19 +2934,18 @@ class SimulationEngine:
         """Фаза 8: Воздействие окружающей среды."""
         # Перемещение аномалий каждые 48 часов
         if hour % 48 == 0:
-            border_ids = [s.id for s in self.state.sectors.values() if s.is_border]
             start_ids = {s.id for s in self.state.sectors.values() if s.is_faction_start}
-
             for anomaly in self.state.anomalies.values():
                 if anomaly.status == AnomalyStatus.ACTIVE:
                     rng_val = self.state.rng.random()
                     migration = check_anomaly_migration(
                         anomaly, hour,
-                        sector_ids=border_ids,
+                        sector_ids=self._anomaly_move_candidates(anomaly),
                         faction_start_ids=start_ids,
                         rng_value=rng_val,
                     )
                     if migration["moved"]:
+                        self._roll_trail_blockage(anomaly)
                         self.state.news_manager.create_event(
                             hour=hour,
                             minute=0,
@@ -2300,11 +2958,14 @@ class SimulationEngine:
                             details=migration,
                         )
 
-        # Формирование артефактов
+        # Формирование артефактов; во время выброса — с ускорением (§12.7)
+        acceleration = (
+            EMISSION_ARTIFACT_ACCELERATION if self._emission_active(hour) else 1
+        )
         for anomaly in self.state.anomalies.values():
             if anomaly.status == AnomalyStatus.ACTIVE:
                 artifact_result = self.state.artifacts.check_artifact_formation(
-                    anomaly, hour, rng=self.state.rng,
+                    anomaly, hour, rng=self.state.rng, acceleration=acceleration,
                 )
                 if artifact_result["formed"]:
                     self.state.news_manager.create_event(

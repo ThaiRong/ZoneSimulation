@@ -7,8 +7,10 @@ from zonesim.ai import (
     DESTROY,
     EXIT,
     EXPLORE,
+    HELP,
     RESEARCH,
     REST,
+    SHELTER,
     SLEEP,
     IntentionContext,
     choose_explore_target,
@@ -131,6 +133,11 @@ class TestEngineIntegration:
         engine._sync_monster_groups()
         npc = next(h for h in engine.state.humans if h.status == EntityStatus.ACTIVE)
         group = engine.state.human_groups[npc.group_id]
+        for other in engine.state.humans:
+            if other.id != npc.id:
+                other.status = EntityStatus.DEAD
+        engine._sync_human_groups()
+        group = engine.state.human_groups[npc.group_id]
         for member_id in group.members:
             member = next(h for h in engine.state.humans if h.id == member_id)
             member.stamina = 5
@@ -145,6 +152,11 @@ class TestEngineIntegration:
         engine._sync_monster_groups()
         npc = next(h for h in engine.state.humans if h.status == EntityStatus.ACTIVE)
         group = engine.state.human_groups[npc.group_id]
+        for other in engine.state.humans:
+            if other.id != npc.id:
+                other.status = EntityStatus.DEAD
+        engine._sync_human_groups()
+        group = engine.state.human_groups[npc.group_id]
         for member_id in group.members:
             member = next(h for h in engine.state.humans if h.id == member_id)
             member.stamina = 20
@@ -158,7 +170,7 @@ class TestEngineIntegration:
         engine = SimulationEngine(seed=42)
         for _ in range(48):
             engine.simulate_hour()
-        valid = {SLEEP, REST, RESEARCH, DESTROY, CAPTURE, EXPLORE, EXIT}
+        valid = {SLEEP, REST, RESEARCH, DESTROY, CAPTURE, EXPLORE, EXIT, SHELTER, HELP}
         for npc in engine.state.humans:
             if npc.status == EntityStatus.ACTIVE:
                 assert npc.intention in valid

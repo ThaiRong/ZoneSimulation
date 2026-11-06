@@ -34,6 +34,7 @@ class Anomaly:
     move_timer: int = 0
     safe_path: bool = False
     status: AnomalyStatus = AnomalyStatus.ACTIVE
+    blocks_trail: list[int] | None = None  # перекрытое ребро-тропа (§10.5)
 
     # Стартовые параметры по типу (§12.1)
     TYPE_PARAMS = {

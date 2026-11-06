@@ -1,9 +1,12 @@
-"""Временные убежища (Shelter). Основано на §7.10 ТЗ."""
+"""Временные убежища (Shelter) и стационарные укрытия (StormShelter).
+
+Основано на §7.10 и §7.16 ТЗ.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from typing import Any
 
 
 @dataclass
@@ -61,3 +64,18 @@ class Shelter:
             "quality": self.quality,
             "destroyed": self.destroyed,
         }
+
+
+@dataclass
+class StormShelter:
+    """Стационарное укрытие от выброса — неподвижный объект ландшафта. (§7.16)"""
+    id: int
+    sector_id: int
+    capacity: int = 4        # сколько человек одновременно могут укрыться
+    condition: int = 100     # в MVP только для отображения
+    occupied_by: int | None = None   # id группы монстров (§13.7)
+    occupied_until: int = 0          # час окончания занятия
+
+    @property
+    def is_occupied(self) -> bool:
+        return self.occupied_by is not None

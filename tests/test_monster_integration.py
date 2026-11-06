@@ -245,7 +245,7 @@ class TestMovement:
         territorial_group.intention = "return_home"
         scavenger_group.intention = "return_home"
 
-        engine._move_monster_groups()
+        engine._move_monster_groups(hour=engine.state.time.hour)
 
         assert territorial_group.sector_id == finish
         assert territorial.sector_id == finish
@@ -276,7 +276,7 @@ class TestMovement:
         group = engine.state.monster_groups[first.group_id]
         group.intention = "return_home"
 
-        engine._move_monster_groups()
+        engine._move_monster_groups(hour=engine.state.time.hour)
 
         assert group.sector_id == start
         assert first.sector_id == start
@@ -321,7 +321,7 @@ class TestPursuitMemory:
         assert group.target_id == npc.id
         assert group.target_sector_id == neighbor
 
-        engine._move_monster_groups()
+        engine._move_monster_groups(hour=engine.state.time.hour)
         assert group.sector_id == neighbor
 
         monster.target_memory_hour = hour - 13

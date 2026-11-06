@@ -43,17 +43,19 @@ class ArtifactManager:
         hour: int,
         rng_value: float = 0.5,
         rng: SeededRNG | None = None,
+        acceleration: int = 1,
     ) -> dict:
         """
         Проверяет, сформировался ли артефакт.
         Интервал 48-120 часов (§12.5). По завершении таймера — шанс 60%,
         после чего начинается новый цикл независимо от результата.
+        Во время выброса таймер идёт с ускорением (§12.7).
         """
         if anomaly.status != AnomalyStatus.ACTIVE:
             return {"formed": False, "reason": "anomaly_inactive"}
 
         # Уменьшаем таймер
-        anomaly.artifact_timer -= 1
+        anomaly.artifact_timer -= acceleration
 
         if anomaly.artifact_timer > 0:
             return {"formed": False, "timer_remaining": anomaly.artifact_timer}

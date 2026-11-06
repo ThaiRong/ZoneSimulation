@@ -26,6 +26,7 @@ class HumanGroup:
     guard_schedule: list[dict] = field(default_factory=list)  # [{"npc_id": x, "start_hour": y, "end_hour": z}]
     comfort: bool = False  # комфортный ли сон
     last_combat_hour: int = -100  # последний бой группы (передышка §11.1)
+    last_distress_hour: int = -100  # последний сигнал бедствия (§16.10)
 
     @property
     def active_member_ids(self) -> list[int]:
