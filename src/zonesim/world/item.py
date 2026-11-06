@@ -13,6 +13,7 @@ class ItemType(str, Enum):
     AMMO = "ammo"
     MEDICINE = "medicine"
     OPTICS = "optics"
+    DETECTOR = "detector"
     CAPTURE_KIT = "capture_kit"
     DESTROY_KIT = "destroy_kit"
     MONSTER_PART = "monster_part"

@@ -85,6 +85,8 @@ MONSTER_HEALTH_REGEN_PASSIVE = 0.02
 MONSTER_HEALTH_REGEN_REST = 0.08
 # Передышка между боями для групп, часов (§11.1)
 COMBAT_COOLDOWN_HOURS = 6
+# Бонус местных видов монстров к обнаружению аномалий (§12.2)
+MONSTER_NATIVE_ANOMALY_BONUS = 25
 
 
 @dataclass
@@ -270,6 +272,7 @@ class SimulationEngine:
         "outer_layer": 1,
         "medical": 4,
         "optics": 1,
+        "detector": 2,
         "capture_kit": 2,
         "anomaly_destruction_kit": 2,
     }
@@ -302,6 +305,7 @@ class SimulationEngine:
     SELL_PRICE_SHARE = 0.6
     # Семейства комплектов для проактивной закупки: (тип, самая дешёвая модель)
     PROACTIVE_KITS = (
+        (ItemType.DETECTOR, "gear.detector.radar1"),
         (ItemType.CAPTURE_KIT, "capture.kit.predator"),
         (ItemType.DESTROY_KIT, "anomaly.kit.subtle"),
     )
@@ -396,28 +400,43 @@ class SimulationEngine:
     REST_TRADE_RELATION = 40      # меновая торговля ценностями
     REST_TRADE_PRICE_SHARE = 0.8  # цена меновой сделки от базовой стоимости
 
+    def _use_medkit_charge(self, medkit: Item, members: list[HumanNPC]) -> None:
+        """Расходует один заряд аптечки; пустую аптечку удаляет."""
+        charges = medkit.properties.get("charges", medkit.quantity)
+        if charges > 1:
+            medkit.properties["charges"] = charges - 1
+        else:
+            self._consume_item(medkit, members)
+
     def _rest_heal(self, group: HumanGroup, members: list[HumanNPC]) -> None:
-        """Лечение аптечкой в час отдыха: один заряд группе, самому раненому. (§14.3)"""
+        """Лечение в час отдыха: заряд на каждого раненого члена группы. (§14.3)"""
         medkits = [
             self.state.items[item_id]
             for npc in members for item_id in npc.inventory
             if item_id in self.state.items
             and self.state.items[item_id].type is ItemType.MEDICINE
-            and self.state.items[item_id].quantity > 0
+            and self.state.items[item_id].properties.get("charges", 0) > 0
         ]
         if not medkits:
             return
-        wounded = [npc for npc in members if npc.health_share < 0.7]
-        if not wounded:
-            return
-        patient = min(wounded, key=lambda npc: npc.health_share)
-        medkit = medkits[0]
-        heal = medkit.properties.get("heal_amount", 30)
-        patient.health = min(patient.max_health, patient.health + heal)
-        medkit.quantity -= 1
-        if medkit.quantity <= 0:
-            self._consume_item(medkit, members)
-        self._sync_npc_from_items(patient)
+        wounded = sorted(
+            (npc for npc in members if npc.health_share < 0.95),
+            key=lambda npc: npc.health_share,
+        )
+        for patient in wounded:
+            kit = next(
+                (
+                    entry for entry in medkits
+                    if entry.properties.get("charges", 0) > 0
+                ),
+                None,
+            )
+            if kit is None:
+                break
+            heal = kit.properties.get("heal_amount", 30)
+            patient.health = min(patient.max_health, patient.health + heal)
+            self._use_medkit_charge(kit, members)
+            self._sync_npc_from_items(patient)
 
     def _process_rest_trade(self, hour: int, resting_groups: list[HumanGroup]) -> None:
         """Торговля как час отдыха у торговца: сначала продажа, потом закупка. (§16)"""
@@ -963,6 +982,28 @@ class SimulationEngine:
         )
         return kit is not None
 
+    def _group_detector_bonus(self) -> dict[int, int]:
+        """Бонус детекторов аномалий по группам (лучший исправный детектор)."""
+        humans = {npc.id: npc for npc in self.state.humans}
+        bonuses: dict[int, int] = {}
+        for group in self.state.human_groups.values():
+            best = 0
+            for member_id in group.members:
+                npc = humans.get(member_id)
+                if npc is None:
+                    continue
+                for item_id in npc.inventory:
+                    item = self.state.items.get(item_id)
+                    if (
+                        item is not None
+                        and item.type is ItemType.DETECTOR
+                        and item.condition > 0
+                    ):
+                        best = max(best, item.properties.get("anomaly_detection_bonus", 0))
+            if best:
+                bonuses[group.id] = best
+        return bonuses
+
     def _active_members(self, group: HumanGroup) -> list[HumanNPC]:
         npcs = {npc.id: npc for npc in self.state.humans}
         return [
@@ -1097,6 +1138,7 @@ class SimulationEngine:
         при провале урон применяется к здоровью.
         """
         is_night = self.state.time.is_night()
+        detector_bonus = self._group_detector_bonus()
 
         for npc in self.state.humans:
             # Контакт проверяется при прохождении через сектор (§8, фаза 8)
@@ -1121,7 +1163,10 @@ class SimulationEngine:
                 anomaly=anomaly,
                 rng_func=self.state.rng.random,
                 attentiveness=npc.attentiveness,
-                known_bonus=20 if known else 0,
+                known_bonus=(
+                    (20 if known else 0)
+                    + detector_bonus.get(npc.group_id, 0)  # детектор группы
+                ),
                 is_night=is_night,
             )
             if contact["result"] != "hit":
@@ -1165,11 +1210,16 @@ class SimulationEngine:
             anomaly = self.state.rng.choice(anomalies)
             group = self.state.monster_groups.get(monster.group_id)
             group_size = group.member_count if group else 1
+            # Местные виды чувствуют аномалии; крупные мигранты — нет (§12.2)
+            native_bonus = (
+                0 if species_value(monster) == "large_migrator" else MONSTER_NATIVE_ANOMALY_BONUS
+            )
             contact = check_anomaly_contact(
                 entity_sector=monster.sector_id,
                 anomaly=anomaly,
                 rng_func=self.state.rng.random,
                 attentiveness=max(1, monster.attentiveness - 2 * (group_size - 1)),
+                known_bonus=native_bonus,
                 is_night=is_night,
             )
             if contact["result"] != "hit":
@@ -1513,6 +1563,36 @@ class SimulationEngine:
     def _unconscious_tick(self, npc: HumanNPC, hour: int) -> None:
         """Бессознательные состояния (§11.10, §14.2)."""
         if getattr(npc, "unconscious_reason", "") == "health_zero":
+            # Сначала группа тратит медикаменты на своего бойца (§11.10)
+            group = self.state.human_groups.get(npc.group_id)
+            member_ids = set(group.members) if group else {npc.id}
+            medkit = None
+            owner = None
+            for other in self.state.humans:
+                if other.id not in member_ids or other.id == npc.id:
+                    continue
+                for item_id in other.inventory:
+                    item = self.state.items.get(item_id)
+                    if (
+                        item is not None
+                        and item.type is ItemType.MEDICINE
+                        and item.quantity > 0
+                    ):
+                        medkit, owner = item, other
+                        break
+                if medkit is not None:
+                    break
+            if medkit is not None:
+                heal = medkit.properties.get("heal_amount", 30)
+                # тяжёлое состояние ~15% + лечение, не выше 60% (§11.10)
+                npc.health = min(
+                    int(npc.max_health * 0.6),
+                    int(npc.max_health * 0.15) + heal,
+                )
+                npc.status = EntityStatus.ACTIVE  # тяжёлое состояние, но в строю
+                self._use_medkit_charge(medkit, [owner] if owner else [])
+                self._sync_npc_from_items(owner)
+                return
             # Без медицинской помощи бессознательный с здоровьем 0 становится трупом (§11.10)
             if hour - getattr(npc, "unconscious_start_hour", hour) >= 1:
                 npc.status = EntityStatus.DEAD

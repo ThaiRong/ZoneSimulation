@@ -270,6 +270,21 @@
       "attentiveness_bonus": 8
     },
     {
+      "id": "gear.detector.radar1",
+      "name": "Детектор аномалий «Сканер-1»",
+      "category": "detector",
+      "slot": "equipment",
+      "quality": 1.0,
+      "base_value": 320,
+      "durability_max": 100,
+      "durability_loss": 0,
+      "import_required": true,
+      "tags": [
+        "standard"
+      ],
+      "anomaly_detection_bonus": 25
+    },
+    {
       "id": "capture.kit.predator",
       "name": "КЗ-Л «Лёгкий»",
       "category": "capture_kit",

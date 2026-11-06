@@ -90,6 +90,10 @@ def evaluate_actions(ctx: IntentionContext) -> dict[str, float]:
                 continue
             if ctx.stamina_share < 0.8:
                 N += 40.0 * (0.8 - ctx.stamina_share)
+            # Группа старается держать среднее здоровье минимум на 60%:
+            # раненые продолжают отдых до восстановления
+            if ctx.health_share < 0.6:
+                N += 50.0 * (0.6 - ctx.health_share)
             R += 2.0
         elif action == RESEARCH:
             if not ctx.has_known_anomaly:

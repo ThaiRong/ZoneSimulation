@@ -242,6 +242,7 @@ class TestTrading:
             assert stock["anomaly.kit.visible"] == 2
             assert stock["gear.medkit.sanitar2"] == 4
             assert stock["weapon.carbine.k20"] == 2
+            assert stock["gear.detector.radar1"] == 2
             # отечественные позиции не импортируются
             assert "armor.uniform.jacket" not in stock
             assert "ammo.rifle" in stock

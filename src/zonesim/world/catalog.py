@@ -21,6 +21,7 @@ CATEGORY_TO_ITEM_TYPE = {
     "outer_layer": ItemType.ARMOR,
     "medical": ItemType.MEDICINE,
     "optics": ItemType.OPTICS,
+    "detector": ItemType.DETECTOR,
     "capture_kit": ItemType.CAPTURE_KIT,
     "anomaly_destruction_kit": ItemType.DESTROY_KIT,
 }
@@ -37,6 +38,7 @@ FAMILY_REQUIRED = {
     "outer_layer": ("armor_factor", "damage_reduction"),
     "medical": ("charges", "heal_amount"),
     "optics": ("attentiveness_bonus",),
+    "detector": ("anomaly_detection_bonus",),
     "capture_kit": ("target_species", "capture_bonus", "danger_rank", "uses"),
     "anomaly_destruction_kit": (
         "target_anomaly_type", "stability_damage", "danger_rank", "uses",

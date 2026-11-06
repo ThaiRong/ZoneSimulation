@@ -363,17 +363,26 @@ class CombatSystem:
                 to_consume -= used
 
         # Проигравшие бессознательные люди стабилизируются собственными
-        # медикаментами (§11.10); без медикаментов погибают.
+        # медикаментами, если победители не намерены добить (§11.10).
+        # Монстры добивают безжалостно; люди — только при крайней вражде.
+        winners_are_monsters = bool(winners) and not winners[0].is_human
+        winners_hateful = (
+            bool(winners)
+            and all(c.is_human for c in winners)
+            and self.relation <= -60
+        )
+        execute_losers = winners_are_monsters or winners_hateful
         stabilized_ids = set()
-        for combatant in losers:
-            if not (combatant.is_human and combatant.unconscious and combatant.medicines > 0):
-                continue
-            combatant.medicines -= 1
-            combatant.health = max(
-                1, int(combatant.max_health * (0.15 + 0.10 * rng_func())),
-            )
-            combatant.unconscious = False
-            stabilized_ids.add(combatant.id)
+        if not execute_losers:
+            for combatant in losers:
+                if not (combatant.is_human and combatant.unconscious and combatant.medicines > 0):
+                    continue
+                combatant.medicines -= 1
+                combatant.health = max(
+                    1, int(combatant.max_health * (0.15 + 0.10 * rng_func())),
+                )
+                combatant.unconscious = False
+                stabilized_ids.add(combatant.id)
 
         for combatant in self.attackers + self.defenders:
             if (
