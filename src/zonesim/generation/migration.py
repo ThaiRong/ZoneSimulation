@@ -11,9 +11,10 @@ MONSTER_SOFT_MAX = 45
 MONSTER_MAX_GROUPS_PER_DAY = 3
 
 # Лимит прибытия людей (§14.6)
-HUMAN_MAX_PER_DAY = 1
-HUMAN_ARRIVAL_CHANCE_LOW_POP = 0.3  # при критически малом населении
+HUMAN_MAX_PER_DAY = 2
+HUMAN_ARRIVAL_CHANCE_LOW_POP = 0.6  # при критически малом населении
 HUMAN_ARRIVAL_CHANCE_NORMAL = 0.02  # обычный фоновый приток
+HUMAN_LOW_POP_THRESHOLD = 20  # активных+спящих ниже этого — «критически мало»
 
 
 class MigrationState:
@@ -80,7 +81,11 @@ def _process_human_migration(
         1 for h in humans
         if h.status in (EntityStatus.ACTIVE, EntityStatus.SLEEPING)
     )
-    arrival_chance = HUMAN_ARRIVAL_CHANCE_LOW_POP if current_human_count < 10 else HUMAN_ARRIVAL_CHANCE_NORMAL
+    arrival_chance = (
+        HUMAN_ARRIVAL_CHANCE_LOW_POP
+        if current_human_count < HUMAN_LOW_POP_THRESHOLD
+        else HUMAN_ARRIVAL_CHANCE_NORMAL
+    )
     if rng.random() > arrival_chance:
         return
 

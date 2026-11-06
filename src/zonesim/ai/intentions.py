@@ -117,8 +117,8 @@ def evaluate_actions(ctx: IntentionContext) -> dict[str, float]:
             E += 2.0  # ценность сведений о неисследованном секторе
             R += 6.0  # базовая неопределённость неисследованного маршрута (§9.3)
         elif action == EXIT:
-            if ctx.health_share < 0.25:
-                N += 40.0  # тяжёлое состояние — уходить из Зоны (§9.4)
+            if ctx.health_share < 0.15:
+                N += 30.0  # тяжёлое состояние — уходить из Зоны (§9.4)
             R += (ctx.distance_to_border or 0) / 2.0
 
         u[action] = F + G + E + C + I + N - R * risk_factor

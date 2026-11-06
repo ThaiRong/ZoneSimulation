@@ -163,7 +163,7 @@ class TestTargeting:
         engine._moved_monster_ids = set()
         engine.state.rng.random = lambda: 0.0
 
-        engine._schedule_encounters(is_night=False)
+        engine._schedule_encounters(is_night=False, hour=engine.state.time.hour)
 
         assert len(engine._pending_battles) == 1
         defenders = engine._pending_battles[0]["defenders"]
@@ -390,7 +390,7 @@ class TestFeeding:
 
         engine._phase4_monster_intentions(hour)
         assert group.intention == "feed"
-        engine._schedule_encounters(is_night=False)
+        engine._schedule_encounters(is_night=False, hour=engine.state.time.hour)
         assert engine._pending_battles == []
         assert engine._feeding_claims == {group.id: corpse.id}
 
@@ -431,7 +431,7 @@ class TestFeeding:
         engine.state.rng.random = lambda: 0.9
 
         engine._phase4_monster_intentions(engine.state.time.hour)
-        engine._schedule_encounters(is_night=False)
+        engine._schedule_encounters(is_night=False, hour=engine.state.time.hour)
 
         assert engine._pending_battles == []
         assert group.intention == "feed"
@@ -463,7 +463,7 @@ class TestFeeding:
         corpse = _add_corpse(engine, sector_id)
         engine.state.rng.random = lambda: 0.9
 
-        engine._schedule_encounters(is_night=False)
+        engine._schedule_encounters(is_night=False, hour=engine.state.time.hour)
 
         assert engine._feeding_claims == {strong_group.id: corpse.id}
         assert weak_group.intention == "roam"
@@ -498,7 +498,7 @@ class TestFeeding:
         corpse = _add_corpse(engine, sector_id)
         engine.state.rng.random = lambda: 0.9
 
-        engine._schedule_encounters(is_night=False)
+        engine._schedule_encounters(is_night=False, hour=engine.state.time.hour)
 
         assert engine._feeding_claims == {}
         assert len(engine._pending_battles) == 1
@@ -533,7 +533,7 @@ class TestMonsterVersusMonster:
         engine._phase4_monster_intentions(engine.state.time.hour)
         engine.state.rng.random = lambda: 0.0
 
-        engine._schedule_encounters(is_night=False)
+        engine._schedule_encounters(is_night=False, hour=engine.state.time.hour)
 
         monster_battles = [
             battle for battle in engine._pending_battles

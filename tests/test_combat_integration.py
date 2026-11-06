@@ -102,6 +102,12 @@ class TestEngineCombat:
         npc.health = 20 if at_base else 1
         npc.stamina = 100
         npc.ammo = 10
+        # без медикаментов: проверяем добивание, а не самопомощь (§11.10)
+        for item_id in list(npc.inventory):
+            item = engine.state.items.get(item_id)
+            if item is not None and item.type.name == "MEDICINE":
+                npc.inventory.remove(item_id)
+                engine.state.items.pop(item_id, None)
 
         monster = engine.state.monsters[0]
         for other in engine.state.monsters:

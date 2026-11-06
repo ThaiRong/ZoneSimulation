@@ -362,8 +362,25 @@ class CombatSystem:
                 combatant.medicines -= used
                 to_consume -= used
 
+        # Проигравшие бессознательные люди стабилизируются собственными
+        # медикаментами (§11.10); без медикаментов погибают.
+        stabilized_ids = set()
+        for combatant in losers:
+            if not (combatant.is_human and combatant.unconscious and combatant.medicines > 0):
+                continue
+            combatant.medicines -= 1
+            combatant.health = max(
+                1, int(combatant.max_health * (0.15 + 0.10 * rng_func())),
+            )
+            combatant.unconscious = False
+            stabilized_ids.add(combatant.id)
+
         for combatant in self.attackers + self.defenders:
-            if combatant.unconscious and combatant.id not in helped_ids:
+            if (
+                combatant.unconscious
+                and combatant.id not in helped_ids
+                and combatant.id not in stabilized_ids
+            ):
                 combatant.unconscious = False
                 combatant.is_alive = False
                 combatant.health = 0

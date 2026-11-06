@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from zonesim.monsters.behavior import Monster, MonsterSpecies
 
+# Стартовые балансовые значения охоты (§13.2-13.4, калибровка этап 6)
+HUNT_BASE_CHANCE = 22.0
+HUNT_GROUP_ADVANTAGE = 4.0
+
 
 def calculate_hunt_chance(
     predator: Monster,
@@ -20,7 +24,7 @@ def calculate_hunt_chance(
     - Scavenger: засады, преследование раненых
     - Large: сильные цели, запоминание уронителя
     """
-    base_chance = 30.0
+    base_chance = HUNT_BASE_CHANCE
 
     # Раненая цель — высокий приоритет
     if prey_health_share < 0.3:
@@ -29,11 +33,11 @@ def calculate_hunt_chance(
         base_chance += 10
 
     # Численное преимущество
-    base_chance += group_advantage * 5
+    base_chance += group_advantage * HUNT_GROUP_ADVANTAGE
 
     # Дальность
     if distance == 0:
-        base_chance += 15  # в одном секторе
+        base_chance += 10  # в одном секторе
     elif distance == 1:
         base_chance += 5
 
@@ -52,7 +56,11 @@ def calculate_hunt_chance(
         if prey_health_share > 0.7:
             base_chance -= 15
 
-    return max(5.0, min(base_chance, 90.0))
+    floor = 5.0
+    if not prey_is_monster and prey_health_share > 0.6:
+        # безнадёжные атаки на здоровых людей — редкость
+        floor = 12.0
+    return max(floor, min(base_chance, 90.0))
 
 
 def decide_hunt_action(

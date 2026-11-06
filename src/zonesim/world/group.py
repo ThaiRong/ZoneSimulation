@@ -25,6 +25,7 @@ class HumanGroup:
     prisoners: list[int] = field(default_factory=list)  # id HumanNPC в плену
     guard_schedule: list[dict] = field(default_factory=list)  # [{"npc_id": x, "start_hour": y, "end_hour": z}]
     comfort: bool = False  # комфортный ли сон
+    last_combat_hour: int = -100  # последний бой группы (передышка §11.1)
 
     @property
     def active_member_ids(self) -> list[int]:
@@ -107,6 +108,7 @@ class MonsterGroup:
     target_memory_hour: int = 0
     home_sector_id: int | None = None
     status: str = "active"  # active, dispersing
+    last_combat_hour: int = -100  # последний бой группы (передышка §11.1)
 
     @property
     def member_count(self) -> int:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from zonesim.core.time import GameTime, SeededRNG
@@ -79,6 +79,12 @@ CAPTURE_KIT_REF = {
     "scavenger_pack": "capture.kit.scavenger",
     "large_migrator": "capture.kit.migrator",
 }
+
+# Регенерация здоровья монстров, доля макс. здоровья в час (§13, §14.3)
+MONSTER_HEALTH_REGEN_PASSIVE = 0.02
+MONSTER_HEALTH_REGEN_REST = 0.08
+# Передышка между боями для групп, часов (§11.1)
+COMBAT_COOLDOWN_HOURS = 6
 
 
 @dataclass
@@ -390,17 +396,41 @@ class SimulationEngine:
     REST_TRADE_RELATION = 40      # меновая торговля ценностями
     REST_TRADE_PRICE_SHARE = 0.8  # цена меновой сделки от базовой стоимости
 
+    def _rest_heal(self, group: HumanGroup, members: list[HumanNPC]) -> None:
+        """Лечение аптечкой в час отдыха: один заряд группе, самому раненому. (§14.3)"""
+        medkits = [
+            self.state.items[item_id]
+            for npc in members for item_id in npc.inventory
+            if item_id in self.state.items
+            and self.state.items[item_id].type is ItemType.MEDICINE
+            and self.state.items[item_id].quantity > 0
+        ]
+        if not medkits:
+            return
+        wounded = [npc for npc in members if npc.health_share < 0.7]
+        if not wounded:
+            return
+        patient = min(wounded, key=lambda npc: npc.health_share)
+        medkit = medkits[0]
+        heal = medkit.properties.get("heal_amount", 30)
+        patient.health = min(patient.max_health, patient.health + heal)
+        medkit.quantity -= 1
+        if medkit.quantity <= 0:
+            self._consume_item(medkit, members)
+        self._sync_npc_from_items(patient)
+
     def _process_rest_trade(self, hour: int, resting_groups: list[HumanGroup]) -> None:
         """Торговля как час отдыха у торговца: сначала продажа, потом закупка. (§16)"""
         traders = [
             npc for npc in self.state.stationary_humans
             if npc.stationary_role == "trader" and npc.status == EntityStatus.ACTIVE
         ]
-        if not traders:
-            return
         for group in resting_groups:
             members = self._active_members(group)
             if not members or any(npc.id in self._combat_human_ids for npc in members):
+                continue
+            self._rest_heal(group, members)
+            if not traders:
                 continue
             trader = next(
                 (t for t in traders if t.sector_id == group.sector_id), None,
@@ -1120,7 +1150,7 @@ class SimulationEngine:
             )
 
         self._check_monster_anomaly_contacts(hour, is_night)
-        self._schedule_encounters(is_night)
+        self._schedule_encounters(is_night, hour)
 
     def _check_monster_anomaly_contacts(self, hour: int, is_night: bool) -> None:
         for monster in self.state.monsters:
@@ -1160,7 +1190,7 @@ class SimulationEngine:
                 details={"damage": result["damage"], "anomaly_id": anomaly.id},
             )
 
-    def _schedule_encounters(self, is_night: bool) -> None:
+    def _schedule_encounters(self, is_night: bool, hour: int) -> None:
         """Определяет боевые встречи; сами бои исполняются в фазе 7 (§8)."""
         self._pending_battles = []
         self._combat_human_ids = set()
@@ -1169,6 +1199,12 @@ class SimulationEngine:
         humans = {npc.id: npc for npc in self.state.humans}
         engaged_groups: set[int] = set()
         engaged_monsters: set[int] = set()
+
+        def in_combat_cooldown(*groups) -> bool:
+            return any(
+                hour - getattr(group, "last_combat_hour", -100) < COMBAT_COOLDOWN_HOURS
+                for group in groups
+            )
 
         for sector_id, sector in self.state.sectors.items():
             groups = []
@@ -1201,6 +1237,8 @@ class SimulationEngine:
             for monster_group, monsters in monster_groups:
                 if monster_group.intention in ("feed", "rest"):
                     continue
+                if in_combat_cooldown(monster_group):
+                    continue  # передышка после недавнего боя (§11.1)
                 candidates = [
                     (group, members) for group, members in ordered
                     if group.id not in engaged_groups
@@ -1244,12 +1282,14 @@ class SimulationEngine:
                 for second_group, second_members in ordered[index + 1:]:
                     if second_group.id in engaged_groups:
                         continue
+                    if in_combat_cooldown(first_group, second_group):
+                        continue  # передышка после недавнего боя (§11.1)
                     first_faction = first_members[0].faction
                     second_faction = second_members[0].faction
                     relation = self.state.faction_relations.get(first_faction, second_faction)
                     if first_faction == second_faction or relation > -20:
                         continue
-                    if self.state.rng.random() >= 0.35:
+                    if self.state.rng.random() >= 0.25:
                         continue
 
                     attacker_group, attacker_members = first_group, first_members
@@ -1281,6 +1321,8 @@ class SimulationEngine:
                         monster.id in engaged_monsters for monster in defenders
                     ):
                         continue
+                    if in_combat_cooldown(attacker_group, defender_group):
+                        continue  # передышка после недавнего боя (§11.1)
                     if not self._monsters_attack(attackers, defenders, is_night):
                         continue
                     self._schedule_monster_attack(
@@ -1292,7 +1334,7 @@ class SimulationEngine:
                     )
                     break
 
-        self._resolve_feeding_competition(engaged_monsters)
+        self._resolve_feeding_competition(engaged_monsters, hour)
 
     def _schedule_monster_attack(
         self, attacker_group: MonsterGroup, attackers: list[Monster], defenders: list,
@@ -1333,7 +1375,7 @@ class SimulationEngine:
             ) * health * stamina
         return total * min(1.15, 1 + 0.03 * (len(members) - 1))
 
-    def _resolve_feeding_competition(self, engaged_monsters: set[int]) -> None:
+    def _resolve_feeding_competition(self, engaged_monsters: set[int], hour: int) -> None:
         claims: dict[int, list[tuple[MonsterGroup, list[Monster]]]] = {}
         for group in self.state.monster_groups.values():
             if group.intention != "feed":
@@ -1359,7 +1401,11 @@ class SimulationEngine:
                 strong_power = self._monster_group_power(strongest[1])
                 weak_power = self._monster_group_power(challenger[1])
                 difference = abs(strong_power - weak_power) / max(strong_power, weak_power, 0.001)
-                if difference <= 0.15:
+                rested = all(
+                    hour - getattr(group, "last_combat_hour", -100) >= COMBAT_COOLDOWN_HOURS
+                    for group in (strongest[0], challenger[0])
+                )
+                if difference <= 0.15 and rested:
                     self._schedule_monster_attack(
                         strongest[0], strongest[1], challenger[1], None,
                         strongest[0].sector_id, True,
@@ -1386,12 +1432,14 @@ class SimulationEngine:
         health_share = sum(target.health_share for target in prey) / len(prey)
         predator_health = sum(monster.health_share for monster in monsters) / len(monsters)
         prey_is_monster = isinstance(prey[0], Monster)
-        if predator_health <= 0.2:
+        if predator_health <= 0.35:
             return False
         if species == "territorial_predator" and len(monsters) == 1 and health_share > 0.8:
             return False
         if species == "scavenger_pack" and health_share > 0.6 and len(monsters) <= len(prey):
             return False
+        if not prey_is_monster and health_share > 0.6 and len(monsters) < len(prey):
+            return False  # здоровая группа людей численно сильнее — не атаковать
         chance = calculate_hunt_chance(
             predator=predator,
             prey_health_share=health_share,
@@ -1616,10 +1664,25 @@ class SimulationEngine:
                 else CombatFactory.from_human(entity)
                 for entity in battle["defenders"]
             ]
+            # Отступление не ведёт в сектора с активными аномалиями (§11.7);
+            # если обхода нет — маршрут остаётся прежним.
+            anomaly_sectors = {
+                a.sector_id for a in self.state.anomalies.values()
+                if a.status == AnomalyStatus.ACTIVE
+            }
+            combat_sectors = {
+                sid: replace(
+                    sector,
+                    neighbors=[
+                        n for n in sector.neighbors if n not in anomaly_sectors
+                    ] or list(sector.neighbors),
+                )
+                for sid, sector in self.state.sectors.items()
+            }
             combat = CombatSystem(
                 attackers=attackers,
                 defenders=defenders,
-                sectors=self.state.sectors,
+                sectors=combat_sectors,
                 attacker_is_monster=battle["attacker_is_monster"],
                 defender_is_monster=battle["defender_is_monster"],
                 battle_sector_id=battle["sector_id"],
@@ -1713,6 +1776,20 @@ class SimulationEngine:
                 self._create_corpse(entities[combatant.id], hour)
 
         participants = [entity.id for entity in battle["attackers"] + battle["defenders"]]
+        # Передышка после боя для участвовавших групп (§11.1)
+        for group_key in (
+            "attacker_group_id", "defender_group_id",
+            "attacker_monster_group_id", "defender_monster_group_id",
+        ):
+            group_id = battle.get(group_key)
+            if group_id is None:
+                continue
+            group = (
+                self.state.human_groups.get(group_id)
+                or self.state.monster_groups.get(group_id)
+            )
+            if group is not None:
+                group.last_combat_hour = hour
         self._combat_human_ids.update(
             entity.id for entity in battle["attackers"] + battle["defenders"]
             if isinstance(entity, HumanNPC)
@@ -1855,6 +1932,17 @@ class SimulationEngine:
 
     def _process_monster_rest(self, fed_groups: set[int], is_night: bool) -> None:
         for group in self.state.monster_groups.values():
+            # Регенерация здоровья: пассивная, усиленная в час отдыха (§14.3)
+            for monster in self._monster_group_members(group, active_only=False):
+                if monster.status in (EntityStatus.DEAD, EntityStatus.EXILED):
+                    continue
+                regen = MONSTER_HEALTH_REGEN_PASSIVE
+                if group.intention == "rest":
+                    regen += MONSTER_HEALTH_REGEN_REST
+                monster.health = min(
+                    monster.max_health,
+                    monster.health + monster.max_health * regen,
+                )
             if group.id in fed_groups:
                 continue
             members = self._monster_group_members(group, active_only=False)
