@@ -37,14 +37,22 @@ def _assert_single_item_location(engine):
 def test_starting_equipment_has_unique_ids_and_single_owner():
     engine = SimulationEngine(seed=11)
     humans = engine.state.humans + engine.state.stationary_humans
+    guards = [n for n in humans if n.stationary_role == "guard"]
 
-    assert len(engine.state.items) == len(humans) * 4
+    expected_items = (len(humans) - len(guards)) * 4 + len(guards) * 8
+    assert len(engine.state.items) == expected_items
     assert len({item.id for item in engine.state.items.values()}) == len(engine.state.items)
     for npc in humans:
-        assert len(npc.inventory) == 4
+        if npc.stationary_role == "guard":
+            # стандартные 4 минус снятое снаряжение плюс выдача охраны
+            assert len(npc.inventory) == 8
+            assert npc.ammo == 60 + 12  # стандартные 12 + выдача 60
+            assert npc.medicines == 1 + 3
+        else:
+            assert len(npc.inventory) == 4
+            assert npc.ammo == 12
+            assert npc.medicines == 1
         assert npc.money == 100
-        assert npc.ammo == 12
-        assert npc.medicines == 1
         weapon = engine.state.items[npc.equipped_weapon_id]
         armor = engine.state.items[npc.equipped_armor_id]
         assert weapon.type is ItemType.WEAPON

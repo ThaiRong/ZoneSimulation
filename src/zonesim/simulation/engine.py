@@ -233,6 +233,9 @@ class SimulationEngine:
         self.state.next_group_id = max(self.state.human_groups, default=-1) + 1
         for npc in all_humans:
             self._give_starting_equipment(npc)
+        for npc in self.state.stationary_humans:
+            if npc.stationary_role == "guard":
+                self._equip_guard(npc)
         self._init_trader_stock()
         self._init_trails()
         self._init_shelters()
@@ -761,6 +764,110 @@ class SimulationEngine:
                 )
             ]
 
+    def _equip_guard(self, npc: HumanNPC) -> None:
+        """Охранник базы получает лучшее оружие и броню из каталога,
+        много патронов и аптечек — бесплатно, за счёт группировки."""
+        for item_id in (npc.equipped_weapon_id, npc.equipped_armor_id):
+            item = self.state.items.get(item_id)
+            if item is not None and item_id in npc.inventory:
+                npc.inventory.remove(item_id)
+            self.state.items.pop(item_id, None)
+        weapon_entry = max(
+            (e for e in self.catalog.entries() if e["category"] == "weapon"),
+            key=lambda e: (e["base_damage"], e["base_value"]),
+        )
+        armor_entry = max(
+            (e for e in self.catalog.entries() if e["category"] == "body_armor"),
+            key=lambda e: (e["armor_factor"], e["base_value"]),
+        )
+        weapon = self._spawn_catalog_item(weapon_entry["id"], npc.id)
+        armor = self._spawn_catalog_item(armor_entry["id"], npc.id)
+        npc.equipped_weapon_id = weapon.id
+        npc.equipped_armor_id = armor.id
+        if weapon_entry.get("ammo_type"):
+            self._spawn_catalog_item(weapon_entry["ammo_type"], npc.id, quantity=60)
+        for _ in range(3):
+            self._spawn_catalog_item("gear.medkit.sanitar2", npc.id)
+        self._sync_npc_from_items(npc)
+
+    # --- Ротация охраны: раненый уходит лечиться, пост занимает резервист ---
+
+    GUARD_ROTATION_HEALTH = 0.5    # ниже этого доли здоровья — смена
+    GUARD_RECOVERY_PER_DAY = 0.5   # лазарет базы лечит 50% в сутки
+
+    def _process_guard_rotation(self, hour: int) -> None:
+        """Сильно раненый охранник заменяется резервистом на время лечения."""
+        if hour % 24 != 0:
+            return
+        by_sector: dict[int, list[HumanNPC]] = {}
+        for npc in self.state.stationary_humans:
+            if npc.stationary_role == "guard":
+                by_sector.setdefault(npc.sector_id, []).append(npc)
+        for sector_id, guards in by_sector.items():
+            for guard in guards:
+                if getattr(guard, "reserve_for", None) is not None:
+                    continue  # резервисты не ротируются
+                if getattr(guard, "on_treatment", False):
+                    guard.health = min(
+                        guard.max_health,
+                        guard.health + int(guard.max_health * self.GUARD_RECOVERY_PER_DAY),
+                    )
+                    if guard.health >= guard.max_health:
+                        guard.on_treatment = False
+                        guard.status = EntityStatus.ACTIVE
+                        reserves = [
+                            n for n in by_sector.get(sector_id, [])
+                            if getattr(n, "reserve_for", None) == guard.id
+                            and n.status != EntityStatus.EXILED
+                        ]
+                        for reserve in reserves:
+                            reserve.status = EntityStatus.EXILED  # резервист убыл
+                        self.state.news_manager.create_event(
+                            hour=hour, minute=0, sector_id=sector_id,
+                            event_type="guard_returned", participants=[guard.id],
+                            result="returned", importance=25,
+                            summary=f"Охранник {guard.id} вернулся на пост после лечения",
+                            details={"guard_id": guard.id},
+                        )
+                elif (
+                    guard.status == EntityStatus.ACTIVE
+                    and guard.health_share <= self.GUARD_ROTATION_HEALTH
+                    and not any(
+                        getattr(n, "reserve_for", None) == guard.id
+                        for n in self.state.stationary_humans
+                    )
+                ):
+                    guard.on_treatment = True
+                    guard.status = EntityStatus.SLEEPING
+                    reserve = self._spawn_reserve_guard(guard)
+                    self.state.news_manager.create_event(
+                        hour=hour, minute=0, sector_id=sector_id,
+                        event_type="guard_replacement",
+                        participants=[guard.id, reserve.id], result="replaced",
+                        importance=30,
+                        summary=(
+                            f"Раненый охранник {guard.id} ушёл лечиться,"
+                            f" пост занял резервист {reserve.id}"
+                        ),
+                        details={"guard_id": guard.id, "reserve_id": reserve.id},
+                    )
+
+    def _spawn_reserve_guard(self, wounded: HumanNPC) -> HumanNPC:
+        reserve = HumanNPC(
+            id=self.state.next_human_id,
+            faction=wounded.faction,
+            sector_id=wounded.sector_id,
+            name="Резервист",
+            attack=55, defense=55, attentiveness=55, bravery=70,
+            is_stationary=True, stationary_role="guard",
+            money=0,
+        )
+        self.state.next_human_id += 1
+        reserve.reserve_for = wounded.id
+        self.state.stationary_humans.append(reserve)
+        self._equip_guard(reserve)
+        return reserve
+
     def trade_price(self, item_ref: str, quantity: int = 1) -> float:
         """Цена покупки у торговца: каталог × качество × наценку. (§16)"""
         entry = self.catalog.get(item_ref)
@@ -1252,6 +1359,7 @@ class SimulationEngine:
             self._sync_monster_groups()
         self._process_emission_schedule(hour)
         self._process_shelter_occupation(hour)
+        self._process_guard_rotation(hour)
 
     def _phase2_environment(self, hour: int) -> None:
         """Фаза 2: Окружающая среда и торговля."""
@@ -2500,6 +2608,9 @@ class SimulationEngine:
             )
             if monster_group:
                 monster_group.sector_id = retreat_sector
+                for member_id in monster_group.members:
+                    if member_id in entities and entities[member_id].status != EntityStatus.DEAD:
+                        entities[member_id].sector_id = retreat_sector
 
         for prisoner_ids, captor_group_id in (
             (result.attacker_prisoners, battle["defender_group_id"]),
@@ -2866,9 +2977,16 @@ class SimulationEngine:
                     self._set_unconscious_or_dead(victim, start, hour, cause="capture")
                 outcome = "counterattack"
             else:
+                # монстр уходит: уходит вся его группа, чтобы не разделять состав
+                monster_group = self.state.monster_groups.get(target.group_id)
                 sector = self.state.sectors.get(target.sector_id)
                 if sector and sector.neighbors:
-                    target.sector_id = self.state.rng.choice(list(sector.neighbors))
+                    flee_sector = self.state.rng.choice(list(sector.neighbors))
+                    target.sector_id = flee_sector
+                    if monster_group is not None:
+                        monster_group.sector_id = flee_sector
+                        for member in self._monster_group_members(monster_group, active_only=False):
+                            member.sector_id = flee_sector
                 outcome = "escaped"
             self.state.news_manager.create_event(
                 hour=hour, minute=40, sector_id=group.sector_id,
