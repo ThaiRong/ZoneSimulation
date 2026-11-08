@@ -9,6 +9,9 @@ dependencies = [
     "networkx>=3.0.0",
 ]
 
+[project.scripts]
+zonesim-ui = "zonesim.ui.app:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
