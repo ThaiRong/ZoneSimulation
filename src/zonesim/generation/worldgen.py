@@ -208,11 +208,11 @@ def _spawn_stationary_humans(
     first_id: int,
     rng: SeededRNG,
 ) -> list[HumanNPC]:
-    """Торговец и два охранника на каждой стартовой базе (§6.2)."""
+    """Торговец и четверо охранников на каждой стартовой базе (§6.2)."""
     staff: list[HumanNPC] = []
     for sector_id in start_ids:
         faction = sectors[sector_id].controller_faction or "Бродяги"
-        for role in ("trader", "guard", "guard"):
+        for role in ("trader", "guard", "guard", "guard", "guard"):
             npc_id = first_id + len(staff)
             npc = HumanNPC(
                 id=npc_id,

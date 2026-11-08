@@ -75,6 +75,8 @@ class CombatSystem:
         defender_ambush: bool = False,
         battle_sector_id: int = 0,
         relation: int = 0,
+        attacker_bonus: float = 0.1,
+        defender_bonus: float = 0.1,
     ):
         self.attackers = attackers
         self.defenders = defenders
@@ -82,6 +84,9 @@ class CombatSystem:
         self.max_rounds = max(1, min(max_rounds, self.MAX_ROUNDS_DEFAULT))
         self.attacker_shelter = attacker_has_shelter
         self.defender_shelter = defender_has_shelter
+        # бонус защищающейся стороны: обычное укрытие 0.1, укрепление базы 0.7
+        self.attacker_bonus = attacker_bonus
+        self.defender_bonus = defender_bonus
         self.attacker_is_monster = attacker_is_monster
         self.defender_is_monster = defender_is_monster
         self.attacker_ambush = attacker_ambush
@@ -177,7 +182,10 @@ class CombatSystem:
                 attacker=attacker,
                 defender=defender,
                 ambush_bonus=ambush and self.rounds_fought == 0,
-                shelter_bonus=0.1 if shelter else 0.0,
+                shelter_bonus=(
+                    (self.defender_bonus if side == "attacker" else self.attacker_bonus)
+                    if shelter else 0.0
+                ),
             ).resolve(rng_func)
             results.append(result)
         return results
@@ -239,7 +247,11 @@ class CombatSystem:
             speed_ratio=self._speed_ratio(side),
             escape_att=round(sum(c.attentiveness for c in alive) / len(alive)),
             pursuer_att=round(sum(c.attentiveness for c in enemies) / len(enemies)),
-            shelter_bonus=0.1 if (self.attacker_shelter if side == "attacker" else self.defender_shelter) else 0.0,
+            shelter_bonus=(
+                (self.attacker_bonus if side == "attacker" else self.defender_bonus)
+                if (self.attacker_shelter if side == "attacker" else self.defender_shelter)
+                else 0.0
+            ),
         )
         if pre_combat:
             chance = min(95.0, chance + self.PRE_COMBAT_RETREAT_BONUS)

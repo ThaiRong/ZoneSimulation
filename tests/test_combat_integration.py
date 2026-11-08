@@ -151,6 +151,6 @@ class TestEngineCombat:
         defenders = engine._pending_battles[0]["defenders"]
         guards = [entity for entity in defenders if getattr(entity, "stationary_role", None) == "guard"]
         traders = [entity for entity in defenders if getattr(entity, "stationary_role", None) == "trader"]
-        assert len(guards) == 2
+        assert len(guards) == 4
         assert not traders
         assert all(guard.sector_id == npc.sector_id for guard in guards)

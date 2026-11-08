@@ -18,12 +18,12 @@ class TestWorldPopulation:
             "Борзые": 18,
             "Серая лига": 6,
         }
-        assert len(world["stationary_humans"]) == 9
+        assert len(world["stationary_humans"]) == 15
         assert {npc.id for npc in world["humans"]}.isdisjoint(
             npc.id for npc in world["stationary_humans"]
         )
 
-    def test_every_base_has_trader_and_two_guards(self):
+    def test_every_base_has_trader_and_four_guards(self):
         world = generate_world(seed=42)
         start_ids = {
             sector.id for sector in world["sectors"].values() if sector.is_faction_start
@@ -36,7 +36,7 @@ class TestWorldPopulation:
             ]
             assert Counter(npc.stationary_role for npc in staff) == {
                 "trader": 1,
-                "guard": 2,
+                "guard": 4,
             }
             assert all(npc.is_stationary for npc in staff)
             assert all(npc.group_id is None for npc in staff)
@@ -145,7 +145,7 @@ class TestStationaryStaff:
         for _ in range(48):
             engine.simulate_hour()
 
-        assert len(engine.state.stationary_humans) == 9
+        assert len(engine.state.stationary_humans) == 15
         for npc in engine.state.stationary_humans:
             assert npc.sector_id == initial_positions[npc.id]
             assert npc.group_id is None

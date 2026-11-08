@@ -107,6 +107,16 @@ MONSTER_HEALTH_REGEN_REST = 0.08
 COMBAT_COOLDOWN_HOURS = 6
 # Бонус местных видов монстров к обнаружению аномалий (§12.2)
 MONSTER_NATIVE_ANOMALY_BONUS = 25
+# База — укрепление: бонус защиты обороняющихся (§7.16)
+BASE_FORTIFICATION_BONUS = 0.7
+# Монстры не атакуют, если конечная сила цели превышает их силу более чем вдвое
+MONSTER_ATTACK_POWER_LIMIT = 1.6
+# Видовая сила монстров (§11.2), ключи — канонические значения вида
+SPECIES_POWER_VALUE = {
+    "territorial_predator": 0.33,
+    "scavenger_pack": 0.70,
+    "large_migrator": 4.00,
+}
 
 
 @dataclass
@@ -794,19 +804,23 @@ class SimulationEngine:
 
     GUARD_ROTATION_HEALTH = 0.5    # ниже этого доли здоровья — смена
     GUARD_RECOVERY_PER_DAY = 0.5   # лазарет базы лечит 50% в сутки
+    GUARDS_PER_BASE = 4            # штат охраны базы
 
     def _process_guard_rotation(self, hour: int) -> None:
-        """Сильно раненый охранник заменяется резервистом на время лечения."""
+        """Раненый охранник лечится и заменяется резервистом; погибших
+        группировка восполняет новобранцами."""
         if hour % 24 != 0:
             return
+        guards = [
+            n for n in self.state.stationary_humans
+            if n.stationary_role == "guard"
+        ]
         by_sector: dict[int, list[HumanNPC]] = {}
-        for npc in self.state.stationary_humans:
-            if npc.stationary_role == "guard":
-                by_sector.setdefault(npc.sector_id, []).append(npc)
-        for sector_id, guards in by_sector.items():
-            for guard in guards:
-                if getattr(guard, "reserve_for", None) is not None:
-                    continue  # резервисты не ротируются
+        for npc in guards:
+            by_sector.setdefault(npc.sector_id, []).append(npc)
+
+        for sector_id, sector_guards in by_sector.items():
+            for guard in sector_guards:
                 if getattr(guard, "on_treatment", False):
                     guard.health = min(
                         guard.max_health,
@@ -818,7 +832,8 @@ class SimulationEngine:
                         reserves = [
                             n for n in by_sector.get(sector_id, [])
                             if getattr(n, "reserve_for", None) == guard.id
-                            and n.status != EntityStatus.EXILED
+                            and not getattr(n, "on_treatment", False)
+                            and n.status not in (EntityStatus.EXILED, EntityStatus.DEAD)
                         ]
                         for reserve in reserves:
                             reserve.status = EntityStatus.EXILED  # резервист убыл
@@ -832,14 +847,16 @@ class SimulationEngine:
                 elif (
                     guard.status == EntityStatus.ACTIVE
                     and guard.health_share <= self.GUARD_ROTATION_HEALTH
+                    and not getattr(guard, "on_treatment", False)
                     and not any(
                         getattr(n, "reserve_for", None) == guard.id
-                        for n in self.state.stationary_humans
+                        and n.status not in (EntityStatus.DEAD, EntityStatus.EXILED)
+                        for n in guards
                     )
                 ):
                     guard.on_treatment = True
                     guard.status = EntityStatus.SLEEPING
-                    reserve = self._spawn_reserve_guard(guard)
+                    reserve = self._spawn_guard(guard, name="Резервист", reserve_for=guard.id)
                     self.state.news_manager.create_event(
                         hour=hour, minute=0, sector_id=sector_id,
                         event_type="guard_replacement",
@@ -852,21 +869,60 @@ class SimulationEngine:
                         details={"guard_id": guard.id, "reserve_id": reserve.id},
                     )
 
-    def _spawn_reserve_guard(self, wounded: HumanNPC) -> HumanNPC:
-        reserve = HumanNPC(
+        # восполнение погибших: на каждой базе держим штат охраны
+        for sector in self.state.sectors.values():
+            if not sector.is_faction_start:
+                continue
+            roster = [
+                n for n in self.state.stationary_humans
+                if n.stationary_role == "guard"
+                and n.sector_id == sector.id
+                and n.status == EntityStatus.ACTIVE
+                and getattr(n, "reserve_for", None) is None
+            ]
+            while len(roster) < self.GUARDS_PER_BASE:
+                template = roster[0] if roster else next(
+                    (n for n in self.state.stationary_humans
+                     if n.stationary_role == "trader" and n.sector_id == sector.id),
+                    None,
+                )
+                faction = template.faction if template else sector.controller_faction or "Бродяги"
+                recruit = HumanNPC(
+                    id=self.state.next_human_id,
+                    faction=faction,
+                    sector_id=sector.id,
+                    name="Охранник-новобранец",
+                    attack=55, defense=55, attentiveness=55, bravery=70,
+                    is_stationary=True, stationary_role="guard",
+                    money=0,
+                )
+                self.state.next_human_id += 1
+                self.state.stationary_humans.append(recruit)
+                self._equip_guard(recruit)
+                roster.append(recruit)
+                self.state.news_manager.create_event(
+                    hour=hour, minute=0, sector_id=sector.id,
+                    event_type="guard_recruited", participants=[recruit.id],
+                    result="recruited", importance=25,
+                    summary=f"Группировка «{faction}» пополнила охрану базы новобранцем {recruit.id}",
+                    details={"guard_id": recruit.id, "faction": faction},
+                )
+
+    def _spawn_guard(self, wounded: HumanNPC, name: str, reserve_for: int | None) -> HumanNPC:
+        guard = HumanNPC(
             id=self.state.next_human_id,
             faction=wounded.faction,
             sector_id=wounded.sector_id,
-            name="Резервист",
+            name=name,
             attack=55, defense=55, attentiveness=55, bravery=70,
             is_stationary=True, stationary_role="guard",
             money=0,
         )
         self.state.next_human_id += 1
-        reserve.reserve_for = wounded.id
-        self.state.stationary_humans.append(reserve)
-        self._equip_guard(reserve)
-        return reserve
+        guard.reserve_for = reserve_for
+        self.state.stationary_humans.append(guard)
+        self._equip_guard(guard)
+        return guard
 
     def trade_price(self, item_ref: str, quantity: int = 1) -> float:
         """Цена покупки у торговца: каталог × качество × наценку. (§16)"""
@@ -2231,6 +2287,28 @@ class SimulationEngine:
             and npc.status == EntityStatus.ACTIVE
         ]
 
+    def _squad_power(self, members: list) -> float:
+        """Конечная боевая сила отряда: характеристики, снаряжение,
+        состояние (§11.2)."""
+        total = 0.0
+        for member in members:
+            if isinstance(member, Monster):
+                sp = SPECIES_POWER_VALUE.get(species_value(member), 0.33)
+                bp = sp * (0.5 + member.attack / 100.0)
+            else:
+                weapon = self.state.items.get(member.equipped_weapon_id)
+                damage = (
+                    weapon.properties.get("base_damage", member.weapon_damage)
+                    if weapon else member.weapon_damage
+                )
+                weapon_factor = max(damage / 20.0, 0.25)
+                condition_factor = max(0.25, (weapon.condition if weapon else 50) / 100.0)
+                bp = 1.0 * (0.5 + member.attack / 100.0) * weapon_factor * condition_factor
+            h = 0.35 + 0.65 * member.health_share
+            s = 0.5 + 0.5 * member.stamina_share
+            total += bp * h * s
+        return total
+
     def _monsters_attack(self, monsters: list[Monster], prey: list, is_night: bool) -> bool:
         predator = monsters[0]
         species = species_value(predator)
@@ -2245,6 +2323,17 @@ class SimulationEngine:
             return False
         if not prey_is_monster and health_share > 0.6 and len(monsters) < len(prey):
             return False  # здоровая группа людей численно сильнее — не атаковать
+        # решение по конечной силе отряда, а не только по здоровью и численности
+        prey_power = self._squad_power(prey)
+        if not prey_is_monster:
+            sector = self.state.sectors.get(prey[0].sector_id)
+            if sector is not None and sector.is_faction_start:
+                prey_power *= 1.0 + BASE_FORTIFICATION_BONUS  # укрепление базы
+        predator_power = self._squad_power(monsters)
+        if predator_power <= 0:
+            return False
+        if prey_power > predator_power * MONSTER_ATTACK_POWER_LIMIT:
+            return False
         chance = calculate_hunt_chance(
             predator=predator,
             prey_health_share=health_share,
@@ -2540,6 +2629,16 @@ class SimulationEngine:
                 battle_sector_id=battle["sector_id"],
                 relation=battle.get("relation", 0),
                 attacker_ambush=battle.get("attacker_ambush", False),
+                # базы и стационарные укрытия — опорные пункты при обороне (§7.16)
+                defender_has_shelter=(
+                    not battle["defender_is_monster"]
+                    and battle["sector_id"] in self._shelter_sector_ids()
+                ),
+                defender_bonus=(
+                    BASE_FORTIFICATION_BONUS
+                    if self.state.sectors[battle["sector_id"]].is_faction_start
+                    else 0.1
+                ),
             )
             result = combat.fight(self.state.rng.random)
             self._apply_battle_result(battle, combat, result, hour)
@@ -3041,7 +3140,9 @@ class SimulationEngine:
             if npc.id in self._combat_human_ids or npc.group_id in acted_groups:
                 continue
             if npc.status == EntityStatus.SLEEPING:
-                self._sleep_tick(npc)
+                if not getattr(npc, "on_treatment", False):
+                    self._sleep_tick(npc)
+                # лечащийся охранник не просыпается сам: его будит ротация
                 continue
             if npc.status == EntityStatus.UNCONSCIOUS:
                 self._unconscious_tick(npc, hour)
