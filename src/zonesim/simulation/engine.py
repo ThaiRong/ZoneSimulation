@@ -2257,7 +2257,8 @@ class SimulationEngine:
         )
 
     def _rest_tick(self, npc: HumanNPC) -> None:
-        """Отдых: восстановление ½ темпа комфортного сна при комфорте. (§14.3)"""
+        """Отдых: ½ темпа комфортного сна при комфорте; на базе своей
+        группировки — платное лечение до полного здоровья за 2 часа. (§14.3)"""
         group = self.state.human_groups.get(npc.group_id)
         member_ids = set(group.members) if group else set()
         # Комфорт отдыха — посторонний активный NPC в секторе (персонал базы,
@@ -2268,10 +2269,26 @@ class SimulationEngine:
             and other.id not in member_ids
             for other in self.state.humans + self.state.stationary_humans
         )
-        if not comfort:
+        if comfort:
+            max_st = npc.max_stamina
+            npc.stamina = min(max_st, npc.stamina + max_st * 0.5 / HUMAN_COMFORT_HOURS)
+        self._base_heal_tick(npc)
+
+    def _base_heal_tick(self, npc: HumanNPC) -> None:
+        """Лечение на базе своей группировки: курс 2 часа до полного
+        здоровья, оплата — половина цены аптечки за курс."""
+        home = self._home_sector_id(npc.faction)
+        if home is None or npc.sector_id != home or npc.health >= npc.max_health:
             return
-        max_st = npc.max_stamina
-        npc.stamina = min(max_st, npc.stamina + max_st * 0.5 / HUMAN_COMFORT_HOURS)
+        hour = self.state.time.hour
+        heal_until = getattr(npc, "base_heal_until", -100)
+        if hour >= heal_until:
+            course_cost = round(self.trade_price("gear.medkit.sanitar2") / 2, 1)
+            if npc.money < course_cost:
+                return  # не хватает денег — база не лечит
+            npc.money -= course_cost
+            npc.base_heal_until = hour + 2
+        npc.health = min(npc.max_health, npc.health + npc.max_health / 2)
 
     def _research_tick(self, npc: HumanNPC, hour: int) -> None:
         """Исследование известной аномалии — основное действие часа (§12.3)."""

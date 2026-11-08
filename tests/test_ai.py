@@ -54,8 +54,8 @@ class TestUtilityFormula:
         assert night > day
 
     def test_critical_health_prioritizes_rest_or_exit(self):
-        """§9.4: при критическом здоровье приоритет — лечение, убежище или выход."""
-        ctx = make_ctx(health_share=0.1, distance_to_border=1)
+        """§9.4: при критическом здоровье приоритет — лечение на базе или выход."""
+        ctx = make_ctx(health_share=0.1, can_rest=True, distance_to_border=1)
         u = evaluate_actions(ctx)
         best = max(u, key=u.get)
         assert best in (REST, EXIT)

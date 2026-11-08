@@ -62,6 +62,7 @@ class HumanNPC(BaseEntity):
     is_stationary: bool = False
     stationary_role: str | None = None  # trader / guard
     awake_since_hour: int = 0  # час последнего пробуждения (сон необходим раз в 24 ч)
+    base_heal_until: int = -100  # лечение на базе оплачено до этого часа (§14.3)
 
     @property
     def health_share(self) -> float:
