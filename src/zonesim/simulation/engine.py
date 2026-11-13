@@ -92,6 +92,7 @@ from zonesim.relations.news import NewsManager
 
 from zonesim.knowledge.fact import KnowledgeBase, KnowledgeType
 from zonesim.persistence import SaveManager
+from zonesim.simulation.invariants import InvariantViolation, assert_world_invariants
 
 
 CAPTURE_KIT_REF = {
@@ -1293,6 +1294,13 @@ class SimulationEngine:
         day = self.state.time.day
         phase = self.state.time.current_phase
         is_night = self.state.time.is_night()
+
+        # Проверка инвариантов мира (§22 ТЗ) — перед началом расчёта
+        errors = assert_world_invariants(self.state)
+        if errors:
+            raise InvariantViolation(
+                f"Hour={hour}, Day={day}: " + "; ".join(errors[:10])
+            )
 
         events: list[dict] = []
 
