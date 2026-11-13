@@ -60,6 +60,7 @@ from zonesim.monsters.hunt import should_pursue
 
 from zonesim.economy.contracts import ContractManager
 from zonesim.economy.trade import CaptureManager, ImportExportManager
+from zonesim.economy.pricing import calculate_sell_price, get_type_multiplier
 
 from zonesim.anomalies.core import Anomaly as AnomalyEntity, AnomalyType, AnomalyStatus
 from zonesim.anomalies.damage import apply_anomaly_damage, check_anomaly_contact
@@ -119,6 +120,10 @@ SPECIES_POWER_VALUE = {
     "large_migrator": 4.00,
 }
 
+# Ситуативный торговец «Серой лиги» — константы (§16.6)
+CONDITIONAL_TRADER_DURATION = 12          # часов работы
+CONDITIONAL_TRADER_KNOWLEDGE_LEAD = 3     # часа за 2-4 до появления
+
 
 @dataclass
 class SimulationState:
@@ -174,6 +179,14 @@ class SimulationState:
     visit_memory: dict[int, dict[int, int]] = field(default_factory=dict)  # npc_id -> sector -> hour
 
     config: dict = field(default_factory=dict)
+
+    # Ситуативный торговец «Серой лиги» (§16.6)
+    next_conditional_spawn_hour: int = -1  # когда запланирован следующий
+    conditional_trader_id: int | None = None  # ID NPC-торговца
+    conditional_trader_sector: int = -1       # сектор появления
+    conditional_trader_start_hour: int = -1   # час появления
+    conditional_trader_end_hour: int = -1     # час ухода (старт + 12ч)
+    conditional_trader_knowledge_hour: int = -1  # когда лига узнала расписание
 
 
 class SimulationEngine:
@@ -422,7 +435,37 @@ class SimulationEngine:
             npc.sector_id for npc in self.state.stationary_humans
             if npc.stationary_role == "trader" and npc.status == EntityStatus.ACTIVE
         }
+        # Временная база ситуативного торговца — только REST (не SLEEP)
+        if (
+            self.state.conditional_trader_id is not None
+            and self.state.conditional_trader_sector >= 0
+            and self.state.conditional_trader_start_hour >= 0
+            and self.state.conditional_trader_end_hour >= 0
+        ):
+            current_hour = self.state.time.hour
+            if self.state.conditional_trader_start_hour <= current_hour < self.state.conditional_trader_end_hour:
+                ids.add(self.state.conditional_trader_sector)
         return ids
+
+    def _conditional_trader_is_active(self) -> bool:
+        """Проверяет, что ситуативный торговец ещё работает."""
+        if self.state.conditional_trader_id is None:
+            return False
+        current_hour = self.state.time.hour
+        return (
+            self.state.conditional_trader_start_hour <= current_hour
+            and current_hour < self.state.conditional_trader_end_hour
+        )
+
+    def _conditional_trader_can_sleep(self) -> bool:
+        """Временная база: отдых (REST) можно, но спать (SLEEP) нельзя."""
+        return self._conditional_trader_is_active()
+
+    def _conditional_trader_base_sector(self) -> int | None:
+        """Возвращает ID сектора временной базы или None."""
+        if self._conditional_trader_is_active():
+            return self.state.conditional_trader_sector
+        return None
 
     def _group_in_shelter(self, group: HumanGroup) -> bool:
         return group.sector_id in self._shelter_sector_ids()
@@ -444,6 +487,150 @@ class SimulationEngine:
         }
         targets = self._shelter_sector_ids() - occupied
         return targets or self._shelter_sector_ids()
+
+    def _schedule_conditional_trader(self, hour: int) -> None:
+        """Запланировать следующий появление ситуативного торговца. (§16.6)"""
+        if self.state.next_conditional_spawn_hour >= 0:
+            return  # уже запланирован
+        
+        # Интервал 48-96 часов
+        self.state.next_conditional_spawn_hour = hour + self.state.rng.randint(48, 96)
+
+    def _process_conditional_trader_schedule(self, hour: int) -> None:
+        """Проверяет и создаёт ситуативного торговца. (§16.6)"""
+        state = self.state
+        
+        # Планируем если не запланирован
+        if state.next_conditional_spawn_hour < 0:
+            self._schedule_conditional_trader(hour)
+        
+        # Рассылаем знания лиге за 2-4 часа до появления
+        if (
+            state.next_conditional_spawn_hour >= 0
+            and state.conditional_trader_knowledge_hour < 0
+            and hour >= state.next_conditional_spawn_hour - CONDITIONAL_TRADER_KNOWLEDGE_LEAD
+        ):
+            state.conditional_trader_knowledge_hour = hour
+            self._broadcast_conditional_trader_info(hour)
+        
+        # Создаём торговца
+        if (
+            state.next_conditional_spawn_hour >= 0
+            and state.conditional_trader_id is None
+            and hour >= state.next_conditional_spawn_hour
+        ):
+            self._spawn_conditional_trader(hour)
+
+    def _broadcast_conditional_trader_info(self, hour: int) -> None:
+        """Рассылает знания о ситуативном торговце NPC «Серой лиги». (§16.6)"""
+        # Сектор выбирается случайно
+        sector_ids = list(self.state.sectors.keys())
+        sector = self.state.rng.choice(sector_ids)
+        self.state.conditional_trader_sector = sector
+        
+        for npc in self.state.humans:
+            if npc.faction != "Серая лига":
+                continue
+            if npc.status in (EntityStatus.DEAD, EntityStatus.EXILED):
+                continue
+            kb = self.state.knowledge_bases.setdefault(npc.id, KnowledgeBase())
+            kb.add_manual(
+                npc.id,
+                KnowledgeType.TRADER,
+                subject_id=self.state.next_conditional_spawn_hour,
+                payload={
+                    "type": "conditional_trader",
+                    "sector_id": sector,
+                    "start_hour": self.state.next_conditional_spawn_hour,
+                    "end_hour": self.state.next_conditional_spawn_hour + CONDITIONAL_TRADER_DURATION,
+                },
+                hour=hour,
+            )
+        
+        self.state.news_manager.create_event(
+            hour=hour, minute=0, sector_id=0,
+            event_type="conditional_trader_schedule",
+            participants=[],
+            result="scheduled",
+            importance=40,
+            summary=f"«Серая лига» получила расписание ситуативного торговца: сектор {sector}, начало к часу {self.state.next_conditional_spawn_hour}",
+            details={"sector_id": sector, "start_hour": self.state.next_conditional_spawn_hour},
+        )
+
+    def _spawn_conditional_trader(self, hour: int) -> None:
+        """Создаёт ситуативного торговца. (§16.6)"""
+        state = self.state
+        
+        # Создаём NPC-торговца
+        trader = HumanNPC(
+            id=state.next_human_id,
+            sector_id=state.conditional_trader_sector,
+            faction="Серая лига",
+            name="Ситуативный торговец",
+            attack=40, defense=40, attentiveness=60, bravery=50,
+            is_stationary=False,  # мобильный
+            stationary_role=None,
+            money=1000,
+        )
+        state.next_human_id += 1
+        state.humans.append(trader)
+        state.conditional_trader_id = trader.id
+        
+        # Устанавливаем время работы: 12 часов
+        state.conditional_trader_start_hour = hour
+        state.conditional_trader_end_hour = hour + CONDITIONAL_TRADER_DURATION
+        
+        # Даем стартовое снаряжение
+        self._give_starting_equipment(trader)
+        
+        self.state.news_manager.create_event(
+            hour=hour, minute=0, sector_id=state.conditional_trader_sector,
+            event_type="conditional_trader_appear",
+            participants=[trader.id],
+            result="appeared",
+            importance=60,
+            summary=f"Ситуативный торговец «Серой лиги» появился в секторе {state.conditional_trader_sector}",
+            details={"trader_id": trader.id, "sector_id": state.conditional_trader_sector},
+        )
+
+    def _expire_conditional_trader_if_expired(self, hour: int) -> None:
+        """Удаляет ситуативного торговца через 12 часов. (§16.6)"""
+        state = self.state
+        
+        if state.conditional_trader_id is None:
+            return
+        
+        if hour >= state.conditional_trader_end_hour:
+            # Торговец уходит
+            trader_id = state.conditional_trader_id
+            sector = state.conditional_trader_sector
+            
+            # Находим NPC и помечаем как EXILED
+            for npc in state.humans:
+                if npc.id == trader_id:
+                    npc.status = EntityStatus.EXILED
+                    break
+            
+            self.state.news_manager.create_event(
+                hour=hour, minute=0, sector_id=sector,
+                event_type="conditional_trader_depart",
+                participants=[trader_id],
+                result="departed",
+                importance=30,
+                summary=f"Ситуативный торговец покинул сектор {sector} (истекло 12 часов)",
+                details={"trader_id": trader_id},
+            )
+            
+            # Сбрасываем состояние
+            state.conditional_trader_id = None
+            state.conditional_trader_sector = -1
+            state.conditional_trader_start_hour = -1
+            state.conditional_trader_end_hour = -1
+            state.conditional_trader_knowledge_hour = -1
+            
+            # Планируем следующее появление
+            self._schedule_conditional_trader(hour)
+
 
     # --- Выброс (§12.7) ---
 
@@ -926,11 +1113,34 @@ class SimulationEngine:
         return guard
 
     def trade_price(self, item_ref: str, quantity: int = 1) -> float:
-        """Цена покупки у торговца: каталог × качество × наценку. (§16)"""
+        """Цена покупки у торговца с учётом stock_multiplier (§16.3)."""
         entry = self.catalog.get(item_ref)
-        return round(
-            entry["base_value"] * entry.get("quality", 1.0) * self.TRADE_MARKUP * quantity, 1,
-        )
+        base_price = entry["base_value"] * entry.get("quality", 1.0)
+        
+        # Находим торговца для этого предмета
+        trader_id = self._find_trader_for_item(item_ref)
+        if trader_id is None:
+            # Фоллбэк: простая формула
+            return round(base_price * self.TRADE_MARKUP * quantity, 1)
+        
+        # Получаем текущий запас
+        stock = self.state.trader_stock.get(trader_id, {})
+        current_stock = stock.get(item_ref, 0)
+        target_stock = self.TRADER_START_QTY.get(entry["category"], 1)
+        
+        # Используем формулы ТЗ §16.3
+        type_mult = get_type_multiplier(item_ref)
+        sell_price = calculate_sell_price(base_price, current_stock, target_stock, type_mult)
+        
+        return round(sell_price * quantity, 1)
+
+    def _find_trader_for_item(self, item_ref: str) -> int | None:
+        """Находит ID торговца для данного предмета."""
+        # Для MVP: используем первого активного торговца
+        for npc in self.state.stationary_humans:
+            if npc.stationary_role == "trader" and npc.status == EntityStatus.ACTIVE:
+                return npc.id
+        return None
 
     # Скупочная цена ценностей (доля базовой стоимости)
     SELL_PRICE_SHARE = 0.6
@@ -1424,9 +1634,18 @@ class SimulationEngine:
         self._process_emission_schedule(hour)
         self._process_shelter_occupation(hour)
         self._process_guard_rotation(hour)
+        self._process_conditional_trader_schedule(hour)
+        self._expire_conditional_trader_if_expired(hour)
 
     def _phase2_environment(self, hour: int) -> None:
-        """Фаза 2: Окружающая среда и торговля."""
+        """Фаза 2: Окружающая среда и торговля. (§8)
+        
+        — Формирование артефактов (§12.5)
+        — Обработка контрактов
+        """
+        # Формирование артефактов (§12.5, Фаза 2)
+        self._process_artifact_formations(hour)
+        
         # Обработка контрактов
         expired = self.state.contracts.expire_inactive_contracts(hour)
         for cid in expired:
@@ -3202,6 +3421,10 @@ class SimulationEngine:
                             details=migration,
                         )
 
+        # Формирование артефактов вынесено в _phase2_environment (§12.7, Фаза 2)
+
+    def _process_artifact_formations(self, hour: int) -> None:
+        """Формирование артефактов — Фаза 2: Окружающая среда. (§12.5)"""
         # Формирование артефактов; во время выброса — с ускорением (§12.7)
         acceleration = (
             EMISSION_ARTIFACT_ACCELERATION if self._emission_active(hour) else 1
