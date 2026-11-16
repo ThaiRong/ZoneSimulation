@@ -73,6 +73,8 @@ class HumanGroup:
         npcs: dict[int, HumanNPC],
         stationary: dict[int, HumanNPC],
         shelters: dict[int, object],
+        temp_shelters: dict[int, object],
+        sectors: dict[int, object],
         sector_id: int,
         faction: str | None = None,
     ) -> bool:
@@ -81,34 +83,38 @@ class HumanGroup:
         Условия комфорта (любое из):
         1. Группа находится в секторе базы своей/союзной/нейтральной фракции
            (постоянное убежище)
-        2. Есть активный Shelter (StormShelter или временный) в секторе группы
-        3. Есть активный стационарный охранник в секторе
-        4. Есть член группы, дежурящий (guard_schedule, бодрствует)
+        2. Есть активный Shelter (временное) в секторе группы
+        3. Есть активный StormShelter в секторе
+        4. Есть активный стационарный охранник в секторе
+        5. Есть член группы, дежурящий (guard_schedule, бодрствует)
         """
         # 1. Проверка базы фракции
         if faction:
-            for sid, sector in shelters.get("_sectors", {}).items():
+            for sid, sector in sectors.items():
                 if sid == sector_id and getattr(sector, "is_faction_start", False):
                     # Это стартовый сектор — проверяем контроллера
                     controller = getattr(sector, "controller_faction", None)
                     if controller is None or controller == faction:
                         return True
 
-        # 2. Проверка убежищ в секторе
-        for shelter in shelters.values():
+        # 2. Проверка Shelter (временных убежищ) в секторе
+        for shelter in temp_shelters.values():
             if hasattr(shelter, "sector_id") and shelter.sector_id == sector_id:
-                # StormShelter или Shelter
                 if hasattr(shelter, "destroyed") and shelter.destroyed:
                     continue
                 if hasattr(shelter, "is_active") and not shelter.is_active:
                     continue
-                if hasattr(shelter, "owner_group_id") and shelter.owner_group_id == self.id:
+                if hasattr(shelter, "participant_count") and shelter.participant_count > 0:
                     return True
+
+        # 3. Проверка StormShelter (стационарных убежищ) в секторе
+        for shelter in shelters.values():
+            if hasattr(shelter, "sector_id") and shelter.sector_id == sector_id:
                 # StormShelter доступен всем
                 if type(shelter).__name__ == "StormShelter":
                     return True
 
-        # 3. Стационарные охранники в секторе
+        # 4. Стационарные охранники в секторе
         for npc_id, npc in stationary.items():
             if (
                 npc.stationary_role == "guard"
@@ -117,14 +123,14 @@ class HumanGroup:
             ):
                 return True
 
-        # 4. Дежурный из группы (guard_schedule)
+        # 5. Дежурный из группы (guard_schedule)
         for entry in self.guard_schedule:
             if entry.get("npc_id") in self.members:
                 npc = npcs.get(entry["npc_id"])
                 if npc and npc.status == EntityStatus.ACTIVE and npc.sector_id == sector_id:
                     return True
 
-        # 5. Бодрствующий член группы (охраняет)
+        # 6. Бодрствующий член группы (охраняет)
         for mid in self.members:
             npc = npcs.get(mid)
             if npc and npc.status == EntityStatus.ACTIVE and npc.sector_id == sector_id:

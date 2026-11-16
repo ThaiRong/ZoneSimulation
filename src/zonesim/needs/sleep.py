@@ -75,6 +75,8 @@ def human_sleep_recover(
     rng,
     stationary: dict[int, object] | None = None,
     shelters: dict[int, object] | None = None,
+    temp_shelters: dict[int, object] | None = None,
+    sectors: dict[int, object] | None = None,
     faction: str | None = None,
 ) -> float:
     """
@@ -88,6 +90,8 @@ def human_sleep_recover(
         npcs,
         stationary or {},
         shelters or {},
+        temp_shelters or {},
+        sectors or {},
         group.sector_id,
         faction,
     )

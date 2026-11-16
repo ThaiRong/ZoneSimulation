@@ -53,7 +53,7 @@ from zonesim.anomalies.research import research_anomaly
 
 from zonesim.world.group import HumanGroup, MonsterGroup
 from zonesim.world.catalog import ItemCatalog
-from zonesim.world.shelter import StormShelter
+from zonesim.world.shelter import StormShelter, Shelter
 from zonesim.monsters.behavior import choose_group_intention, select_weakest_target, species_value
 from zonesim.monsters.feed import FeedManager
 from zonesim.monsters.hunt import should_pursue
@@ -155,9 +155,11 @@ class SimulationState:
 
     stashs: list[Stash] = field(default_factory=list)
     shelter_count: int = 0
+    next_shelter_id: int = 100  # ID для временных убежищ
     trader_stock: dict[int, dict[str, int]] = field(default_factory=dict)  # npc торговца -> item_ref -> количество
     trails: list[list[int]] = field(default_factory=list)  # рёбра-тропы [a, b] (§10.4)
-    shelters: dict[int, "StormShelter"] = field(default_factory=dict)  # укрытия (§7.16)
+    shelters: dict[int, "StormShelter"] = field(default_factory=dict)  # стационарные укрытия (§7.16)
+    temp_shelters: dict[int, Shelter] = field(default_factory=dict)  # временные убежища
     next_emission_hour: int = -1      # час начала следующего выброса (§12.7)
     emission_start_hour: int = -1
     emission_end_hour: int = -1
@@ -469,6 +471,103 @@ class SimulationEngine:
 
     def _group_in_shelter(self, group: HumanGroup) -> bool:
         return group.sector_id in self._shelter_sector_ids()
+
+    def _create_shelter(self, group: HumanGroup, sector_id: int) -> int | None:
+        """Создаёт временное убежище в секторе. (§7.10)"""
+        # Проверяем что нет Shelter в секторе
+        for shelter in self.state.temp_shelters.values():
+            if shelter.sector_id == sector_id and shelter.is_active:
+                return None  # Уже есть
+        
+        # Проверяем что в секторе нет монстров
+        for monster in self.state.monsters:
+            if monster.sector_id == sector_id and monster.status == EntityStatus.ACTIVE:
+                return None  # Монстры не должны быть рядом
+        
+        # Создаём Shelter
+        shelter_id = self.state.next_shelter_id
+        self.state.next_shelter_id += 1
+        
+        npc_ids = list(group.members)
+        shelter = Shelter(
+            id=shelter_id,
+            sector_id=sector_id,
+            owner_group_id=group.id,
+            owner_faction="",
+            created_hour=self.state.time.hour,
+            last_used_hour=self.state.time.hour,
+            quality=50,
+        )
+        shelter.add_group(group.id, npc_ids)
+        self.state.temp_shelters[shelter_id] = shelter
+        
+        self.state.news_manager.create_event(
+            hour=self.state.time.hour, minute=0, sector_id=sector_id,
+            event_type="shelter_created", participants=npc_ids, result="created",
+            importance=20,
+            summary=f"Группа {group.id} построила убежище в секторе {sector_id}",
+            details={"shelter_id": shelter_id, "group_id": group.id},
+        )
+        return shelter_id
+
+    def _update_shelter_participants(self, hour: int) -> None:
+        """Обновляет участников Shelter и удаляет пустые группы."""
+        npcs = {npc.id: npc for npc in self.state.humans}
+        
+        for shelter_id, shelter in list(self.state.temp_shelters.items()):
+            if not shelter.is_active:
+                continue
+            
+            # Обновляем участников
+            for group_id, npc_ids in list(shelter.participants.items()):
+                group = self.state.human_groups.get(group_id)
+                if group is None:
+                    shelter.remove_group(group_id)
+                    continue
+                
+                # Проверяем что группа жива и в том же секторе
+                active_members = [
+                    mid for mid in group.members
+                    if mid in npcs and npcs[mid].sector_id == shelter.sector_id
+                    and npcs[mid].status not in (EntityStatus.DEAD, EntityStatus.EXILED)
+                ]
+                
+                if not active_members:
+                    shelter.remove_group(group_id)
+                else:
+                    shelter.participants[group_id] = active_members
+            
+            # Проверяем экспирацию
+            if shelter.expire(hour):
+                self.state.news_manager.create_event(
+                    hour=hour, minute=0, sector_id=shelter.sector_id,
+                    event_type="shelter_expired", participants=[], result="expired",
+                    importance=5,
+                    summary=f"Убежище {shelter_id} в секторе {shelter.sector_id} разрушено",
+                    details={"shelter_id": shelter_id},
+                )
+                del self.state.temp_shelters[shelter_id]
+
+    def _shelter_sector_ids(self) -> set[int]:
+        """Сектора, дающие защиту: временные убежища, стационарные, базы, торговцы. (§12.7)"""
+        ids = {s.sector_id for s in self.state.temp_shelters.values() if s.is_active and s.participant_count > 0}
+        ids |= {s.sector_id for s in self.state.shelters.values()}
+        ids |= {s.id for s in self.state.sectors.values() if s.is_faction_start}
+        ids |= {
+            npc.sector_id for npc in self.state.stationary_humans
+            if npc.stationary_role == "trader" and npc.status == EntityStatus.ACTIVE
+        }
+        # Временная база ситуативного торговца — только REST (не SLEEP)
+        if (
+            self.state.conditional_trader_id is not None
+            and self.state.conditional_trader_sector >= 0
+            and self.state.conditional_trader_start_hour >= 0
+            and self.state.conditional_trader_end_hour >= 0
+        ):
+            current_hour = self.state.time.hour
+            if self.state.conditional_trader_start_hour <= current_hour < self.state.conditional_trader_end_hour:
+                ids.add(self.state.conditional_trader_sector)
+        return ids
 
     def _emission_active(self, hour: int) -> bool:
         return is_emission_active(
@@ -1581,6 +1680,7 @@ class SimulationEngine:
         self._sync_human_groups()
         self._sync_monster_groups()
         self._expire_findings(hour)
+        self._update_shelter_participants(hour)
 
     def _sync_human_groups(self) -> None:
         """Убирает выбывших и удаляет пустые группы, сохраняя инварианты §7.5."""
@@ -1787,6 +1887,8 @@ class SimulationEngine:
                     all_npcs,
                     {n.id: n for n in self.state.stationary_humans},
                     self.state.shelters,
+                    self.state.temp_shelters,
+                    self.state.sectors,
                     group.sector_id,
                     leader.faction if leader else None,
                 ),
@@ -2664,6 +2766,8 @@ class SimulationEngine:
             self.state.rng,
             stationary={n.id: n for n in self.state.stationary_humans},
             shelters=self.state.shelters,
+            temp_shelters=self.state.temp_shelters,
+            sectors=self.state.sectors,
             faction=npc.faction,
         )
 

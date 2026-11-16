@@ -103,7 +103,7 @@ class TestSleepRecovery:
 
         # Комфортный сон: есть бодрствующий член группы (охранник)
         assert group.is_comfort_sleep_possible(
-            npcs, {}, {}, 0, "Бродяги"
+            npcs, {}, {}, {}, {}, 0, "Бродяги"
         ) is True
 
         time = GameTime(22)
@@ -122,7 +122,7 @@ class TestSleepRecovery:
 
         # Нет охранника — некомфортный сон
         assert group.is_comfort_sleep_possible(
-            npcs, {}, {}, 0, "Бродяги"
+            npcs, {}, {}, {}, {}, 0, "Бродяги"
         ) is False
 
         time = GameTime(22)
