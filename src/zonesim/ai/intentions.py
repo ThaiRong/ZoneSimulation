@@ -22,8 +22,9 @@ EXIT = "exit_zone"
 SHELTER = "shelter"        # укрытие от выброса (§12.7)
 HELP = "help_distress"     # помощь по сигналу бедствия (§16.10)
 AMBUSH = "ambush"          # засада (§10.4)
+CREATE_SHELTER = "create_shelter"  # создание временного убежища (§7.10)
 
-ALL_ACTIONS = (SLEEP, REST, RESEARCH, DESTROY, CAPTURE, EXPLORE, EXIT, SHELTER, HELP, AMBUSH)
+ALL_ACTIONS = (SLEEP, REST, RESEARCH, DESTROY, CAPTURE, EXPLORE, EXIT, SHELTER, HELP, AMBUSH, CREATE_SHELTER)
 
 # Фракционные приоритеты F (§7.3). Меняют вероятность, не запрещают действия.
 FACTION_FLAVOR: dict[str, dict[str, float]] = {
@@ -54,6 +55,7 @@ class IntentionContext:
     hours_awake: float = 0.0        # часов с последнего пробуждения
     can_help: bool = False          # известен активный сигнал бедствия (§16.10)
     distress_distance: int = 6      # рёбер до сектора сигнала
+    can_create_shelter: bool = False # есть материалы для создания убежища (§7.10)
 
 
 def evaluate_actions(ctx: IntentionContext) -> dict[str, float]:
@@ -149,6 +151,15 @@ def evaluate_actions(ctx: IntentionContext) -> dict[str, float]:
             ambush_chance = 55 + 0.5 * ctx.bravery  # упрощённо по ТЗ §10.4
             R += (100 - ambush_chance) / 10.0  # риск провала засады
             E += 10.0  # внезапность даёт ×1.25 атаки в первом раунде
+        elif action == CREATE_SHELTER:
+            # Создание убежища требует материалов и приоритетнее REST (§7.10)
+            if not ctx.can_create_shelter:
+                u[action] = float("-inf")
+                continue
+            E += 12.0  # защита от выброса и комфортный сон
+            R += 3.0  # затраты материалов
+            # Приоритет выше REST: базовый бонус N
+            N += 15.0
 
         u[action] = F + G + E + C + I + N - R * risk_factor
 

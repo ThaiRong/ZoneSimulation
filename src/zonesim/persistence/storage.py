@@ -15,7 +15,7 @@ from zonesim.persistence.serialization import state_from_dict, state_to_dict
 if TYPE_CHECKING:
     from zonesim.simulation.engine import SimulationState
 
-FORMAT_VERSION = 10
+FORMAT_VERSION = 11
 
 
 class SaveError(Exception):

@@ -27,7 +27,7 @@ from zonesim.relations.personal import PersonalRelations
 from zonesim.world.entity import EntityStatus, EntityType, HumanNPC, Monster, MonsterSpecies
 from zonesim.world.group import HumanGroup, MonsterGroup
 from zonesim.world.item import Item, ItemType
-from zonesim.world.shelter import StormShelter
+from zonesim.world.shelter import Shelter, StormShelter
 from zonesim.world.sector import Sector
 from zonesim.world.stash import Stash
 
@@ -140,6 +140,9 @@ def state_to_dict(state: SimulationState) -> dict[str, Any]:
         "conditional_trader_start_hour": state.conditional_trader_start_hour,
         "conditional_trader_end_hour": state.conditional_trader_end_hour,
         "conditional_trader_knowledge_hour": state.conditional_trader_knowledge_hour,
+        # Временные убежища (§7.10)
+        "temp_shelters": _encode({str(key): value.to_dict() for key, value in state.temp_shelters.items()}),
+        "next_shelter_id": state.next_shelter_id,
     }
 
 
@@ -289,4 +292,10 @@ def state_from_dict(data: dict[str, Any]) -> SimulationState:
         conditional_trader_start_hour=data["conditional_trader_start_hour"],
         conditional_trader_end_hour=data["conditional_trader_end_hour"],
         conditional_trader_knowledge_hour=data["conditional_trader_knowledge_hour"],
+        # Временные убежища (§7.10)
+        temp_shelters={
+            int(key): _restore(Shelter, value)
+            for key, value in _decode(data["temp_shelters"]).items()
+        },
+        next_shelter_id=data["next_shelter_id"],
     )

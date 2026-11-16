@@ -5,6 +5,7 @@ from __future__ import annotations
 from zonesim.core.time import PhaseOfDay
 from zonesim.world.entity import EntityStatus
 from zonesim.world.group import HumanGroup, MonsterGroup
+from zonesim.ai import SLEEP
 
 
 # Стоимость выносливости за час
@@ -127,6 +128,7 @@ def human_sleep_recover(
                 start_h = getattr(npc, "unconscious_start_hour", 0)
                 if time.hour - start_h >= UNCONSCIOUS_MIN_HOURS:
                     npc.status = EntityStatus.SLEEPING
+                    npc.intention = SLEEP  # инвариант #5
                     npc.unconscious_start_hour = time.hour
 
     return total_recovered

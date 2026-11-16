@@ -23,6 +23,7 @@ from zonesim.actions.detection import check_anomaly_detection
 
 from zonesim.ai import (
     CAPTURE,
+    CREATE_SHELTER,
     DESTROY,
     EXIT,
     EXPLORE,
@@ -1395,6 +1396,66 @@ class SimulationEngine:
             self._use_medkit_charge(kit, members)
             self._sync_npc_from_items(patient)
 
+    def _group_can_create_shelter(self, group: HumanGroup, members: list[HumanNPC]) -> bool:
+        """Проверяет наличие материалов для создания временного убежища (§7.10).
+
+        Материал — любой расходный предмет в инвентаре группы.
+        """
+        for npc in members:
+            for item_id in npc.inventory:
+                item = self.state.items.get(item_id)
+                if item and item.type in (ItemType.MEDICINE, ItemType.AMMO, ItemType.OPTICS):
+                    return True
+        return False
+
+    def _process_create_shelter(self, group: HumanGroup, hour: int) -> bool:
+        """Создаёт временное убежище (§7.10)."""
+        members = self._active_members(group)
+        if not members:
+            return False
+
+        # Найти и потратить материал
+        material_item = None
+        for npc in members:
+            for item_id in npc.inventory:
+                item = self.state.items.get(item_id)
+                if item and item.type in (ItemType.MEDICINE, ItemType.AMMO, ItemType.OPTICS):
+                    material_item = item
+                    npc.inventory.remove(item_id)
+                    self.state.items.pop(item_id, None)
+                    break
+            if material_item:
+                break
+
+        if not material_item:
+            return False
+
+        # Создать Shelter
+        shelter_id = self.state.next_shelter_id
+        self.state.next_shelter_id += 1
+        shelter = Shelter(
+            id=shelter_id,
+            sector_id=group.sector_id,
+            owner_group_id=group.id,
+            owner_faction=members[0].faction if members else "",
+            created_hour=hour,
+            last_used_hour=hour,
+            quality=50,
+        )
+        shelter.add_group(group.id, [m.id for m in members if m.status == EntityStatus.ACTIVE])
+        self.state.temp_shelters[shelter_id] = shelter
+
+        self.state.news_manager.create_event(
+            hour=hour, minute=0, sector_id=group.sector_id,
+            event_type="shelter_created",
+            participants=[m.id for m in members[:1]],
+            result="created",
+            importance=30,
+            summary=f"Группа {group.id} создала временное убежище в секторе {group.sector_id}",
+            details={"shelter_id": shelter_id, "sector_id": group.sector_id},
+        )
+        return True
+
     def _process_rest_trade(self, hour: int, resting_groups: list[HumanGroup]) -> None:
         """Торговля как час отдыха у торговца: сначала продажа, потом закупка. (§16)"""
         traders = [
@@ -1902,6 +1963,7 @@ class SimulationEngine:
                 hours_awake=hours_awake,
                 can_help=can_help,
                 distress_distance=distress_distance,
+                can_create_shelter=self._group_can_create_shelter(group, members),
             )
             group.intention = choose_intention(ctx, self.state.rng)
             # Установить целевой сектор для RESEARCH (артефакты §12.5)
@@ -3621,6 +3683,14 @@ class SimulationEngine:
         ]
         self._process_rest_exchanges(hour, resting_groups)
         self._process_rest_trade(hour, resting_groups)
+
+        # Создание убежищ (§7.10)
+        for group in self.state.human_groups.values():
+            if group.intention != CREATE_SHELTER:
+                continue
+            if self._process_create_shelter(group, hour):
+                acted_groups.add(group.id)
+                group.intention = REST  # после создания — отдых в убежище
         for group in self.state.human_groups.values():
             if group.id in acted_groups or group.intention != HELP:
                 continue
@@ -3654,6 +3724,7 @@ class SimulationEngine:
 
             if npc.intention == SLEEP:
                 npc.status = EntityStatus.SLEEPING
+                npc.intention = SLEEP  # инвариант #5: спящие имеют SLEEP
             elif npc.intention == REST:
                 self._rest_tick(npc)
             elif npc.intention == RESEARCH:

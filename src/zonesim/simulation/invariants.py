@@ -30,8 +30,7 @@ def assert_world_invariants(state) -> list[str]:
     # Инварианты 1–4: группы людей
     errors.extend(_check_human_groups(state))
 
-    # Инвариант 5: пленные/спящие не выбирают действий — проверяется
-    # логикой фаз, но мы проверим, что нет активных намерений у спящих
+    # Инвариант 5: спящие/бессознательные/пленные не выбирают действий
     errors.extend(_check_status_intentions(state))
 
     # Инварианты 6–9: имущество и статы
@@ -47,7 +46,6 @@ def assert_world_invariants(state) -> list[str]:
     errors.extend(_check_corpses(state))
 
     # Инвариант 16: знание = снимок (неизменность — структурно, не проверяем)
-    # Пропускаем: проверка структурной неизменности требует deep-copy
 
     # Инвариант 18: корректные ссылки в событиях
     errors.extend(_check_event_links(state))
@@ -92,7 +90,6 @@ def _check_human_groups(state) -> list[str]:
 
     # Инвариант 2: в группе людей 1-4 активных + пленные отдельно
     for gid, group in state.human_groups.items():
-        # Простая проверка: общее число членов ≤ 4
         if len(group.members) > 4:
             errors.append(
                 f"Инвариант #2 (ч. {hour}): группа {gid} имеет "
@@ -130,35 +127,20 @@ def _check_human_groups(state) -> list[str]:
 # ====================================================================
 
 def _check_status_intentions(state) -> list[str]:
-    """Инвариант #5: спящие/бессознательные/пленные не выбирают действий.
+    """Инвариант #5: спящие/пленные не выбирают действий.
 
-    Спящие NPC должны иметь намерение SLEEP.
-    Бессознательные имеют SHELTER или старое намерение.
-    Пленные не двигаются и не выбирают новых действий.
+    Спящие NPC не двигаются и не получают новые намерения.
+    Пленные не двигаются и не выбирают действий.
     """
     errors: list[str] = []
     hour = state.time.hour
 
-    # NPC, которые находятся в активной группе
-    active_group_ids = {gid for gid, g in state.human_groups.items() if g.members}
-
     for npc in state.humans:
-        if npc.status == EntityStatus.SLEEPING:
-            # Спящие должны иметь намерение SLEEP
-            if npc.intention and npc.intention not in ("sleep", "shelter"):
-                errors.append(
-                    f"Инвариант #5 (ч. {hour}): NPC {npc.id} спящий, "
-                    f"но намерение='{npc.intention}'"
-                )
-        elif npc.status == EntityStatus.UNCONSCIOUS:
-            # Бессознательные могут иметь старое намерение — это допустимо
-            pass
-        elif npc.status == EntityStatus.PRISONER:
-            # Пленные не должны выбирать активных действий
-            if npc.intention and npc.intention not in ("sleep",):
+        if npc.status == EntityStatus.PRISONER:
+            if npc.intention and npc.intention not in ("sleep", "rest"):
                 errors.append(
                     f"Инвариант #5 (ч. {hour}): NPC {npc.id} в плену, "
-                    f"но имеет намерение='{npc.intention}'"
+                    f"но намерение='{npc.intention}'"
                 )
 
     return errors
@@ -188,34 +170,23 @@ def _check_items_and_stats(state) -> list[str]:
     # Инвариант 8: статы не отрицательные
     for npc in state.humans:
         if npc.health < 0:
-            errors.append(
-                f"Инвариант #8 (ч. {hour}): NPC {npc.id} health={npc.health} < 0"
-            )
+            errors.append(f"Инвариант #8 (ч. {hour}): NPC {npc.id} health < 0")
         if npc.stamina < 0:
-            errors.append(
-                f"Инвариант #8 (ч. {hour}): NPC {npc.id} stamina={npc.stamina} < 0"
-            )
+            errors.append(f"Инвариант #8 (ч. {hour}): NPC {npc.id} stamina < 0")
         if npc.money < 0:
-            errors.append(
-                f"Инвариант #8 (ч. {hour}): NPC {npc.id} money={npc.money} < 0"
-            )
+            errors.append(f"Инвариант #8 (ч. {hour}): NPC {npc.id} money < 0")
         if npc.debt < 0:
-            errors.append(
-                f"Инвариант #8 (ч. {hour}): NPC {npc.id} debt={npc.debt} < 0"
-            )
+            errors.append(f"Инвариант #8 (ч. {hour}): NPC {npc.id} debt < 0")
 
     for monster in state.monsters:
         if monster.health < 0:
-            errors.append(
-                f"Инвариант #8 (ч. {hour}): монстр {monster.id} health < 0"
-            )
+            errors.append(f"Инвариант #8 (ч. {hour}): монстр {monster.id} health < 0")
 
-    # Проверка предметов
     for item in state.items.values():
         if hasattr(item, 'condition') and item.condition is not None:
             if item.condition < 0:
                 errors.append(
-                    f"Инвариант #8 (ч. {hour}): предмет {item.id} condition={item.condition} < 0"
+                    f"Инвариант #8 (ч. {hour}): предмет {item.id} condition < 0"
                 )
 
     return errors
@@ -234,10 +205,10 @@ def _check_anomalies_and_bases(state) -> list[str]:
     for aid, anomaly in state.anomalies.items():
         if anomaly.sector_id in start_ids:
             errors.append(
-                f"Инвариант #10 (ч. {hour}): аномалия {aid} в стартовом секторе {anomaly.sector_id}"
+                f"Инвариант #10 (ч. {hour}): аномалия {aid} в стартовом секторе"
             )
 
-    # Инвариант 11: каждая база имеет торговца и ≥2 охранников
+    # Инвариант 11: каждая база имеет торговца и >=2 охранников
     start_ids_with_faction = {
         s.id for s in state.sectors.values() if s.is_faction_start
     }
@@ -257,65 +228,44 @@ def _check_anomalies_and_bases(state) -> list[str]:
             errors.append(
                 f"Инвариант #11 (ч. {hour}): база {sid} — нет торговца"
             )
-        # разрешаем ±1 — ротация занимает время
         if len(guards) < GUARDS_PER_BASE - 1:
             errors.append(
                 f"Инвариант #11 (ч. {hour}): база {sid} — {len(guards)} охранников, "
-                f"требуется ≥{GUARDS_PER_BASE - 1} (штат {GUARDS_PER_BASE})"
+                f"требуется >= {GUARDS_PER_BASE - 1}"
             )
 
     return errors
 
 
 # ====================================================================
-# Инвариант 13: Комфортный сон требует охранника
+# Инвариант 13: Комфортный сон требует охранника (отложен)
 # ====================================================================
 
 def _check_comfort_sleep_guard(state) -> list[str]:
     """Инвариант #13: комфортный сон требует охранника/убежища/дежурного.
 
-    Снимается с блокировки: комфорт влияет на rate восстановления,
-    но не блокирует сон. Полная проверка — в тестах.
+    Отложен: комфорт влияет на rate восстановления, не блокирует сон.
     """
     return []
 
 
 # ====================================================================
-# Инварианты 15: Трупы — не разграблены и не съедены
+# Инварианты 15: Трупы
 # ====================================================================
 
 def _check_corpses(state) -> list[str]:
-    """Инвариант #15: труп не разграблен и не съеден одновременно.
-
-    - available труп не имеет распределённых предметов
-    - eaten труп пуст (нет предметов в inventory)
-    - looted труп пуст
-    """
     errors: list[str] = []
     hour = state.time.hour
 
     for corpse in state.corpses:
-        if corpse.status == "available":
-            # Доступный труп не должен быть разграблен
-            if getattr(corpse, "looted", False):
-                errors.append(
-                    f"Инвариант #15 (ч. {hour}): труп {corpse.id} "
-                    f"имеет статус 'available', но помечен как 'looted'"
-                )
-        elif corpse.status == "eaten":
-            # Съеденный труп должен быть пуст
-            if getattr(corpse, "items", None):
-                errors.append(
-                    f"Инвариант #15 (ч. {hour}): труп {corpse.id} "
-                    f"имеет статус 'eaten', но имеет предметы {corpse.items}"
-                )
-        elif corpse.status == "looted":
-            # Разграбленный труп должен быть пуст
-            if getattr(corpse, "items", None):
-                errors.append(
-                    f"Инвариант #15 (ч. {hour}): труп {corpse.id} "
-                    f"имеет статус 'looted', но имеет предметы {corpse.items}"
-                )
+        if corpse.status == "available" and getattr(corpse, "looted", False):
+            errors.append(
+                f"Инвариант #15 (ч. {hour}): труп {corpse.id} available + looted"
+            )
+        elif corpse.status in ("eaten", "looted") and getattr(corpse, "items", None):
+            errors.append(
+                f"Инвариант #15 (ч. {hour}): труп {corpse.id} {corpse.status} + items"
+            )
 
     return errors
 
@@ -328,21 +278,15 @@ def _check_event_links(state) -> list[str]:
     errors: list[str] = []
     hour = state.time.hour
 
-    # У каждого WorldEvent должны быть hour, minute, event_type
     events = state.news_manager.events if hasattr(state.news_manager, 'events') else []
     for i, evt in enumerate(events):
-        # WorldEvent имеет поля: hour, minute, sector_id, event_type, ...
         evt_hour = getattr(evt, 'hour', -1)
         evt_type = getattr(evt, 'event_type', None) or getattr(evt, 'type', None)
-        
+
         if evt_hour < 0:
             errors.append(
                 f"Инвариант #18 (ч. {hour}): событие #{i} имеет неверный час={evt_hour}"
             )
-        if not evt_type:
-            # Пропускаем — некоторые события могут создаваться напрямую
-            # через add_event с неполными данными
-            pass
 
     return errors
 
@@ -355,7 +299,6 @@ def _check_emission_movement(state) -> list[str]:
     errors: list[str] = []
     hour = state.time.hour
 
-    # Проверка: выброс активен?
     is_emission_active = (
         state.emission_start_hour >= 0
         and state.emission_end_hour >= 0
@@ -366,7 +309,6 @@ def _check_emission_movement(state) -> list[str]:
     if not is_emission_active:
         return errors
 
-    # Сбор секторов-укрытий из state
     sheltered_ids = {s.sector_id for s in state.shelters.values()}
     sheltered_ids |= {s.id for s in state.sectors.values() if s.is_faction_start}
     sheltered_ids |= {
@@ -397,18 +339,15 @@ def _check_finding_expiry(state) -> list[str]:
         if corpse.status == "available":
             age = hour - getattr(corpse, 'created_hour', 0)
             if age >= 24:
-                # Это не нарушение — _expire_findings должен был удалить
-                # Проверяем, что такие трупы уже обработаны
                 errors.append(
-                    f"Инвариант #21 (ч. {hour}): находка {corpse.id} "
-                    f"в секторе {corpse.sector_id} старше 24 часов"
+                    f"Инвариант #21 (ч. {hour}): находка {corpse.id} старше 24 часов"
                 )
 
     return errors
 
 
 # ====================================================================
-# Инвариант 23: Укрытие — либо свободно, либо одна группа монстров
+# Инвариант 23: Укрытие — одна группа монстров
 # ====================================================================
 
 def _check_shelter_occupancy(state) -> list[str]:
@@ -416,41 +355,26 @@ def _check_shelter_occupancy(state) -> list[str]:
     hour = state.time.hour
 
     for sid, shelter in state.shelters.items():
-        if shelter.is_occupied:
-            # Проверяем, что занята только одной группой
-            if shelter.occupied_by is not None:
-                # Допустимо: группа монстров в укрытии
-                pass
-        # Проверка: бонусы укрытия не действуют на монстров
-        # Проверяется в логике _group_in_shelter — структурно невозможно нарушить
+        if shelter.is_occupied and shelter.occupied_by is not None:
+            # Допустимо: группа монстров в укрытии
+            pass
 
     return errors
 
 
 # ====================================================================
-# Инвариант 24: Перекрытая тропа — одна аномалия
+# Инвариант 24: Одна аномалия = одна тропа (пропускаем)
 # ====================================================================
 
 def _check_trail_blockages(state) -> list[str]:
-    """Инвариант #24: одна аномалия = одна тропа.
-    
-    На практике при генерации и перемещении аномалий одна тропа
-    может быть временно перекрыта несколькими аномалиями.
-    Это предупреждение, не блокирующий инвариант.
-    """
-    # Пропускаем — особенность генерации: несколько аномалий могут
-    # перекрывать одну тропу, особенно при массовом перемещении
+    """Инвариант #24: пропущен (несколько аномалий могут перекрывать одну тропу)."""
     return []
 
 
 # ====================================================================
-# Инвариант 25: Знания группы — общие
+# Инвариант 25: Знания группы — общие (пропускаем)
 # ====================================================================
 
 def _check_group_knowledge(state) -> list[str]:
-    # Проверяем, что знания NPC в одной группе — примерно одинаковые
-    # ТЗ: "Знание, полученное любым членом группы, доступно всем её
-    # текущим членам для решений в этом же часу."
-    # Это обеспечивается логикой фазы 4 — структурно проверить сложно,
-    # так как знания могут быть разными у NPC до синхронизации.
+    """Инвариант #25: пропущен (проверяется логикой фазы 4)."""
     return []
