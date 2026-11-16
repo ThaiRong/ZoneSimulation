@@ -62,7 +62,7 @@ class ArtifactManager:
 
         roll = rng.random() if rng is not None else rng_value
         if roll < 0.6:
-            artifact = self._create_artifact(anomaly, roll)
+            artifact = self._create_artifact(anomaly, rng, rng_value)
             anomaly.artifact_timer = self._roll_new_timer(rng, rng_value)
             return {
                 "formed": True,
@@ -80,12 +80,13 @@ class ArtifactManager:
             return rng.randint(48, 120)
         return 48 + int(rng_value * 72)  # 48..119, детерминированный запасной вариант
 
-    def _create_artifact(self, anomaly: Anomaly, rarity_roll: float) -> Artifact:
-        """Создаёт артефакт."""
-        if rarity_roll < 0.7:
+    def _create_artifact(self, anomaly: Anomaly, rng: SeededRNG | None, rng_value: float) -> Artifact:
+        """Создаёт артефакт с отдельным броском для редкости (§12.5)."""
+        rarity_roll = rng.random() if rng is not None else rng_value
+        if rarity_roll < 0.6:
             rarity = "common"
             value = 150.0 + rarity_roll * 100
-        elif rarity_roll < 0.9:
+        elif rarity_roll < 0.85:
             rarity = "uncommon"
             value = 250.0 + rarity_roll * 150
         else:

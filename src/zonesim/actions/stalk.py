@@ -184,30 +184,3 @@ def create_stalk_knowledge(
             hour=hour,
         )
     # При FAIL знание не создаётся — след потерян
-
-
-def calculate_stalking_check(
-    pursuer_attentiveness: int,
-    trail_freshness_hours: int,
-    terrain_concealment: int,
-    target_size: int,
-    target_speed: float,
-    is_night: bool,
-    has_detector: bool,
-    rng_value: float,
-) -> str:
-    """
-    Старая функция совместимости — вызывает calculate_stalk_check.
-    Возвращает строку результата для совместимости с существующим кодом.
-    """
-    result = calculate_stalk_check(
-        pursuer_attentiveness=pursuer_attentiveness,
-        trail_freshness_hours=trail_freshness_hours,
-        terrain_concealment=terrain_concealment,
-        target_size=target_size,
-        target_speed=target_speed,
-        is_night=is_night,
-        has_detector=has_detector,
-        rng_value=rng_value,
-    )
-    return result.result.value

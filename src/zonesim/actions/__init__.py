@@ -5,7 +5,6 @@ from __future__ import annotations
 from zonesim.actions.stalk import (
     StalkResult,
     calculate_stalk_check,
-    calculate_stalking_check,
     create_stalk_knowledge,
 )
 from zonesim.actions.detection import (

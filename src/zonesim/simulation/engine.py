@@ -1667,6 +1667,13 @@ class SimulationEngine:
         self.state.time.advance()
         self._phase10_report(hour)
 
+        # Заполнить events событиями часа из news_manager
+        events = [
+            e.to_dict()
+            for e in self.state.news_manager.events
+            if e.hour == hour
+        ]
+
         return {
             "hour": hour,
             "day": day,
@@ -1897,6 +1904,13 @@ class SimulationEngine:
                 distress_distance=distress_distance,
             )
             group.intention = choose_intention(ctx, self.state.rng)
+            # Установить целевой сектор для RESEARCH (артефакты §12.5)
+            if group.intention == RESEARCH and ctx.known_has_artifact:
+                # Найти сектор аномалии с артефактом среди researchable
+                for f in researchable:
+                    if f.payload.get("has_artifact"):
+                        group.target_sector_id = f.payload.get("sector_id")
+                        break
             for member in members:
                 if member.status == EntityStatus.ACTIVE:
                     member.intention = group.intention
@@ -2074,6 +2088,10 @@ class SimulationEngine:
                         self._apply_human_move(group, members, [destination], npcs, hour)
                 continue
 
+            # Для RESEARCH — не избегать секторов с аномалиями (цель — к ним!)
+            research_target = group.target_sector_id if group.intention == RESEARCH else None
+            group_avoid = set() if group.intention == RESEARCH else avoid
+
             target_ids: set[int] | None = None
             if group.intention == EXIT:
                 target_ids = border_ids
@@ -2087,9 +2105,11 @@ class SimulationEngine:
                     target_ids = {distress["sector_id"]}
             elif group.intention == SHELTER:
                 target_ids = self._shelter_targets(group, hour)
+            elif group.intention == RESEARCH and group.target_sector_id is not None:
+                target_ids = {group.target_sector_id}
             if not target_ids:
                 continue
-            path = self._walk(group.sector_id, target_ids, avoid, points=1.0)
+            path = self._walk(group.sector_id, target_ids, group_avoid, points=1.0)
             if path:
                 self._apply_human_move(group, members, path, npcs, hour)
 

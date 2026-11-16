@@ -120,11 +120,13 @@ class TestSimulationEngine:
     def test_events_created_on_anomaly_contact(self):
         """События создаются при контакте с аномалией."""
         engine = SimulationEngine(seed=42)
-        
-        # Размещаем всю первую группу в сектор с аномалией
+
+        # Размещаем первую группу в сектор с аномалией через API
         if engine.state.anomalies and engine.state.human_groups:
             anomaly = next(iter(engine.state.anomalies.values()))
             first_group = next(iter(engine.state.human_groups.values()))
+            old_sector_id = first_group.sector_id
+            first_group.sector_id = anomaly.sector_id
             for member_id in first_group.members:
                 npc = next((n for n in engine.state.humans if n.id == member_id), None)
                 if npc:

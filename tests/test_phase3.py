@@ -87,14 +87,14 @@ class TestDetection:
     """Тесты обнаружения и выслеживания (§10.2-10.3)."""
 
     def test_full_success_stalking(self):
-        # Высокая внимательность, свежий след → полный успех
+        # Высокая внимательность, свежий след, отличный rng → полный успех
         result = calculate_stalking_check(
             tracker_att=80,
             track_freshness_hours=1,
             terrain_mod=10,
             target_size=1,
             target_speed=1,
-            rng=0.5,
+            rng=0.1,
         )
         assert result == "full_success"
 

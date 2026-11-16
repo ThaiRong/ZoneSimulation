@@ -83,11 +83,12 @@ class TestUtilityFormula:
 
     def test_jitter_is_bounded(self):
         """J — небольшая случайная поправка (±3)."""
+        from zonesim.ai import ALL_ACTIONS
         ctx = make_ctx()
         rng = SeededRNG(5)
         for _ in range(20):
             intention = choose_intention(ctx, rng)
-            assert intention in (SLEEP, REST, RESEARCH, EXPLORE, EXIT, "ambush")
+            assert intention in ALL_ACTIONS
 
 
 class TestRouting:

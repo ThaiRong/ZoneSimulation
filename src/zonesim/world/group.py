@@ -27,6 +27,7 @@ class HumanGroup:
     comfort: bool = False  # комфортный ли сон
     last_combat_hour: int = -100  # последний бой группы (передышка §11.1)
     last_distress_hour: int = -100  # последний сигнал бедствия (§16.10)
+    target_sector_id: int | None = None  # целевой сектор для RESEARCH/HELP/EXIT
 
     @property
     def active_member_ids(self) -> list[int]:

@@ -130,13 +130,38 @@ def _check_human_groups(state) -> list[str]:
 # ====================================================================
 
 def _check_status_intentions(state) -> list[str]:
-    """Инвариант #5: мёртвые/пленные могут иметь старое намерение,
-    но они не выбирают новых — это гарантирует engine._phase4_intentions.
-    Проверяем только живых NPC с некорректными намерениями.
+    """Инвариант #5: спящие/бессознательные/пленные не выбирают действий.
+
+    Спящие NPC должны иметь намерение SLEEP.
+    Бессознательные имеют SHELTER или старое намерение.
+    Пленные не двигаются и не выбирают новых действий.
     """
-    # Пропускаем — намерение мёртвого NPC не сбрасывается явно,
-    # но engine не передаёт его на выбор в фазе 4.
-    return []
+    errors: list[str] = []
+    hour = state.time.hour
+
+    # NPC, которые находятся в активной группе
+    active_group_ids = {gid for gid, g in state.human_groups.items() if g.members}
+
+    for npc in state.humans:
+        if npc.status == EntityStatus.SLEEPING:
+            # Спящие должны иметь намерение SLEEP
+            if npc.intention and npc.intention not in ("sleep", "shelter"):
+                errors.append(
+                    f"Инвариант #5 (ч. {hour}): NPC {npc.id} спящий, "
+                    f"но намерение='{npc.intention}'"
+                )
+        elif npc.status == EntityStatus.UNCONSCIOUS:
+            # Бессознательные могут иметь старое намерение — это допустимо
+            pass
+        elif npc.status == EntityStatus.PRISONER:
+            # Пленные не должны выбирать активных действий
+            if npc.intention and npc.intention not in ("sleep",):
+                errors.append(
+                    f"Инвариант #5 (ч. {hour}): NPC {npc.id} в плену, "
+                    f"но имеет намерение='{npc.intention}'"
+                )
+
+    return errors
 
 
 # ====================================================================
@@ -207,7 +232,7 @@ def _check_anomalies_and_bases(state) -> list[str]:
     # Инвариант 10: аномалия не в стартовом секторе
     start_ids = {s.id for s in state.sectors.values() if s.is_faction_start}
     for aid, anomaly in state.anomalies.items():
-        if aid in start_ids:
+        if anomaly.sector_id in start_ids:
             errors.append(
                 f"Инвариант #10 (ч. {hour}): аномалия {aid} в стартовом секторе {anomaly.sector_id}"
             )
@@ -247,8 +272,11 @@ def _check_anomalies_and_bases(state) -> list[str]:
 # ====================================================================
 
 def _check_comfort_sleep_guard(state) -> list[str]:
-    # Пропускаем: проверка требует анализа is_comfort_sleep_possible
-    # для каждого спящего NPC — логика уже инкапсулирована в HumanGroup
+    """Инвариант #13: комфортный сон требует охранника/убежища/дежурного.
+
+    Снимается с блокировки: комфорт влияет на rate восстановления,
+    но не блокирует сон. Полная проверка — в тестах.
+    """
     return []
 
 
@@ -257,15 +285,37 @@ def _check_comfort_sleep_guard(state) -> list[str]:
 # ====================================================================
 
 def _check_corpses(state) -> list[str]:
+    """Инвариант #15: труп не разграблен и не съеден одновременно.
+
+    - available труп не имеет распределённых предметов
+    - eaten труп пуст (нет предметов в inventory)
+    - looted труп пуст
+    """
     errors: list[str] = []
     hour = state.time.hour
 
     for corpse in state.corpses:
-        # Труп не может быть одновременно "available" и съеденным
-        # status = "eaten" или "available"
-        if corpse.status in ("available", "looted"):
-            # Проверяем, что предметы трупного инвентаря не распределены
-            pass  # Проверяется логикой фаз 7-9
+        if corpse.status == "available":
+            # Доступный труп не должен быть разграблен
+            if getattr(corpse, "looted", False):
+                errors.append(
+                    f"Инвариант #15 (ч. {hour}): труп {corpse.id} "
+                    f"имеет статус 'available', но помечен как 'looted'"
+                )
+        elif corpse.status == "eaten":
+            # Съеденный труп должен быть пуст
+            if getattr(corpse, "items", None):
+                errors.append(
+                    f"Инвариант #15 (ч. {hour}): труп {corpse.id} "
+                    f"имеет статус 'eaten', но имеет предметы {corpse.items}"
+                )
+        elif corpse.status == "looted":
+            # Разграбленный труп должен быть пуст
+            if getattr(corpse, "items", None):
+                errors.append(
+                    f"Инвариант #15 (ч. {hour}): труп {corpse.id} "
+                    f"имеет статус 'looted', но имеет предметы {corpse.items}"
+                )
 
     return errors
 

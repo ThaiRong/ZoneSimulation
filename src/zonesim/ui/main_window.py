@@ -26,7 +26,7 @@ from zonesim.ui.journal import JournalWidget
 from zonesim.ui.map_view import MapWidget
 from zonesim.ui.panels import EntityPanel, SectorPanel
 
-AUTOSAVE_SLOTS = ("auto_1", "auto_2", "auto_3")
+AUTOSAVE_SLOTS = ("autosave_0", "autosave_1", "autosave_2")
 DEFAULT_SAVES_DIR = "saves"
 
 

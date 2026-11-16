@@ -133,6 +133,13 @@ def state_to_dict(state: SimulationState) -> dict[str, Any]:
         "next_item_id": state.next_item_id,
         "visit_memory": _encode(state.visit_memory),
         "config": _encode(state.config),
+        # Ситуативный торговец (§16.6)
+        "next_conditional_spawn_hour": state.next_conditional_spawn_hour,
+        "conditional_trader_id": state.conditional_trader_id,
+        "conditional_trader_sector": state.conditional_trader_sector,
+        "conditional_trader_start_hour": state.conditional_trader_start_hour,
+        "conditional_trader_end_hour": state.conditional_trader_end_hour,
+        "conditional_trader_knowledge_hour": state.conditional_trader_knowledge_hour,
     }
 
 
@@ -275,4 +282,11 @@ def state_from_dict(data: dict[str, Any]) -> SimulationState:
         next_item_id=data["next_item_id"],
         visit_memory=_decode(data["visit_memory"]),
         config=_decode(data["config"]),
+        # Ситуативный торговец (§16.6)
+        next_conditional_spawn_hour=data["next_conditional_spawn_hour"],
+        conditional_trader_id=data["conditional_trader_id"],
+        conditional_trader_sector=data["conditional_trader_sector"],
+        conditional_trader_start_hour=data["conditional_trader_start_hour"],
+        conditional_trader_end_hour=data["conditional_trader_end_hour"],
+        conditional_trader_knowledge_hour=data["conditional_trader_knowledge_hour"],
     )

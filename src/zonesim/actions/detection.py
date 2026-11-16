@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from zonesim.actions.stalk import calculate_stalk_check, StalkResult
 from zonesim.core.time import PhaseOfDay
 from zonesim.world.entity import EntityStatus, HumanNPC, Monster
 
@@ -15,34 +16,23 @@ def calculate_stalking_check(
     is_night: bool = False,
     rng: float | None = None,
 ) -> str:
-    """
-    Выслеживание: проверка внимательности vs след. (§10.2)
-    Возвращает: 'full_success', 'partial_success', или 'fail'
-    """
-    # Базовая сложность зависит от свежести следа
-    freshness_mod = max(0, 50 - track_freshness_hours * 5)  # -5 за каждый час
-    # Размер цели увеличивает сложность
-    size_mod = target_size * 3
-    # Скорость цели увеличивает сложность
-    speed_mod = target_speed * 5
-
-    difficulty = freshness_mod + size_mod + speed_mod - terrain_mod
-
-    # Ночной штраф к внимательности (§5.1)
-    effective_att = tracker_att
-    if is_night:
-        effective_att -= 20  # вычитаем 20 из эффективной внимательности
-
-    # Случайная поправка
-    if rng is None:
-        rng = 0.0
-    roll = effective_att + terrain_mod + rng * 20 - difficulty
-
-    if roll >= 50:
-        return "full_success"
-    if roll >= 20:
-        return "partial_success"
-    return "fail"
+    """Совместимая обёртка поверх calculate_stalk_check (§10.2)."""
+    check = calculate_stalk_check(
+        pursuer_attentiveness=tracker_att,
+        trail_freshness_hours=track_freshness_hours,
+        terrain_concealment=terrain_mod,
+        target_size=target_size,
+        target_speed=float(target_speed),
+        is_night=is_night,
+        has_detector=False,
+        rng_value=rng if rng is not None else 0.5,
+    )
+    mapping = {
+        StalkResult.FULL: "full_success",
+        StalkResult.PARTIAL: "partial_success",
+        StalkResult.FAIL: "fail",
+    }
+    return mapping[check.result]
 
 
 def calculate_detection_check(
