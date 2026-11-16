@@ -264,17 +264,23 @@ class TestTrading:
                 engine.state.items.pop(item_id)
         npc.money = 500.0
         stock_before = engine.state.trader_stock[trader.id]["gear.medkit.sanitar2"]
+        price_before = engine.trade_price("gear.medkit.sanitar2")  # цена ДО покупки
 
         engine._process_rest_trade(engine.state.time.hour, [group])
 
-        price = engine.trade_price("gear.medkit.sanitar2")
-        assert npc.money == pytest.approx(500.0 - price)
-        assert trader.money == pytest.approx(100.0 + price)
+        # Проверяем что куплен только медикит (не detector!)
         medkits = [
             engine.state.items[item_id] for item_id in npc.inventory
             if engine.state.items[item_id].type is ItemType.MEDICINE
         ]
-        assert len(medkits) == 1
+        detectors = [
+            engine.state.items[item_id] for item_id in npc.inventory
+            if engine.state.items[item_id].type is ItemType.DETECTOR
+        ]
+        assert len(medkits) == 1, f"Expected 1 medkit, got {len(medkits)}"
+        assert len(detectors) == 0, f"Expected 0 detectors, got {len(detectors)}"
+        assert npc.money == pytest.approx(500.0 - price_before)
+        assert trader.money == pytest.approx(100.0 + price_before)
         assert engine.state.trader_stock[trader.id]["gear.medkit.sanitar2"] == stock_before - 1
 
     def test_group_sells_loot_to_trader(self):

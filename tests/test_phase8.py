@@ -120,14 +120,16 @@ class TestSimulationEngine:
     def test_events_created_on_anomaly_contact(self):
         """События создаются при контакте с аномалией."""
         engine = SimulationEngine(seed=42)
-        initial_event_count = engine.state.news_manager.get_total_count()
-
-        # Размещаем NPC в сектор с аномалией
-        if engine.state.anomalies:
+        
+        # Размещаем всю первую группу в сектор с аномалией
+        if engine.state.anomalies and engine.state.human_groups:
             anomaly = next(iter(engine.state.anomalies.values()))
-            for npc in engine.state.humans[:1]:
-                npc.sector_id = anomaly.sector_id
-                npc.status = EntityStatus.ACTIVE
+            first_group = next(iter(engine.state.human_groups.values()))
+            for member_id in first_group.members:
+                npc = next((n for n in engine.state.humans if n.id == member_id), None)
+                if npc:
+                    npc.sector_id = anomaly.sector_id
+                    npc.status = EntityStatus.ACTIVE
 
         result = engine.simulate_hour()
         # Могли создаться события контакта

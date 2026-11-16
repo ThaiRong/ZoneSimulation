@@ -118,6 +118,7 @@ class TestRestTrade:
                 npc.inventory.remove(item_id)
                 engine.state.items.pop(item_id)
 
+        price_before = engine.trade_price("gear.medkit.sanitar2")  # цена ДО покупки
         engine._process_rest_trade(engine.state.time.hour, [group])
 
         assert artifact.id not in engine.state.items  # продано
@@ -126,7 +127,7 @@ class TestRestTrade:
             if engine.state.items[i].type is ItemType.MEDICINE
         ]
         assert len(medkits) == 1  # куплено на вырученное
-        assert npc.money == pytest.approx(300.0 - engine.trade_price("gear.medkit.sanitar2"))
+        assert npc.money == pytest.approx(300.0 - price_before)
 
     def test_no_trade_without_rest_hour(self):
         engine = SimulationEngine(seed=42)

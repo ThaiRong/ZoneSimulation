@@ -1,9 +1,8 @@
 """Выбор намерений NPC. Основано на §9 ТЗ.
 
-Реализовано исполнимое текущей моделью мира подмножество действий §9.1:
-сон, отдых/лечение, исследование известной аномалии, исследование секторов
-(перемещение), попытка покинуть Зону. Боевые, торговые и групповые действия
-добавятся вместе с соответствующими системами.
+Реализовано исполнение текущего подмножества действий §9.1:
+сон, отдых/лечение, исследование, выслеживание, попытка покинуть Зону,
+засада (§10.4). Боевые, торговые и групповые действия дополнятся позже.
 """
 
 from __future__ import annotations
@@ -22,14 +21,15 @@ EXPLORE = "explore"
 EXIT = "exit_zone"
 SHELTER = "shelter"        # укрытие от выброса (§12.7)
 HELP = "help_distress"     # помощь по сигналу бедствия (§16.10)
+AMBUSH = "ambush"          # засада (§10.4)
 
-ALL_ACTIONS = (SLEEP, REST, RESEARCH, DESTROY, CAPTURE, EXPLORE, EXIT, SHELTER, HELP)
+ALL_ACTIONS = (SLEEP, REST, RESEARCH, DESTROY, CAPTURE, EXPLORE, EXIT, SHELTER, HELP, AMBUSH)
 
 # Фракционные приоритеты F (§7.3). Меняют вероятность, не запрещают действия.
 FACTION_FLAVOR: dict[str, dict[str, float]] = {
     "Бродяги": {RESEARCH: 8.0, EXPLORE: 5.0},
-    "Борзые": {EXPLORE: 3.0, RESEARCH: 2.0},
-    "Серая лига": {RESEARCH: 4.0, EXPLORE: 4.0, CAPTURE: 4.0, DESTROY: 3.0},
+    "Борзые": {EXPLORE: 3.0, RESEARCH: 2.0, AMBUSH: 6.0},  # Борзые любят засады
+    "Серая лига": {RESEARCH: 4.0, EXPLORE: 4.0, CAPTURE: 4.0, DESTROY: 3.0, AMBUSH: 4.0},
 }
 
 
@@ -140,7 +140,15 @@ def evaluate_actions(ctx: IntentionContext) -> dict[str, float]:
                 u[action] = float("-inf")
                 continue
             N += 30.0 - 3.0 * (ctx.distress_distance or 6)
+            if ctx.health_share >= 0.6:
+                N += 20.0  # здоровая группа активно помогает
             R += 4.0
+        elif action == AMBUSH:
+            # Засада требует подготовки (§10.4)
+            # Бонус за высокую внимательность группы
+            ambush_chance = 55 + 0.5 * ctx.bravery  # упрощённо по ТЗ §10.4
+            R += (100 - ambush_chance) / 10.0  # риск провала засады
+            E += 10.0  # внезапность даёт ×1.25 атаки в первом раунде
 
         u[action] = F + G + E + C + I + N - R * risk_factor
 
