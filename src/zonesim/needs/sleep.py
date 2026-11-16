@@ -68,7 +68,15 @@ def update_stamina(entity, cost: float, action: str, time) -> bool:
     return False
 
 
-def human_sleep_recover(group: HumanGroup, npcs: dict[int, object], time, rng) -> float:
+def human_sleep_recover(
+    group: HumanGroup,
+    npcs: dict[int, object],
+    time,
+    rng,
+    stationary: dict[int, object] | None = None,
+    shelters: dict[int, object] | None = None,
+    faction: str | None = None,
+) -> float:
     """
     Восстанавливает выносливость спящим NPC группы.
     Возвращает сколько выносливости восстановлено.
@@ -76,7 +84,13 @@ def human_sleep_recover(group: HumanGroup, npcs: dict[int, object], time, rng) -
     if not group or not group.members:
         return 0.0
 
-    is_comfort = group.is_comfort_sleep_possible(npcs, group.sector_id)
+    is_comfort = group.is_comfort_sleep_possible(
+        npcs,
+        stationary or {},
+        shelters or {},
+        group.sector_id,
+        faction,
+    )
     recovery_rate = 1.0 / HUMAN_COMFORT_HOURS if is_comfort else 1.0 / HUMAN_NONCOMFORT_HOURS
 
     total_recovered = 0.0

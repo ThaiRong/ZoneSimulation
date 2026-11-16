@@ -95,13 +95,16 @@ class TestSleepRecovery:
         npc.status = EntityStatus.SLEEPING
 
         # Имитация группы с охранником
-        guard_npc = HumanNPC(id=2, faction="Бродяги", status=EntityStatus.ACTIVE)
+        guard_npc = HumanNPC(id=2, faction="Бродяги", status=EntityStatus.ACTIVE, sector_id=0)
         npcs = {1: npc, 2: guard_npc}
 
-        group = HumanGroup(id=1, members=[1], sector_id=0)
+        # Охранник должен быть в members группы
+        group = HumanGroup(id=1, members=[1, 2], sector_id=0)
 
-        # Комфортный сон: есть бодрствующий охранник
-        assert group.is_comfort_sleep_possible(npcs, 0) is True
+        # Комфортный сон: есть бодрствующий член группы (охранник)
+        assert group.is_comfort_sleep_possible(
+            npcs, {}, {}, 0, "Бродяги"
+        ) is True
 
         time = GameTime(22)
         recovered = human_sleep_recover(group, npcs, time, None)
@@ -118,7 +121,9 @@ class TestSleepRecovery:
         group = HumanGroup(id=1, members=[1], sector_id=0)
 
         # Нет охранника — некомфортный сон
-        assert group.is_comfort_sleep_possible(npcs, 0) is False
+        assert group.is_comfort_sleep_possible(
+            npcs, {}, {}, 0, "Бродяги"
+        ) is False
 
         time = GameTime(22)
         recovered = human_sleep_recover(group, npcs, time, None)
@@ -131,9 +136,9 @@ class TestSleepRecovery:
         npc = HumanNPC(id=1, faction="Бродяги", stamina=50, max_stamina=100)
         npc.status = EntityStatus.SLEEPING
 
-        guard_npc = HumanNPC(id=2, faction="Бродяги", status=EntityStatus.ACTIVE)
+        guard_npc = HumanNPC(id=2, faction="Бродяги", status=EntityStatus.ACTIVE, sector_id=0)
         npcs = {1: npc, 2: guard_npc}
-        group = HumanGroup(id=1, members=[1], sector_id=0)
+        group = HumanGroup(id=1, members=[1, 2], sector_id=0)
 
         time = GameTime(22)
         human_sleep_recover(group, npcs, time, None)

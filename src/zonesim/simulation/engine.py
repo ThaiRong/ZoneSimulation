@@ -1783,7 +1783,13 @@ class SimulationEngine:
                 known_has_artifact=any(f.payload.get("has_artifact") for f in researchable),
                 can_destroy=self._group_can_destroy(group, members),
                 can_capture=self._group_can_capture(group, members),
-                can_rest=group.is_comfort_sleep_possible(all_npcs, group.sector_id),
+                can_rest=group.is_comfort_sleep_possible(
+                    all_npcs,
+                    {n.id: n for n in self.state.stationary_humans},
+                    self.state.shelters,
+                    group.sector_id,
+                    leader.faction if leader else None,
+                ),
                 hours_awake=hours_awake,
                 can_help=can_help,
                 distress_distance=distress_distance,
@@ -2652,7 +2658,13 @@ class SimulationEngine:
         """Сон: восстановление выносливости по §14.1 (комфорт 4 ч / иначе 6 ч)."""
         group = HumanGroup(id=-(npc.id + 1), members=[npc.id], sector_id=npc.sector_id)
         human_sleep_recover(
-            group, self._sector_humans(npc.sector_id), self.state.time, self.state.rng,
+            group,
+            self._sector_humans(npc.sector_id),
+            self.state.time,
+            self.state.rng,
+            stationary={n.id: n for n in self.state.stationary_humans},
+            shelters=self.state.shelters,
+            faction=npc.faction,
         )
 
     def _unconscious_tick(self, npc: HumanNPC, hour: int) -> None:
