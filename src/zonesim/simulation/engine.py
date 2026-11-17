@@ -1363,17 +1363,22 @@ class SimulationEngine:
         """Проверяет наличие набора для убежища (§7.10).
 
         Нерасходный предмет: базово есть у всех людей, не тратится.
-        Кулдаун: не чаще одного убежища на группу за 12 часов.
+        Кулдаун на уровне группы: не чаще одного убежища за 12 часов.
         """
-        for npc in members:
-            for item_id in npc.inventory:
-                item = self.state.items.get(item_id)
-                if item and item.type is ItemType.SHELTER_KIT:
-                    # Проверка кулдауна: последняя группа NPC
-                    last_created = getattr(npc, "shelter_created_hour", -100)
-                    if self.state.time.hour - last_created >= 12:
-                        return True
-        return False
+        # Проверка: хотя бы один NPC имеет набор
+        has_kit = any(
+            self.state.items.get(item_id) and self.state.items[item_id].type is ItemType.SHELTER_KIT
+            for npc in members
+            for item_id in npc.inventory
+        )
+        if not has_kit:
+            return False
+
+        # Кулдаун на уровне группы
+        if self.state.time.hour - group.last_shelter_hour < 12:
+            return False
+
+        return True
 
     def _process_create_shelter(self, group: HumanGroup, hour: int) -> bool:
         """Создаёт временное убежище (§7.10)."""
@@ -1406,10 +1411,8 @@ class SimulationEngine:
         shelter.add_group(group.id, [m.id for m in members if m.status == EntityStatus.ACTIVE])
         self.state.temp_shelters[shelter_id] = shelter
 
-        # Кулдаун: запретить группе создавать убежища ещё 12 часов
-        leader = self._group_leader(group, members)
-        if leader:
-            leader.shelter_created_hour = hour
+        # Кулдаун на уровне группы
+        group.last_shelter_hour = hour
 
         self.state.news_manager.create_event(
             hour=hour, minute=0, sector_id=group.sector_id,
