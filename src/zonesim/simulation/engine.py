@@ -3221,6 +3221,9 @@ class SimulationEngine:
                 entity.status = EntityStatus.DEAD
             elif combatant.surrendered:
                 entity.status = EntityStatus.PRISONER
+                # Инвариант #5: пленные не выбирают действий
+                if hasattr(entity, 'intention'):
+                    entity.intention = "sleep"
             elif combatant.unconscious:
                 entity.status = EntityStatus.UNCONSCIOUS
                 entity.unconscious_reason = "health_zero"
