@@ -141,12 +141,14 @@ class TestStationaryStaff:
     def test_staff_never_moves_or_joins_mobile_simulation(self):
         engine = SimulationEngine(seed=42)
         initial_positions = {npc.id: npc.sector_id for npc in engine.state.stationary_humans}
+        initial_count = len(engine.state.stationary_humans)
 
         for _ in range(48):
             engine.simulate_hour()
 
-        assert len(engine.state.stationary_humans) == 15
+        # Стационарных может быть больше (найм охранников), но начальные NPC не меняют позиции
+        assert len(engine.state.stationary_humans) >= initial_count
         for npc in engine.state.stationary_humans:
-            assert npc.sector_id == initial_positions[npc.id]
+            assert npc.sector_id == initial_positions.get(npc.id, npc.sector_id)
             assert npc.group_id is None
             assert npc.intention == ""

@@ -473,44 +473,6 @@ class SimulationEngine:
     def _group_in_shelter(self, group: HumanGroup) -> bool:
         return group.sector_id in self._shelter_sector_ids()
 
-    def _create_shelter(self, group: HumanGroup, sector_id: int) -> int | None:
-        """Создаёт временное убежище в секторе. (§7.10)"""
-        # Проверяем что нет Shelter в секторе
-        for shelter in self.state.temp_shelters.values():
-            if shelter.sector_id == sector_id and shelter.is_active:
-                return None  # Уже есть
-        
-        # Проверяем что в секторе нет монстров
-        for monster in self.state.monsters:
-            if monster.sector_id == sector_id and monster.status == EntityStatus.ACTIVE:
-                return None  # Монстры не должны быть рядом
-        
-        # Создаём Shelter
-        shelter_id = self.state.next_shelter_id
-        self.state.next_shelter_id += 1
-        
-        npc_ids = list(group.members)
-        shelter = Shelter(
-            id=shelter_id,
-            sector_id=sector_id,
-            owner_group_id=group.id,
-            owner_faction="",
-            created_hour=self.state.time.hour,
-            last_used_hour=self.state.time.hour,
-            quality=50,
-        )
-        shelter.add_group(group.id, npc_ids)
-        self.state.temp_shelters[shelter_id] = shelter
-        
-        self.state.news_manager.create_event(
-            hour=self.state.time.hour, minute=0, sector_id=sector_id,
-            event_type="shelter_created", participants=npc_ids, result="created",
-            importance=20,
-            summary=f"Группа {group.id} построила убежище в секторе {sector_id}",
-            details={"shelter_id": shelter_id, "group_id": group.id},
-        )
-        return shelter_id
-
     def _update_shelter_participants(self, hour: int) -> None:
         """Обновляет участников Shelter и удаляет пустые группы."""
         npcs = {npc.id: npc for npc in self.state.humans}
@@ -1400,12 +1362,16 @@ class SimulationEngine:
         """Проверяет наличие набора для убежища (§7.10).
 
         Нерасходный предмет: базово есть у всех людей, не тратится.
+        Кулдаун: не чаще одного убежища на группу за 12 часов.
         """
         for npc in members:
             for item_id in npc.inventory:
                 item = self.state.items.get(item_id)
-                if item and item.id == "shelter.kit.basic":
-                    return True
+                if item and item.type is ItemType.SHELTER_KIT:
+                    # Проверка кулдауна: последняя группа NPC
+                    last_created = getattr(npc, "shelter_created_hour", -100)
+                    if self.state.time.hour - last_created >= 12:
+                        return True
         return False
 
     def _process_create_shelter(self, group: HumanGroup, hour: int) -> bool:
@@ -1415,8 +1381,9 @@ class SimulationEngine:
             return False
 
         # Проверка: хотя бы один NPC имеет набор — не расходуется
+        leader = self._group_leader(group, members)
         has_kit = any(
-            self.state.items.get(item_id) and item_id == "shelter.kit.basic"
+            self.state.items.get(item_id) and self.state.items[item_id].type is ItemType.SHELTER_KIT
             for npc in members
             for item_id in npc.inventory
         )
@@ -1437,6 +1404,11 @@ class SimulationEngine:
         )
         shelter.add_group(group.id, [m.id for m in members if m.status == EntityStatus.ACTIVE])
         self.state.temp_shelters[shelter_id] = shelter
+
+        # Кулдаун: запретить группе создавать убежища ещё 12 часов
+        leader = self._group_leader(group, members)
+        if leader:
+            leader.shelter_created_hour = hour
 
         self.state.news_manager.create_event(
             hour=hour, minute=0, sector_id=group.sector_id,
