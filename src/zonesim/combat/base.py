@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, ClassVar
 
 from zonesim.world.entity import HumanNPC, Monster
 
@@ -98,7 +98,7 @@ class CombatFactory:
 class CombatBase:
     """Базовая и групповая боевая сила. (§11.2)"""
 
-    SPECIES_POWER = {
+    SPECIES_POWER: ClassVar[dict] = {
         "TerritorialPredator": 0.33,
         "ScavengerPack": 0.70,
         "LargeMigrator": 4.00,

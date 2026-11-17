@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, ClassVar
 
 
 class LootType(str, Enum):
@@ -70,7 +70,7 @@ class Corpse:
 class LootManager:
     """Обыск трупов и извлечение частей монстров (§7.11, §16.8-16.9)."""
 
-    PARTS_BY_SPECIES = {
+    PARTS_BY_SPECIES: ClassVar[dict] = {
         "TerritorialPredator": (1, "monster_parts_standard", 25.0),
         "ScavengerPack": (2, "monster_parts_standard", 25.0),
         "LargeMigrator": (3, "monster_parts_rare", 100.0),

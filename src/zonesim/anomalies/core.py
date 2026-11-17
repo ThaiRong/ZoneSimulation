@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, ClassVar
 
 
 class AnomalyType(str, Enum):
@@ -37,7 +37,7 @@ class Anomaly:
     blocks_trail: list[int] | None = None  # перекрытое ребро-тропа (§10.5)
 
     # Стартовые параметры по типу (§12.1)
-    TYPE_PARAMS = {
+    TYPE_PARAMS: ClassVar[dict] = {
         AnomalyType.SUBTLE: {"concealment": 70, "damage_min": 5, "damage_max": 12, "stability": 40, "path_chance": 0,
                              "artifact_interval_min": 48, "artifact_interval_max": 120},
         AnomalyType.VISIBLE: {"concealment": 30, "damage_min": 20, "damage_max": 40, "stability": 80, "path_chance": 0,

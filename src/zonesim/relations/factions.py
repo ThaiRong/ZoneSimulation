@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 
 class FactionRelations:
     """Отношения между фракциями. (§15.2)"""
 
-    FACTIONS = ["Бродяги", "Борзые", "Серая лига"]
+    FACTIONS: ClassVar[list[str]] = ["Бродяги", "Борзые", "Серая лига"]
 
-    INITIAL = {
+    INITIAL: ClassVar[dict] = {
         ("Бродяги", "Борзые"): -25,
         ("Бродяги", "Серая лига"): +10,
         ("Борзые", "Серая лига"): -10,

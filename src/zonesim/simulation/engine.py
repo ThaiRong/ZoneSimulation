@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import Any, ClassVar
 
 from zonesim.actions.detection import check_anomaly_detection
 from zonesim.ai import (
@@ -312,9 +312,9 @@ class SimulationEngine:
         return members
 
     # Наценка торговцев поверх каталога
-    TRADE_MARKUP = 1.2
+    TRADE_MARKUP: ClassVar[float] = 1.2
     # Стартовое количество в запасе по категориям
-    TRADER_START_QTY = {
+    TRADER_START_QTY: ClassVar[dict] = {
         "weapon": 2,
         "body_armor": 2,
         "head_armor": 1,
@@ -325,7 +325,7 @@ class SimulationEngine:
         "capture_kit": 2,
         "anomaly_destruction_kit": 2,
     }
-    TRADER_AMMO_QTY = {"ammo.pistol": 40, "ammo.rifle": 60, "ammo.heavy": 20}
+    TRADER_AMMO_QTY: ClassVar[dict] = {"ammo.pistol": 40, "ammo.rifle": 60, "ammo.heavy": 20}
 
     def _init_trader_stock(self) -> None:
         """Стартовый запас торговцев: импортные позиции каталога. (§16)"""

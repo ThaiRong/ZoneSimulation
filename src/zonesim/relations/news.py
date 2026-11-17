@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, ClassVar
 
 
 class EventImportance(str, Enum):
@@ -56,7 +56,7 @@ class WorldEvent:
 class NewsManager:
     """Управление новостями и сводками. (§18)"""
 
-    IMPORTANCE_THRESHOLDS = {
+    IMPORTANCE_THRESHOLDS: ClassVar[dict] = {
         "movement": (1, 5),
         "trade": (5, 15),
         "resource_find": (10, 20),
