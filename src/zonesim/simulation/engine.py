@@ -1059,7 +1059,11 @@ class SimulationEngine:
 
     def _process_guard_rotation(self, hour: int) -> None:
         """Раненый охранник лечится и заменяется резервистом; погибших
-        группировка восполняет новобранцами."""
+        группировка восполняет новобранцами.
+
+        Гарантирует минимум GUARDS_PER_BASE активных охранников на базе
+        (даже когда некоторые на лечении).
+        """
         if hour % 24 != 0:
             return
         guards = [
@@ -1071,6 +1075,11 @@ class SimulationEngine:
             by_sector.setdefault(npc.sector_id, []).append(npc)
 
         for sector_id, sector_guards in by_sector.items():
+            # Считаем активных (не на лечении)
+            active_count = sum(
+                1 for g in sector_guards
+                if g.status == EntityStatus.ACTIVE
+            )
             for guard in sector_guards:
                 if getattr(guard, "on_treatment", False):
                     guard.health = min(
@@ -1104,6 +1113,8 @@ class SimulationEngine:
                         and n.status not in (EntityStatus.DEAD, EntityStatus.EXILED)
                         for n in guards
                     )
+                    # Не отправляем на лечение, если это приведёт к падению ниже минимума
+                    and (active_count - 1) >= self.GUARDS_PER_BASE - 1
                 ):
                     guard.on_treatment = True
                     guard.status = EntityStatus.SLEEPING

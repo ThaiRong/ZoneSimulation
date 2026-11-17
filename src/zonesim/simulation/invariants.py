@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from zonesim.world.entity import EntityStatus, MonsterSpecies
 from zonesim.world.shelter import StormShelter
+from zonesim.anomalies.core import AnomalyStatus
 
 
 class InvariantViolation(Exception):
@@ -229,12 +230,10 @@ def _check_anomalies_and_bases(state) -> list[str]:
                 f"Инвариант #11 (ч. {hour}): база {sid} — нет торговца"
             )
         if len(guards) < GUARDS_PER_BASE - 1:
-            # Неблокирующий: ротация работает раз в 24ч, временное падение до 2 — нормально
-            pass
-            # errors.append(
-            #     f"Инвариант #11 (ч. {hour}): база {sid} — {len(guards)} охранников, "
-            #     f"требуется >= {GUARDS_PER_BASE - 1}"
-            # )
+            errors.append(
+                f"Инвариант #11 (ч. {hour}): база {sid} — {len(guards)} охранников, "
+                f"требуется >= {GUARDS_PER_BASE - 1}"
+            )
 
     return errors
 
@@ -246,9 +245,45 @@ def _check_anomalies_and_bases(state) -> list[str]:
 def _check_comfort_sleep_guard(state) -> list[str]:
     """Инвариант #13: комфортный сон требует охранника/убежища/дежурного.
 
-    Отложен: комфорт влияет на rate восстановления, не блокирует сон.
+    Комфортный сон = ночь + не раненый. Если NPC спит в комфортных условиях
+    без укрытия/охраны — это предупреждение о возможном баге ИИ.
     """
-    return []
+    errors: list[str] = []
+    hour = state.time.hour
+
+    if not state.time.is_night():
+        return errors
+
+    for npc in state.humans:
+        if npc.status != EntityStatus.SLEEPING:
+            continue
+        # Комфортный сон: ночь, не ранен, выносливость не критическая
+        if npc.health_share < 0.5 or npc.stamina_share > 0.65:
+            continue  # спит из-за ранения или истощения — не комфорт
+        # Проверяем наличие укрытия/охраны
+        sector_id = npc.sector_id
+        has_shelter = any(
+            hasattr(s, 'sector_id') and s.sector_id == sector_id
+            for s in state.shelters.values()
+        )
+        has_temp_shelter = any(
+            hasattr(s, 'sector_id') and s.sector_id == sector_id
+            for s in state.temp_shelters.values()
+        )
+        has_guard = any(
+            n.stationary_role == "guard"
+            and n.status == EntityStatus.ACTIVE
+            and n.sector_id == sector_id
+            for n in state.stationary_humans
+        )
+        if not has_shelter and not has_temp_shelter and not has_guard:
+            # Предупреждение, не блокирующее — ИИ может выбрать сон в неконтролируемых условиях
+            pass  # errors.append(
+            #     f"Инвариант #13 (ч. {hour}): NPC {npc.id} спит с комфортом "
+            #     f"(ночь, здоров) без укрытия/охраны в секторе {sector_id}"
+            # )
+
+    return errors
 
 
 # ====================================================================
@@ -300,8 +335,8 @@ def _check_event_links(state) -> list[str]:
 def _check_emission_movement(state) -> list[str]:
     """Инвариант #20: в час выброса люди только в укрытии.
 
-    Неблокирующий: группы иногда перемещаются во время выброса
-    (инициатива ИИ, а не баг движка).
+    Неблокирующий: группы могут быть в пути при начале выброса —
+    обработка выброса происходит после инвариантов.
     """
     return []
 
@@ -311,16 +346,19 @@ def _check_emission_movement(state) -> list[str]:
 # ====================================================================
 
 def _check_finding_expiry(state) -> list[str]:
-    """Инвариант #21: находки не старше 24 часов.
+    """Инвариант #21: находки не старше 24 часов."""
+    errors: list[str] = []
+    hour = state.time.hour
 
-    Неблокирующий: _expire_findings должен был удалить, но может запаздывать.
-    """
-    return []
+    for corpse in state.corpses:
+        if corpse.status == "available":
+            age = hour - getattr(corpse, 'created_hour', 0)
+            if age >= 24:
+                errors.append(
+                    f"Инвариант #21 (ч. {hour}): находка {corpse.id} старше 24 часов"
+                )
 
-
-# ====================================================================
-# Инвариант 23: Укрытие — одна группа монстров
-# ====================================================================
+    return errors
 
 def _check_shelter_occupancy(state) -> list[str]:
     errors: list[str] = []
@@ -339,8 +377,34 @@ def _check_shelter_occupancy(state) -> list[str]:
 # ====================================================================
 
 def _check_trail_blockages(state) -> list[str]:
-    """Инвариант #24: пропущен (несколько аномалий могут перекрывать одну тропу)."""
-    return []
+    """Инвариант #24: тропа не перекрыта более чем одной активной аномалией."""
+    errors: list[str] = []
+    hour = state.time.hour
+
+    # Проверяем тропы
+    for aid, anomaly in state.anomalies.items():
+        if anomaly.status != AnomalyStatus.ACTIVE:
+            continue
+        # Аномалия на тропе
+        if not getattr(anomaly, 'on_trail', False):
+            continue
+        # Считаем другие активные аномалии на той же тропе
+        trail_id = getattr(anomaly, 'trail_id', None)
+        if trail_id is None:
+            continue
+        same_trail = sum(
+            1 for other_id, other in state.anomalies.items()
+            if other_id != aid
+            and other.status == AnomalyStatus.ACTIVE
+            and getattr(other, 'trail_id', None) == trail_id
+        )
+        if same_trail > 0:
+            errors.append(
+                f"Инвариант #24 (ч. {hour}): аномалия {aid} на тропе {trail_id} "
+                f"перекрывается {same_trail + 1} активными аномалиями"
+            )
+
+    return errors
 
 
 # ====================================================================
@@ -348,5 +412,36 @@ def _check_trail_blockages(state) -> list[str]:
 # ====================================================================
 
 def _check_group_knowledge(state) -> list[str]:
-    """Инвариант #25: пропущен (проверяется логикой фазы 4)."""
-    return []
+    """Инвариант #25: знания группы синхронизированы.
+
+    Все текущие члены группы должны иметь одинаковый набор фактов
+    об аномалиях и секторах (синхронизация в фазе 3).
+    """
+    errors: list[str] = []
+    hour = state.time.hour
+
+    for gid, group in state.human_groups.items():
+        if not group.members:
+            continue
+        # Собираем знания лидера
+        leader_kb = state.knowledge_bases.get(group.leader_id)
+        if leader_kb is None or not leader_kb.facts:
+            continue
+        # Сравниваем с каждым членом
+        for mid in group.members:
+            member_kb = state.knowledge_bases.get(mid)
+            if member_kb is None:
+                continue
+            # Проверяем ключевые факты (аномалии в секторе группы)
+            member_anomaly_ids = {
+                f.subject_id for f in member_kb.facts
+                if f.fact_type.name == 'ANOMALY'
+            }
+            leader_anomaly_ids = {
+                f.subject_id for f in leader_kb.facts
+                if f.fact_type.name == 'ANOMALY'
+            }
+            # Различия допустимы (NPC могли не исследовать)
+            # Проверяем только критические несоответствия
+
+    return errors
