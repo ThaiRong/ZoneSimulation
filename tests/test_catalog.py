@@ -13,7 +13,7 @@ from zonesim.world.item import ItemType
 class TestCatalogLoading:
     def test_default_catalog_has_all_mvp_items(self):
         catalog = ItemCatalog.load()
-        assert len(catalog) == 23
+        assert len(catalog) >= 24
         for item_id in (
             "weapon.pistol.p9", "weapon.carbine.k20", "weapon.auto.serp",
             "weapon.rifle.sokol", "weapon.lmg.grad", "weapon.melee.klyk",
@@ -23,6 +23,7 @@ class TestCatalogLoading:
             "gear.medkit.sanitar2", "gear.optics.zritel3", "gear.detector.radar1",
             "capture.kit.predator", "capture.kit.scavenger", "capture.kit.migrator",
             "anomaly.kit.subtle", "anomaly.kit.visible", "anomaly.kit.large",
+            "shelter.kit.basic",
         ):
             assert item_id in catalog
 

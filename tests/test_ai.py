@@ -234,12 +234,16 @@ class TestEngineIntegration:
         assert known > 0
 
     def test_artifacts_get_collected(self):
-        """За 240 часов кто-то должен добыть артефакт."""
+        """За 480 часов кто-то должен добыть артефакт через исследование.
+
+        Артефакты добываются только через исследование (§12.3) или
+        разрушение (§12.5) аномалий — авто-подбор убран (задача 14).
+        """
         engine = SimulationEngine(seed=42)
-        for _ in range(240):
+        for _ in range(480):
             engine.simulate_hour()
         carriers = [h for h in engine.state.humans if h.artifacts]
-        assert len(carriers) > 0
+        assert len(carriers) > 0, "Артефакты должны добываться через исследование"
 
     def test_determinism(self):
         def run():

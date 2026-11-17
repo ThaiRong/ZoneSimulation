@@ -1397,14 +1397,14 @@ class SimulationEngine:
             self._sync_npc_from_items(patient)
 
     def _group_can_create_shelter(self, group: HumanGroup, members: list[HumanNPC]) -> bool:
-        """Проверяет наличие материалов для создания временного убежища (§7.10).
+        """Проверяет наличие набора для убежища (§7.10).
 
-        Материал — любой расходный предмет в инвентаре группы.
+        Нерасходный предмет: базово есть у всех людей, не тратится.
         """
         for npc in members:
             for item_id in npc.inventory:
                 item = self.state.items.get(item_id)
-                if item and item.type in (ItemType.MEDICINE, ItemType.AMMO, ItemType.OPTICS):
+                if item and item.id == "shelter.kit.basic":
                     return True
         return False
 
@@ -1414,23 +1414,16 @@ class SimulationEngine:
         if not members:
             return False
 
-        # Найти и потратить материал
-        material_item = None
-        for npc in members:
-            for item_id in npc.inventory:
-                item = self.state.items.get(item_id)
-                if item and item.type in (ItemType.MEDICINE, ItemType.AMMO, ItemType.OPTICS):
-                    material_item = item
-                    npc.inventory.remove(item_id)
-                    self.state.items.pop(item_id, None)
-                    break
-            if material_item:
-                break
-
-        if not material_item:
+        # Проверка: хотя бы один NPC имеет набор — не расходуется
+        has_kit = any(
+            self.state.items.get(item_id) and item_id == "shelter.kit.basic"
+            for npc in members
+            for item_id in npc.inventory
+        )
+        if not has_kit:
             return False
 
-        # Создать Shelter
+        # Создать Shelter — материал не тратится
         shelter_id = self.state.next_shelter_id
         self.state.next_shelter_id += 1
         shelter = Shelter(
@@ -1621,6 +1614,7 @@ class SimulationEngine:
         if ammo_ref:
             self._spawn_catalog_item(ammo_ref, npc.id, quantity=12)
         self._spawn_catalog_item("gear.medkit.sanitar2", npc.id)
+        self._spawn_catalog_item("shelter.kit.basic", npc.id)  # нерасходный набор для убежища (§7.10)
         self._sync_npc_from_items(npc)
 
     def _spawn_catalog_item(self, item_ref: str, owner_id: int, quantity: int = 1) -> Item:

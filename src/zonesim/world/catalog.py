@@ -24,6 +24,7 @@ CATEGORY_TO_ITEM_TYPE = {
     "detector": ItemType.DETECTOR,
     "capture_kit": ItemType.CAPTURE_KIT,
     "anomaly_destruction_kit": ItemType.DESTROY_KIT,
+    "shelter_kit": ItemType.SHELTER_KIT,  # нерасходный инструмент убежища (§7.10)
 }
 
 COMMON_REQUIRED = (
@@ -43,6 +44,7 @@ FAMILY_REQUIRED = {
     "anomaly_destruction_kit": (
         "target_anomaly_type", "stability_damage", "danger_rank", "uses",
     ),
+    "shelter_kit": (),  # нерасходный предмет, без дополнительных свойств
 }
 
 QUALITY_MULTIPLIERS = (0.90, 1.00, 1.15, 1.30)

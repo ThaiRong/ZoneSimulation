@@ -39,17 +39,17 @@ def test_starting_equipment_has_unique_ids_and_single_owner():
     humans = engine.state.humans + engine.state.stationary_humans
     guards = [n for n in humans if n.stationary_role == "guard"]
 
-    expected_items = (len(humans) - len(guards)) * 4 + len(guards) * 8
+    expected_items = (len(humans) - len(guards)) * 5 + len(guards) * 9
     assert len(engine.state.items) == expected_items
     assert len({item.id for item in engine.state.items.values()}) == len(engine.state.items)
     for npc in humans:
         if npc.stationary_role == "guard":
-            # стандартные 4 минус снятое снаряжение плюс выдача охраны
-            assert len(npc.inventory) == 8
+            # стандартные 5 базовых (было 4) + доп. выдача охраны
+            assert len(npc.inventory) == 9
             assert npc.ammo == 60 + 12  # стандартные 12 + выдача 60
             assert npc.medicines == 1 + 3
         else:
-            assert len(npc.inventory) == 4
+            assert len(npc.inventory) == 5  # +shelter.kit.basic
             assert npc.ammo == 12
             assert npc.medicines == 1
         assert npc.money == 100

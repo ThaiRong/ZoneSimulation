@@ -21,6 +21,7 @@ class ItemType(str, Enum):
     ARTIFACT = "artifact"
     ANOMALY_PART = "anomaly_part"
     SUPPLIES = "supplies"
+    SHELTER_KIT = "shelter_kit"  # нерасходный набор для убежища (§7.10)
 
 
 @dataclass

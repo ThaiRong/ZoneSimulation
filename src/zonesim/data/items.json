@@ -358,6 +358,21 @@
       "danger_rank": 1
     },
     {
+      "id": "shelter.kit.basic",
+      "name": "Набор для убежища",
+      "category": "shelter_kit",
+      "slot": "equipment",
+      "quality": 1.0,
+      "base_value": 5,
+      "durability_max": 100,
+      "durability_loss": 0,
+      "import_required": false,
+      "tags": [
+        "common",
+        "basic"
+      ]
+    },
+    {
       "id": "anomaly.kit.visible",
       "name": "Мощный аномальный заряд",
       "category": "anomaly_destruction_kit",
