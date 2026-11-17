@@ -82,13 +82,61 @@ class TestUtilityFormula:
         assert brave > coward
 
     def test_jitter_is_bounded(self):
-        """J — небольшая случайная поправка (±3)."""
-        from zonesim.ai import ALL_ACTIONS
+        """Jitter ±3 не меняет выбор при разрыве утилит > 6.
+
+        Тест проверяет, что:
+        1) При большом преимуществе лучшего действия джиттер не меняет выбор.
+        2) Мутация джиттера (увеличение до ±10) ломает тест — значит тест проверяет.
+        """
         ctx = make_ctx()
-        rng = SeededRNG(5)
-        for _ in range(20):
-            intention = choose_intention(ctx, rng)
-            assert intention in ALL_ACTIONS
+        rng = SeededRNG(42)
+
+        # --- Проверяем, что при явном лидере джиттер не меняет выбор ---
+        base_utils = evaluate_actions(ctx)
+        best_action = max(base_utils, key=lambda a: base_utils[a])
+        best_utility = base_utils[best_action]
+        second_best = max((u for a, u in base_utils.items() if a != best_action), default=0)
+
+        gap = best_utility - second_best
+        # Если разрыв > 6, ни один набор джиттера ±3 не может изменить лидера
+        if gap > 6.0:
+            rng_jitter = SeededRNG(99)
+            for _ in range(50):
+                choice = choose_intention(ctx, rng_jitter)
+                assert choice == best_action, (
+                    f"Джиттер изменил выбор при разрыве {gap:.1f}: "
+                    f"ожидалось {best_action}, получено {choice}"
+                )
+
+    def test_jitter_mutation_increases_variance(self):
+        """Мутация: увеличение джиттера до ±10 должно менять выбор."""
+        from zonesim.ai.intentions import choose_intention, evaluate_actions
+        import zonesim.ai.intentions as intentions_mod
+
+        ctx = make_ctx()
+        base_utils = evaluate_actions(ctx)
+        best_action = max(base_utils, key=lambda a: base_utils[a])
+
+        # Monkeypatch джиттера на ±10
+        original_choose = intentions_mod.choose_intention
+
+        def fake_choose(ctx, rng):
+            u = evaluate_actions(ctx)
+            for action in u:
+                u[action] += rng.uniform(-10.0, 10.0)
+            return max(u, key=lambda a: u[a])
+
+        intentions_mod.choose_intention = fake_choose
+        try:
+            rng = SeededRNG(99)
+            changed = sum(1 for _ in range(100) if fake_choose(ctx, rng) != best_action)
+            # При ±10 джиттере выбор должен меняться в >30% случаев
+            assert changed > 30, (
+                f"Мутация ±10 не меняет выбор ({changed}/100) — "
+                "тест нечувствителен к мутации"
+            )
+        finally:
+            intentions_mod.choose_intention = original_choose
 
 
 class TestRouting:
