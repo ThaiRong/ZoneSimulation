@@ -39,3 +39,7 @@ line-length = 120
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# libtmux 0.46.x содержит битый pytest-плагин (маркер на фикстуре: "Marks cannot be applied to fixtures"),
+# который ломает весь запуск pytest при автообнаружении плагинов. Проект libtmux не использует,
+# поэтому плагин отключен явно. Когда баг будет исправлен, опцию можно убрать.
+addopts = "-p no:libtmux"
