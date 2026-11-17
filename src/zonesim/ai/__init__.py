@@ -3,6 +3,7 @@
 from zonesim.ai.intentions import (
     ALL_ACTIONS,
     AMBUSH,
+    ARTIFACT_SEARCH,
     CAPTURE,
     CREATE_SHELTER,
     DESTROY,
@@ -27,6 +28,7 @@ from zonesim.ai.intentions import (
 __all__ = [
     "ALL_ACTIONS",
     "AMBUSH",
+    "ARTIFACT_SEARCH",
     "CAPTURE",
     "CREATE_SHELTER",
     "DESTROY",

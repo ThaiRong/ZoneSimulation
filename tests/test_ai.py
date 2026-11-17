@@ -4,6 +4,7 @@ import pytest
 
 from zonesim.ai import (
     AMBUSH,
+    ARTIFACT_SEARCH,
     CAPTURE,
     CREATE_SHELTER,
     DESTROY,
@@ -222,7 +223,7 @@ class TestEngineIntegration:
         engine = SimulationEngine(seed=42)
         for _ in range(48):
             engine.simulate_hour()
-        valid = {SLEEP, REST, RESEARCH, DESTROY, CAPTURE, EXPLORE, EXIT, SHELTER, HELP, AMBUSH, CREATE_SHELTER}
+        valid = {SLEEP, REST, RESEARCH, DESTROY, CAPTURE, EXPLORE, EXIT, SHELTER, HELP, AMBUSH, CREATE_SHELTER, ARTIFACT_SEARCH}
         for npc in engine.state.humans:
             if npc.status == EntityStatus.ACTIVE:
                 assert npc.intention in valid

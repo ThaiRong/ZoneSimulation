@@ -22,6 +22,7 @@ from zonesim.combat.unconscious import calculate_unconscious_chance, resolve_unc
 from zonesim.actions.detection import check_anomaly_detection
 
 from zonesim.ai import (
+    ARTIFACT_SEARCH,
     CAPTURE,
     CREATE_SHELTER,
     DESTROY,
@@ -1929,15 +1930,31 @@ class SimulationEngine:
                 can_help=can_help,
                 distress_distance=distress_distance,
                 can_create_shelter=self._group_can_create_shelter(group, members),
+                can_search_artifact=any(
+                    f.subject_id in self.state.anomalies
+                    and self.state.anomalies[f.subject_id].status == AnomalyStatus.ACTIVE
+                    for f in researchable
+                ) or bool(self.state.knowledge_bases.get(group.leader_id)),
+                known_artifact_sectors={
+                    int(f.payload["sector_id"])
+                    for kb in (self.state.knowledge_bases.get(group.leader_id),)
+                    if kb
+                    for f in kb.get_facts(KnowledgeType.ANOMALY)
+                    if f.payload.get("has_artifact") and f.payload.get("sector_id")
+                },
             )
             group.intention = choose_intention(ctx, self.state.rng)
-            # Установить целевой сектор для RESEARCH (артефакты §12.5)
-            if group.intention == RESEARCH and ctx.known_has_artifact:
-                # Найти сектор аномалии с артефактом среди researchable
-                for f in researchable:
-                    if f.payload.get("has_artifact"):
-                        group.target_sector_id = f.payload.get("sector_id")
-                        break
+            # Установить целевой сектор для RESEARCH / ARTIFACT_SEARCH (артефакты §12.5)
+            if group.intention in (RESEARCH, ARTIFACT_SEARCH):
+                if ctx.known_has_artifact:
+                    # Аномалия с артефактом в текущем секторе
+                    for f in researchable:
+                        if f.payload.get("has_artifact"):
+                            group.target_sector_id = f.payload.get("sector_id")
+                            break
+                elif group.intention == ARTIFACT_SEARCH and ctx.known_artifact_sectors:
+                    # Движение к известной аномалии с артефактом в другом секторе
+                    group.target_sector_id = next(iter(ctx.known_artifact_sectors))
             for member in members:
                 if member.status == EntityStatus.ACTIVE:
                     member.intention = group.intention
@@ -2133,6 +2150,8 @@ class SimulationEngine:
             elif group.intention == SHELTER:
                 target_ids = self._shelter_targets(group, hour)
             elif group.intention == RESEARCH and group.target_sector_id is not None:
+                target_ids = {group.target_sector_id}
+            elif group.intention == ARTIFACT_SEARCH and group.target_sector_id is not None:
                 target_ids = {group.target_sector_id}
             if not target_ids:
                 continue
@@ -2932,8 +2951,9 @@ class SimulationEngine:
                 "concealment": target.concealment,
                 "stability": target.stability,
                 "researched": True,
+                "has_artifact": True,  # артефакт обнаружен при исследовании
             }, hour)
-            # Сформировавшийся артефакт обнаруживается при исследовании (§12.3)
+            # Сформировавшийся артефакт извлекается (§12.3)
             self._give_artifact(npc, target, hour)
         elif result == "safe_path_found":
             kb.add_manual(npc.id, KnowledgeType.SAFE_PATH, target.id, {
@@ -2975,50 +2995,6 @@ class SimulationEngine:
                     details={"artifact_id": art.id, "rarity": art.rarity, "value": art.value},
                 )
                 return
-
-    def _process_artifact_retrieval(self, hour: int) -> None:
-        """Добыча артефактов из аномалий в секторе (§12.4).
-
-        Если в секторе есть активная аномалия с незаметным артефактом
-        и там находится мобильный NPC — артефакт автоматически извлекается.
-        """
-        artifacts_by_anomaly: dict[int, list[Artifact]] = {}
-        for art in self.state.artifacts.artifacts:
-            if not art.discovered:
-                artifacts_by_anomaly.setdefault(art.anomaly_id, []).append(art)
-
-        for npc in self.state.humans:
-            if npc.status != EntityStatus.ACTIVE:
-                continue
-            for anomaly in self.state.anomalies.values():
-                if (anomaly.sector_id != npc.sector_id or
-                        anomaly.status != AnomalyStatus.ACTIVE):
-                    continue
-                for art in artifacts_by_anomaly.get(anomaly.id, []):
-                    art.discovered = True
-                    npc.artifacts.append(art.id)
-                    self._create_item(
-                        ItemType.ARTIFACT,
-                        f"Артефакт ({art.rarity})",
-                        art.value,
-                        npc.id,
-                        properties={"artifact_id": art.id},
-                    )
-                    self.state.news_manager.create_event(
-                        hour=hour,
-                        minute=45,
-                        sector_id=npc.sector_id,
-                        event_type="artifact_found",
-                        participants=[npc.id],
-                        result="picked_up_phase2",
-                        importance=30,
-                        summary=f"NPC {npc.id} нашёл артефакт ({art.rarity}) в аномалии {anomaly.id}",
-                        details={
-                            "artifact_id": art.id,
-                            "rarity": art.rarity,
-                            "value": art.value,
-                        },
-                    )
 
     def _process_artifact_sales(self, hour: int) -> None:
         """Продажа артефактов торговцу по формулам §16.3.
@@ -3695,7 +3671,7 @@ class SimulationEngine:
                 npc.intention = SLEEP  # инвариант #5: спящие имеют SLEEP
             elif npc.intention == REST:
                 self._rest_tick(npc)
-            elif npc.intention == RESEARCH:
+            elif npc.intention in (RESEARCH, ARTIFACT_SEARCH):
                 self._research_tick(npc, hour)
             elif npc.intention == EXIT:
                 self._exit_tick(npc, hour)

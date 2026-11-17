@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import networkx as nx
 
@@ -23,8 +23,9 @@ SHELTER = "shelter"        # укрытие от выброса (§12.7)
 HELP = "help_distress"     # помощь по сигналу бедствия (§16.10)
 AMBUSH = "ambush"          # засада (§10.4)
 CREATE_SHELTER = "create_shelter"  # создание временного убежища (§7.10)
+ARTIFACT_SEARCH = "search_artifact"  # целенаправленный поиск артефакта (§12.3)
 
-ALL_ACTIONS = (SLEEP, REST, RESEARCH, DESTROY, CAPTURE, EXPLORE, EXIT, SHELTER, HELP, AMBUSH, CREATE_SHELTER)
+ALL_ACTIONS = (SLEEP, REST, RESEARCH, DESTROY, CAPTURE, EXPLORE, EXIT, SHELTER, HELP, AMBUSH, CREATE_SHELTER, ARTIFACT_SEARCH)
 
 # Фракционные приоритеты F (§7.3). Меняют вероятность, не запрещают действия.
 FACTION_FLAVOR: dict[str, dict[str, float]] = {
@@ -56,6 +57,8 @@ class IntentionContext:
     can_help: bool = False          # известен активный сигнал бедствия (§16.10)
     distress_distance: int = 6      # рёбер до сектора сигнала
     can_create_shelter: bool = False # есть материалы для создания убежища (§7.10)
+    can_search_artifact: bool = False # есть активная аномалия в секторе
+    known_artifact_sectors: set[int] = field(default_factory=set)  # секторы с артефактами (§12.5)
 
 
 def evaluate_actions(ctx: IntentionContext) -> dict[str, float]:
@@ -158,8 +161,22 @@ def evaluate_actions(ctx: IntentionContext) -> dict[str, float]:
                 continue
             E += 12.0  # защита от выброса и комфортный сон
             R += 3.0  # затраты материалов
-            # Приоритет выше REST: базовый бонус N
-            N += 15.0
+            # Приоритет выше REST, но ниже HELP: базовый бонус N
+            N += 10.0
+        elif action == ARTIFACT_SEARCH:
+            # Целенаправленный поиск артефакта: высокий приоритет при наличии знания
+            if not ctx.can_search_artifact and not ctx.known_artifact_sectors:
+                u[action] = float("-inf")
+                continue
+            # Если есть знание о секторах с артефактами — бонус за направление
+            if ctx.known_artifact_sectors:
+                E += 30.0  # артефакт — экспортная ценность (×3 тип)
+                I += 15.0  # наличие знания о секторе
+                N += 12.0  # приоритет выше RESEARCH: артефакт дороже частей
+            else:
+                E += 15.0  # исследование аномалии в секторе
+                I += 5.0   # использование знания
+            R += 5.0  # риск аномалии при приближении
 
         u[action] = F + G + E + C + I + N - R * risk_factor
 
