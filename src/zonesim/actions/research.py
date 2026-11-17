@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from zonesim.anomalies.core import Anomaly
-from zonesim.world.entity import HumanNPC, EntityStatus
 from zonesim.knowledge.fact import KnowledgeBase, KnowledgeType
+from zonesim.world.entity import HumanNPC
 
 
 def calculate_research_success(

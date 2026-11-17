@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from zonesim.anomalies.core import Anomaly, AnomalyStatus, AnomalyType
+from zonesim.anomalies.core import Anomaly, AnomalyType
 from zonesim.world.entity import HumanNPC
 
 

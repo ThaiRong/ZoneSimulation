@@ -1,22 +1,29 @@
 """Тесты Фазы 4: боевая система (§11 ТЗ)."""
 
 import pytest
+
+from zonesim.combat import CombatSystem
 from zonesim.combat.base import (
-    Combatant, CombatFactory, CombatRound, CombatBase,
-    CombatDefense, select_targets, BattleLog,
+    Combatant,
+    CombatBase,
+    CombatDefense,
+    CombatRound,
+    select_targets,
 )
+from zonesim.combat.loot import EquipmentManager
 from zonesim.combat.retreat import (
-    calculate_retreat_score, calculate_retreat_chance,
-    resolve_retreat, should_attempt_retreat,
+    calculate_retreat_chance,
+    calculate_retreat_score,
+    resolve_retreat,
+    should_attempt_retreat,
 )
 from zonesim.combat.surrender import SurrenderManager, SurrenderOutcome
 from zonesim.combat.unconscious import (
-    calculate_unconscious_chance, resolve_unconscious_check,
-    provide_medical_help, check_injury,
+    calculate_unconscious_chance,
+    check_injury,
+    provide_medical_help,
+    resolve_unconscious_check,
 )
-from zonesim.combat.loot import EquipmentManager, Corpse
-from zonesim.combat import CombatSystem
-
 
 # ==================== CombatBase Tests ====================
 
@@ -363,7 +370,7 @@ class TestEquipmentManager:
 
     def test_no_value_damage_on_light_hit(self):
         """Лёгкий удар не повреждает ценности."""
-        damaged, new_cond = EquipmentManager.check_value_damage(80, 10, 0.5)
+        damaged, _new_cond = EquipmentManager.check_value_damage(80, 10, 0.5)
         assert damaged is False
 
     def test_corruption_on_consumption(self):
@@ -426,7 +433,7 @@ class TestCombatSystem:
 
         def rng_func():
             return 0.1
-        result = combat.fight(rng_func)
+        combat.fight(rng_func)
 
         assert def_.health >= 0
 

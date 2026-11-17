@@ -47,6 +47,10 @@ def choose_group_intention(
 
 
 __all__ = [
-    "Monster", "MonsterSpecies", "MonsterStatus", "species_value",
-    "select_weakest_target", "choose_group_intention",
+    "Monster",
+    "MonsterSpecies",
+    "MonsterStatus",
+    "choose_group_intention",
+    "select_weakest_target",
+    "species_value",
 ]

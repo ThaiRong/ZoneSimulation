@@ -1,6 +1,5 @@
 """Тесты ядра времени и конфигурации. Основано на §5 ТЗ."""
 
-import pytest
 from zonesim.core.time import GameTime, PhaseOfDay
 
 

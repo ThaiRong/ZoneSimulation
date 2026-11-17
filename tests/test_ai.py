@@ -1,6 +1,5 @@
 """Тесты AI намерений (§9) и их интеграции в часовой цикл."""
 
-import pytest
 
 from zonesim.ai import (
     AMBUSH,
@@ -27,17 +26,17 @@ from zonesim.world.entity import EntityStatus
 
 
 def make_ctx(**overrides) -> IntentionContext:
-    base = dict(
-        hour=12,
-        is_night=False,
-        bravery=50,
-        faction="Бродяги",
-        health_share=1.0,
-        stamina_share=1.0,
-        at_home=True,
-        home_sector_id=1,
-        distance_to_border=2,
-    )
+    base = {
+        "hour": 12,
+        "is_night": False,
+        "bravery": 50,
+        "faction": "Бродяги",
+        "health_share": 1.0,
+        "stamina_share": 1.0,
+        "at_home": True,
+        "home_sector_id": 1,
+        "distance_to_border": 2,
+    }
     base.update(overrides)
     return IntentionContext(**base)
 
@@ -91,7 +90,7 @@ class TestUtilityFormula:
         2) Мутация джиттера (увеличение до ±10) ломает тест — значит тест проверяет.
         """
         ctx = make_ctx()
-        rng = SeededRNG(42)
+        SeededRNG(42)
 
         # --- Проверяем, что при явном лидере джиттер не меняет выбор ---
         base_utils = evaluate_actions(ctx)
@@ -112,8 +111,8 @@ class TestUtilityFormula:
 
     def test_jitter_mutation_increases_variance(self):
         """Мутация: увеличение джиттера до ±10 должно менять выбор."""
-        from zonesim.ai.intentions import choose_intention, evaluate_actions
         import zonesim.ai.intentions as intentions_mod
+        from zonesim.ai.intentions import evaluate_actions
 
         ctx = make_ctx()
         base_utils = evaluate_actions(ctx)

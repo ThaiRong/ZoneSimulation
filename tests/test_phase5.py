@@ -1,43 +1,40 @@
 """Тесты Фазы 5: аномалии и монстры (§12, §13 ТЗ)."""
 
 import pytest
-from zonesim.anomalies.core import Anomaly, AnomalyType, AnomalyStatus
+
+from zonesim.anomalies.artifact import ArtifactManager
+from zonesim.anomalies.core import Anomaly, AnomalyStatus, AnomalyType
 from zonesim.anomalies.damage import (
-    calculate_avoid_chance,
     apply_anomaly_damage,
-    check_anomaly_contact,
-    apply_anomaly_effect_on_movement,
+    calculate_avoid_chance,
+)
+from zonesim.anomalies.destroy import (
+    attempt_destroy_anomaly,
+    calculate_destroy_damage,
+    get_anomaly_parts_after_destruction,
+)
+from zonesim.anomalies.migration import (
+    calculate_anomaly_move_timer,
+    check_anomaly_migration,
 )
 from zonesim.anomalies.research import (
     calculate_research_success,
-    research_anomaly,
     research_sector_for_anomalies,
 )
-from zonesim.anomalies.destroy import (
-    calculate_destroy_damage,
-    attempt_destroy_anomaly,
-    get_anomaly_parts_after_destruction,
-)
-from zonesim.anomalies.artifact import ArtifactManager, Artifact
-from zonesim.anomalies.migration import (
-    check_anomaly_migration,
-    calculate_anomaly_move_timer,
-)
 from zonesim.monsters.behavior import Monster, MonsterSpecies
+from zonesim.monsters.feed import Corpse, FeedManager
 from zonesim.monsters.hunt import (
     calculate_hunt_chance,
-    decide_hunt_action,
     calculate_stalk_success,
+    decide_hunt_action,
     should_pursue,
 )
-from zonesim.monsters.feed import FeedManager, Corpse
 from zonesim.monsters.migration import (
-    MonsterMigrationManager,
-    MONSTER_SOFT_MIN,
-    MONSTER_SOFT_MAX,
     MONSTER_MAX_GROUPS_PER_DAY,
+    MONSTER_SOFT_MAX,
+    MONSTER_SOFT_MIN,
+    MonsterMigrationManager,
 )
-
 
 # ==================== Anomaly Core Tests ====================
 

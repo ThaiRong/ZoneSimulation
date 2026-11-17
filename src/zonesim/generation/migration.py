@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+
 from zonesim.world.entity import EntityStatus, HumanNPC, Monster
 
 # Лимиты миграции монстров (§13.6)
@@ -163,6 +164,5 @@ def _process_human_departure(
     border_ids = {sid for sid, s in sectors.items() if s.is_border}
     for npc in humans:
         if npc.status == EntityStatus.ACTIVE and npc.health < 20 \
-                and npc.sector_id in border_ids:
-            if rng.random() < 0.05:  # 5% шанс попытаться выйти
-                npc.status = EntityStatus.EXILED
+                and npc.sector_id in border_ids and rng.random() < 0.05:  # 5% шанс попытаться выйти
+            npc.status = EntityStatus.EXILED

@@ -1,23 +1,26 @@
 """Тесты Фазы 6: экономика (§16 ТЗ)."""
 
 import pytest
-from zonesim.economy.trader import Trader, TraderType, TraderStatus, TradeOffer
+
+from zonesim.economy.contracts import (
+    ContractManager,
+    ContractStatus,
+    ContractType,
+)
 from zonesim.economy.pricing import (
-    calculate_stock_multiplier,
-    calculate_sell_price,
     calculate_buy_price,
-    get_condition_multiplier,
+    calculate_sell_price,
+    calculate_stock_multiplier,
     calculate_trade_margin,
+    get_condition_multiplier,
     should_buy,
     should_sell,
 )
-from zonesim.economy.contracts import (
-    ContractManager, ContractType, ContractStatus,
-)
 from zonesim.economy.trade import (
-    ImportExportManager, CaptureManager, EXPORT_LIMITS,
+    CaptureManager,
+    ImportExportManager,
 )
-
+from zonesim.economy.trader import Trader, TraderType
 
 # ==================== Trader Tests ====================
 
@@ -183,7 +186,7 @@ class TestContractManager:
 
     def test_accept_already_accepted(self):
         cm = ContractManager()
-        contract = cm.create_contract(1, ContractType.KNOWLEDGE, "knowledge", 1, 50.0)
+        cm.create_contract(1, ContractType.KNOWLEDGE, "knowledge", 1, 50.0)
         cm.accept_contract(0, npc_id=10, sector_id=5, current_hour=10)
         result = cm.accept_contract(0, npc_id=20, sector_id=5, current_hour=11)
         assert result is False  # уже принят
@@ -192,7 +195,7 @@ class TestContractManager:
         cm = ContractManager()
         contract = cm.create_contract(1, ContractType.ARTIFACT, "artifact", 1, 200.0, deadline_hours=100)
         cm.accept_contract(0, npc_id=10, sector_id=5, current_hour=10)
-        success, reward, details = cm.complete_contract(0, current_hour=20)
+        success, reward, _details = cm.complete_contract(0, current_hour=20)
         assert success is True
         assert reward == 200.0
         assert contract.status == ContractStatus.COMPLETED
@@ -201,23 +204,23 @@ class TestContractManager:
         cm = ContractManager()
         contract = cm.create_contract(1, ContractType.MONSTER_PARTS, "parts", 3, 100.0, deadline_hours=10, current_hour=0)
         cm.accept_contract(0, npc_id=10, sector_id=5, current_hour=0)
-        success, penalty, debt, reason = cm.fail_contract(0, current_hour=20)
+        success, _penalty, _debt, reason = cm.fail_contract(0, current_hour=20)
         assert success is True
         assert reason == "expired"
         assert contract.status == ContractStatus.FAILED
 
     def test_fail_contract_no_penalty_for_zero(self):
         cm = ContractManager()
-        contract = cm.create_contract(1, ContractType.ARTIFACT, "artifact", 1, 200.0, deadline_hours=10, penalty=0.0)
+        cm.create_contract(1, ContractType.ARTIFACT, "artifact", 1, 200.0, deadline_hours=10, penalty=0.0)
         cm.accept_contract(0, npc_id=10, sector_id=5, current_hour=0)
-        success, penalty, debt, reason = cm.fail_contract(0, current_hour=20)
+        success, _penalty, debt, _reason = cm.fail_contract(0, current_hour=20)
         assert success is True
         assert debt == 0.0
 
     def test_expire_inactive_contracts(self):
         cm = ContractManager()
-        c1 = cm.create_contract(1, ContractType.KNOWLEDGE, "knowledge", 1, 10.0, deadline_hours=5, current_hour=0)
-        c2 = cm.create_contract(1, ContractType.KNOWLEDGE, "knowledge", 1, 20.0, deadline_hours=100, current_hour=0)
+        cm.create_contract(1, ContractType.KNOWLEDGE, "knowledge", 1, 10.0, deadline_hours=5, current_hour=0)
+        cm.create_contract(1, ContractType.KNOWLEDGE, "knowledge", 1, 20.0, deadline_hours=100, current_hour=0)
         expired = cm.expire_inactive_contracts(10)
         assert 0 in expired
         assert 1 not in expired
@@ -231,8 +234,8 @@ class TestContractManager:
 
     def test_accepted_contracts_for_npc(self):
         cm = ContractManager()
-        c1 = cm.create_contract(1, ContractType.ARTIFACT, "artifact", 1, 200.0)
-        c2 = cm.create_contract(2, ContractType.MONSTER_PARTS, "parts", 3, 100.0)
+        cm.create_contract(1, ContractType.ARTIFACT, "artifact", 1, 200.0)
+        cm.create_contract(2, ContractType.MONSTER_PARTS, "parts", 3, 100.0)
         cm.accept_contract(0, npc_id=10, sector_id=5, current_hour=0)
         cm.accept_contract(1, npc_id=10, sector_id=5, current_hour=0)
 

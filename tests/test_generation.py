@@ -1,8 +1,5 @@
 """Тесты генерации мира. Основано на §23.1 ТЗ."""
 
-import pytest
-from zonesim.core.config import GameConfig
-from zonesim.core.time import SeededRNG
 from zonesim.generation.worldgen import generate_world
 from zonesim.world.sector import get_distance, is_connected
 

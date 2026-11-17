@@ -6,9 +6,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 
-pytest.importorskip("PySide6")
-
-from PySide6.QtWidgets import QApplication
+# PySide6 может быть установлен, но не импортироваться из-за отсутствующих
+# системных библиотек Qt (например, libEGL.so.1 в headless-среде).
+# Поэтому ловим и ImportError тоже, чтобы тесты пропускались, а не падали при сборе.
+try:
+    from PySide6.QtWidgets import QApplication
+except ImportError as exc:  # pragma: no cover - окружение без графических библиотек
+    pytest.skip(f"PySide6 недоступен: {exc}", allow_module_level=True)
 
 from zonesim.ui.journal import filter_events
 from zonesim.ui.main_window import MainWindow

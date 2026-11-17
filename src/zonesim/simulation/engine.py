@@ -5,22 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from zonesim.core.time import GameTime, SeededRNG
-from zonesim.world.sector import Sector
-from zonesim.world.entity import HumanNPC, Monster, MonsterSpecies, EntityStatus
-from zonesim.combat.loot import Corpse, EquipmentManager, LootManager
-from zonesim.world.item import Item, ItemType, give_item, place_item_on_corpse
-
-from zonesim.core.config import GameConfig
-from zonesim.generation.worldgen import generate_world
-from zonesim.generation.migration import MigrationState, process_migration
-
-from zonesim.combat import CombatSystem
-from zonesim.combat.base import Combatant, CombatFactory
-from zonesim.combat.unconscious import calculate_unconscious_chance, resolve_unconscious_check
-
 from zonesim.actions.detection import check_anomaly_detection
-
 from zonesim.ai import (
     ARTIFACT_SEARCH,
     CAPTURE,
@@ -41,33 +26,10 @@ from zonesim.ai import (
     known_anomaly_sectors,
     next_step_towards,
 )
-
-from zonesim.needs.sleep import (
-    HUMAN_COMFORT_HOURS,
-    STAMINA_COST_AWAKE,
-    STAMINA_COST_MOVEMENT,
-    STAMINA_COST_RESEARCH,
-    human_sleep_recover,
-    update_stamina,
-)
-
-from zonesim.anomalies.research import research_anomaly
-
-from zonesim.world.group import HumanGroup, MonsterGroup
-from zonesim.world.catalog import ItemCatalog
-from zonesim.world.shelter import StormShelter, Shelter
-from zonesim.monsters.behavior import choose_group_intention, select_weakest_target, species_value
-from zonesim.monsters.feed import FeedManager
-from zonesim.monsters.hunt import should_pursue
-
-from zonesim.economy.contracts import ContractManager
-from zonesim.economy.trade import CaptureManager, ImportExportManager, ExportRecord
-from zonesim.economy.pricing import calculate_sell_price, get_type_multiplier, calculate_stock_multiplier
-
-from zonesim.anomalies.core import Anomaly as AnomalyEntity, AnomalyType, AnomalyStatus
+from zonesim.anomalies.artifact import ArtifactManager
+from zonesim.anomalies.core import Anomaly as AnomalyEntity
+from zonesim.anomalies.core import AnomalyStatus
 from zonesim.anomalies.damage import apply_anomaly_damage, check_anomaly_contact
-from zonesim.anomalies.artifact import ArtifactManager, Artifact
-from zonesim.anomalies.migration import check_anomaly_migration
 from zonesim.anomalies.destroy import attempt_destroy_anomaly, get_anomaly_parts_after_destruction
 from zonesim.anomalies.emission import (
     EMISSION_ARTIFACT_ACCELERATION,
@@ -84,19 +46,44 @@ from zonesim.anomalies.emission import (
     roll_warning_lead,
     schedule_next_emission,
 )
-
-from zonesim.monsters.migration import MonsterMigrationManager
-from zonesim.monsters.hunt import calculate_hunt_chance
-
-from zonesim.relations.personal import PersonalRelations
-from zonesim.relations.factions import FactionRelations
-from zonesim.relations.development import DevelopmentManager, ExileManager, FactionChangeManager
-from zonesim.relations.news import NewsManager
-
+from zonesim.anomalies.migration import check_anomaly_migration
+from zonesim.anomalies.research import research_anomaly
+from zonesim.combat import CombatSystem
+from zonesim.combat.base import CombatFactory
+from zonesim.combat.loot import Corpse, EquipmentManager, LootManager
+from zonesim.combat.unconscious import calculate_unconscious_chance, resolve_unconscious_check
+from zonesim.core.time import GameTime, SeededRNG
+from zonesim.economy.contracts import ContractManager
+from zonesim.economy.pricing import calculate_sell_price, calculate_stock_multiplier, get_type_multiplier
+from zonesim.economy.trade import CaptureManager, ExportRecord, ImportExportManager
+from zonesim.generation.migration import MigrationState, process_migration
+from zonesim.generation.worldgen import generate_world
 from zonesim.knowledge.fact import KnowledgeBase, KnowledgeType
+from zonesim.monsters.behavior import choose_group_intention, select_weakest_target, species_value
+from zonesim.monsters.feed import FeedManager
+from zonesim.monsters.hunt import calculate_hunt_chance, should_pursue
+from zonesim.monsters.migration import MonsterMigrationManager
+from zonesim.needs.sleep import (
+    HUMAN_COMFORT_HOURS,
+    STAMINA_COST_AWAKE,
+    STAMINA_COST_MOVEMENT,
+    STAMINA_COST_RESEARCH,
+    human_sleep_recover,
+    update_stamina,
+)
 from zonesim.persistence import SaveManager
+from zonesim.relations.development import DevelopmentManager, ExileManager, FactionChangeManager
+from zonesim.relations.factions import FactionRelations
+from zonesim.relations.news import NewsManager
+from zonesim.relations.personal import PersonalRelations
 from zonesim.simulation.invariants import InvariantViolation, assert_world_invariants
-
+from zonesim.world.catalog import ItemCatalog
+from zonesim.world.entity import EntityStatus, HumanNPC, Monster
+from zonesim.world.group import HumanGroup, MonsterGroup
+from zonesim.world.item import Item, ItemType, give_item, place_item_on_corpse
+from zonesim.world.sector import Sector
+from zonesim.world.shelter import Shelter, StormShelter
+from zonesim.world.stash import Stash
 
 CAPTURE_KIT_REF = {
     "territorial_predator": "capture.kit.predator",
@@ -160,7 +147,7 @@ class SimulationState:
     next_shelter_id: int = 100  # ID для временных убежищ
     trader_stock: dict[int, dict[str, int]] = field(default_factory=dict)  # npc торговца -> item_ref -> количество
     trails: list[list[int]] = field(default_factory=list)  # рёбра-тропы [a, b] (§10.4)
-    shelters: dict[int, "StormShelter"] = field(default_factory=dict)  # стационарные укрытия (§7.16)
+    shelters: dict[int, StormShelter] = field(default_factory=dict)  # стационарные укрытия (§7.16)
     temp_shelters: dict[int, Shelter] = field(default_factory=dict)  # временные убежища
     next_emission_hour: int = -1      # час начала следующего выброса (§12.7)
     emission_start_hour: int = -1
@@ -457,8 +444,7 @@ class SimulationEngine:
             return False
         current_hour = self.state.time.hour
         return (
-            self.state.conditional_trader_start_hour <= current_hour
-            and current_hour < self.state.conditional_trader_end_hour
+            self.state.conditional_trader_start_hour <= current_hour < self.state.conditional_trader_end_hour
         )
 
     def _conditional_trader_can_sleep(self) -> bool:
@@ -1443,7 +1429,6 @@ class SimulationEngine:
             leader = self._group_leader(group, members)
             stock = self.state.trader_stock.setdefault(trader.id, {})
             # сначала продажа добычи — освобождает деньги для закупки
-            initial_money = leader.money
             self._sell_loot(leader, trader)
             # buyer money = initial + proceeds from sell
             buyer_money = leader.money
@@ -1975,7 +1960,6 @@ class SimulationEngine:
                 if candidate is None or candidate.status in (EntityStatus.DEAD, EntityStatus.EXILED):
                     continue
                 age = hour - monster.target_memory_hour
-                is_large = species_value(monster) == "large_migrator"
                 is_scavenger = species_value(monster) == "scavenger_pack"
                 if should_pursue(monster, True, age) or (
                     is_scavenger and 0 <= age < 12 and candidate.health_share <= 0.7
@@ -2133,7 +2117,6 @@ class SimulationEngine:
                 continue
 
             # Для RESEARCH — не избегать секторов с аномалиями (цель — к ним!)
-            research_target = group.target_sector_id if group.intention == RESEARCH else None
             group_avoid = set() if group.intention == RESEARCH else avoid
 
             target_ids: set[int] | None = None
@@ -2149,9 +2132,7 @@ class SimulationEngine:
                     target_ids = {distress["sector_id"]}
             elif group.intention == SHELTER:
                 target_ids = self._shelter_targets(group, hour)
-            elif group.intention == RESEARCH and group.target_sector_id is not None:
-                target_ids = {group.target_sector_id}
-            elif group.intention == ARTIFACT_SEARCH and group.target_sector_id is not None:
+            elif group.intention == RESEARCH and group.target_sector_id is not None or group.intention == ARTIFACT_SEARCH and group.target_sector_id is not None:
                 target_ids = {group.target_sector_id}
             if not target_ids:
                 continue

@@ -1,15 +1,17 @@
 """Тесты Фазы 7: отношения, развитие, новости (§14-15, §18 ТЗ)."""
 
-import pytest
-from zonesim.relations.personal import PersonalRelations, RelationState
-from zonesim.relations.factions import FactionRelations
 from zonesim.relations.development import (
-    DevelopmentManager, StatType, PracticeProgress,
-    ExileManager, FactionChangeManager, get_practice_rewards,
+    DevelopmentManager,
+    ExileManager,
+    FactionChangeManager,
+    PracticeProgress,
+    StatType,
+    get_practice_rewards,
 )
-from zonesim.relations.news import NewsManager, WorldEvent
-from zonesim.world.entity import HumanNPC, EntityStatus
-
+from zonesim.relations.factions import FactionRelations
+from zonesim.relations.news import NewsManager
+from zonesim.relations.personal import PersonalRelations, RelationState
+from zonesim.world.entity import EntityStatus, HumanNPC
 
 # ==================== Personal Relations Tests ====================
 
@@ -183,7 +185,7 @@ class TestExileManager:
         em = ExileManager()
         npc = HumanNPC(id=1, faction="Бродяги", health=100)
         npc.status = EntityStatus.ACTIVE
-        allowed, reason = em.can_attempt_exile(npc)
+        allowed, _reason = em.can_attempt_exile(npc)
         assert allowed is False
 
     def test_exile_success(self):

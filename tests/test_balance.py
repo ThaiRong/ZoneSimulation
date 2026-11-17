@@ -1,17 +1,15 @@
 """Баланс: детектор аномалий, обнаружение монстрами, помощь и лечение группы."""
 
-import pytest
 
+from tests.test_actions_integration import _solo_group
+from tests.test_rest_trade import _trader_sector
 from zonesim.ai import REST, IntentionContext, evaluate_actions
-from zonesim.anomalies.core import Anomaly, AnomalyStatus, AnomalyType
+from zonesim.anomalies.core import Anomaly, AnomalyType
 from zonesim.combat import CombatSystem
 from zonesim.combat.base import Combatant
 from zonesim.simulation.engine import SimulationEngine
 from zonesim.world.entity import EntityStatus, Monster, MonsterSpecies
 from zonesim.world.item import ItemType, give_item
-
-from tests.test_actions_integration import _solo_group
-from tests.test_rest_trade import _trader_sector
 
 
 def _give_item(engine, npc, item_ref):
@@ -23,11 +21,11 @@ def _give_item(engine, npc, item_ref):
 
 
 def _ctx(**overrides):
-    base = dict(
-        hour=12, is_night=False, bravery=50, faction="Бродяги",
-        health_share=1.0, stamina_share=1.0,
-        at_home=True, home_sector_id=1, distance_to_border=2,
-    )
+    base = {
+        "hour": 12, "is_night": False, "bravery": 50, "faction": "Бродяги",
+        "health_share": 1.0, "stamina_share": 1.0,
+        "at_home": True, "home_sector_id": 1, "distance_to_border": 2,
+    }
     base.update(overrides)
     return IntentionContext(**base)
 
@@ -188,7 +186,7 @@ class TestGroupAid:
 
     def test_unconscious_without_help_dies(self):
         engine = SimulationEngine(seed=42)
-        npc, group = _solo_group(engine)
+        npc, _group = _solo_group(engine)
         npc.inventory = []  # нет медикаментов ни у кого в одиночной группе
         npc.health = 0
         npc.status = EntityStatus.UNCONSCIOUS

@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from zonesim.world.entity import EntityStatus, Monster
-from zonesim.world.group import HumanGroup, MonsterGroup
 from zonesim.world.sector import get_shortest_path
-
 
 # Виды монстров и их скорость (рёбер за час)
 MONSTER_SPEED = {

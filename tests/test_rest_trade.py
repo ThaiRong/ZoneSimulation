@@ -2,6 +2,7 @@
 
 import pytest
 
+from tests.test_actions_integration import _solo_group
 from zonesim.ai import REST, SLEEP, IntentionContext, evaluate_actions
 from zonesim.knowledge.fact import KnowledgeBase, KnowledgeType
 from zonesim.simulation.engine import SimulationEngine
@@ -9,15 +10,13 @@ from zonesim.world.entity import EntityStatus
 from zonesim.world.group import HumanGroup
 from zonesim.world.item import ItemType
 
-from tests.test_actions_integration import _solo_group
-
 
 def _ctx(**overrides):
-    base = dict(
-        hour=12, is_night=False, bravery=50, faction="Бродяги",
-        health_share=1.0, stamina_share=1.0,
-        at_home=True, home_sector_id=1, distance_to_border=2,
-    )
+    base = {
+        "hour": 12, "is_night": False, "bravery": 50, "faction": "Бродяги",
+        "health_share": 1.0, "stamina_share": 1.0,
+        "at_home": True, "home_sector_id": 1, "distance_to_border": 2,
+    }
     base.update(overrides)
     return IntentionContext(**base)
 

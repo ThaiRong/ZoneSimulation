@@ -82,7 +82,6 @@ class Trader:
         if not self.is_conditional:
             return self.status == TraderStatus.ACTIVE
 
-        from zonesim.core.time import GameTime
         return (self.status == TraderStatus.ACTIVE and
                 self.known_appearance_sector >= 0 and
                 0 <= self._current_hour - self.appearance_hour < self.known_appearance_duration)

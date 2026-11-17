@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
-from zonesim.anomalies.core import Anomaly, AnomalyStatus, AnomalyType
+from zonesim.anomalies.core import Anomaly, AnomalyStatus
 from zonesim.core.time import SeededRNG
 
 

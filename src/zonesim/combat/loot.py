@@ -6,8 +6,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-from zonesim.world.entity import EntityStatus
-
 
 class LootType(str, Enum):
     GEAR = "gear"

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from zonesim.world.entity import EntityStatus, HumanNPC, Monster
+from zonesim.world.entity import EntityStatus, HumanNPC
 
 
 @dataclass
@@ -108,15 +108,17 @@ class HumanGroup:
                 if hasattr(shelter, "participant_count") and shelter.participant_count > 0:
                     return True
 
-        # 3. Проверка StormShelter (стационарных убежищ) в секторе
+        # 3. Проверка StormShelter (стационарных убежищ) в секторе — доступен всем
         for shelter in shelters.values():
-            if hasattr(shelter, "sector_id") and shelter.sector_id == sector_id:
-                # StormShelter доступен всем
-                if type(shelter).__name__ == "StormShelter":
-                    return True
+            if (
+                hasattr(shelter, "sector_id")
+                and shelter.sector_id == sector_id
+                and type(shelter).__name__ == "StormShelter"
+            ):
+                return True
 
         # 4. Стационарные охранники в секторе
-        for npc_id, npc in stationary.items():
+        for npc in stationary.values():
             if (
                 npc.stationary_role == "guard"
                 and npc.status == EntityStatus.ACTIVE

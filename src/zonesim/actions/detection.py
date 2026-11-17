@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from zonesim.actions.stalk import calculate_stalk_check, StalkResult
+from zonesim.actions.stalk import StalkResult, calculate_stalk_check
 from zonesim.core.time import PhaseOfDay
-from zonesim.world.entity import EntityStatus, HumanNPC, Monster
 
 
 def calculate_stalking_check(

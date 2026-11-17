@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Any
 
-from zonesim.core.time import GameTime
-from zonesim.world.entity import HumanNPC, EntityStatus
+from zonesim.world.entity import EntityStatus, HumanNPC
 
 
 class StatType(str, Enum):

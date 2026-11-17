@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from zonesim.world.sector import get_shortest_path
-
 
 def calculate_retreat_score(
     health_share: float,

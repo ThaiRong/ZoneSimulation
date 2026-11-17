@@ -79,7 +79,7 @@ def _generate_graph(count: int, rng: SeededRNG) -> dict[int, Sector]:
 def _assign_border_sectors(sectors: dict[int, Sector]) -> None:
     """Граничные сектора — те, у кого 1-3 соседа или крайние по координатам."""
     # Сначала маркируем листья и почти листья
-    for sid, s in sectors.items():
+    for s in sectors.values():
         if len(s.neighbors) <= 2:
             s.is_border = True
     

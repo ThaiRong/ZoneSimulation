@@ -29,5 +29,13 @@ zonesim = ["data/*.json"]
 target-version = "py312"
 line-length = 120
 
+[tool.ruff.lint.per-file-ignores]
+# UI перехватывает любые исключения загрузки, чтобы показать сообщение пользователю
+"src/zonesim/ui/main_window.py" = ["BLE001"]
+# Мутабельные дефолты в dataclass-моделях конфигурации не разделяются между экземплярами
+# (dataclasses.copy.deepcopy на уровне поля) и используются как константы правил.
+"src/zonesim/**/config*.py" = ["RUF012"]
+"tests/**" = ["RUF012"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

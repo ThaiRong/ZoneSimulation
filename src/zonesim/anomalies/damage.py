@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from zonesim.anomalies.core import Anomaly, AnomalyStatus, AnomalyType
+from zonesim.anomalies.core import Anomaly, AnomalyStatus
 
 
 def calculate_avoid_chance(
@@ -113,7 +113,6 @@ def apply_anomaly_effect_on_movement(
     """
     Применяет эффект аномалии при перемещении через неё.
     """
-    from zonesim.core.time import PhaseOfDay
 
     avoid_chance = calculate_avoid_chance(
         attentiveness=entity_attentiveness,

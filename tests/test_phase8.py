@@ -1,6 +1,5 @@
 """Тесты Фазы 8: интеграция часового цикла (§8 ТЗ)."""
 
-import pytest
 from zonesim.simulation.engine import SimulationEngine
 from zonesim.world.entity import EntityStatus
 
@@ -21,7 +20,7 @@ class TestSimulationEngine:
         """simulate_hour увеличивает час на 1."""
         engine = SimulationEngine(seed=42)
         initial_hour = engine.state.time.hour
-        result = engine.simulate_hour()
+        engine.simulate_hour()
         assert engine.state.time.hour == initial_hour + 1
 
     def test_simulate_hour_returns_summary(self):
@@ -125,7 +124,6 @@ class TestSimulationEngine:
         if engine.state.anomalies and engine.state.human_groups:
             anomaly = next(iter(engine.state.anomalies.values()))
             first_group = next(iter(engine.state.human_groups.values()))
-            old_sector_id = first_group.sector_id
             first_group.sector_id = anomaly.sector_id
             for member_id in first_group.members:
                 npc = next((n for n in engine.state.humans if n.id == member_id), None)

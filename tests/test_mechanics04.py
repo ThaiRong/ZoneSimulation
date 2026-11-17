@@ -2,6 +2,7 @@
 
 import pytest
 
+from tests.test_actions_integration import _solo_group
 from zonesim.ai import HELP, SHELTER
 from zonesim.anomalies.core import Anomaly, AnomalyStatus, AnomalyType
 from zonesim.anomalies.emission import is_emission_active
@@ -9,8 +10,6 @@ from zonesim.knowledge.fact import KnowledgeBase, KnowledgeType
 from zonesim.simulation.engine import SimulationEngine
 from zonesim.world.entity import EntityStatus
 from zonesim.world.sector import get_distance
-
-from tests.test_actions_integration import _solo_group
 
 
 def _trail_chain(engine, length=2):
@@ -160,7 +159,7 @@ class TestEmission:
 
     def test_schedule_warning_and_intention(self):
         engine = SimulationEngine(seed=42)
-        npc, group = _solo_group(engine)
+        _npc, group = _solo_group(engine)
         hour = engine.state.time.hour
         engine.state.next_emission_hour = hour + 1
         engine.state.emission_warning_hour = hour

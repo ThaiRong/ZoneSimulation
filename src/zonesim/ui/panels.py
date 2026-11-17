@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QLabel, QListWidget, QPlainTextEdit, QVBoxLayout, QWidget
 
 from zonesim.anomalies.core import AnomalyStatus
-from zonesim.monsters.behavior import species_value
-from zonesim.world.entity import EntityStatus, EntityType
+from zonesim.world.entity import EntityStatus
 
 STATUS_LABELS = {
     EntityStatus.ACTIVE: "активен",
@@ -38,8 +36,8 @@ def sector_contents(state, sector_id: int) -> list[tuple[str, str, int]]:
             continue
         status = "активна" if anomaly.status == AnomalyStatus.ACTIVE else "разрушена"
         entries.append((
-            f"Аномалия {anomaly.id} [{anomaly.anomaly_type.value}] {status}, "
-            f"устойчивость {anomaly.stability}",
+            (f"Аномалия {anomaly.id} [{anomaly.anomaly_type.value}] {status}, "
+            f"устойчивость {anomaly.stability}"),
             "anomaly", anomaly.id,
         ))
     for npc in state.stationary_humans:
@@ -58,8 +56,8 @@ def sector_contents(state, sector_id: int) -> list[tuple[str, str, int]]:
         if npc.sector_id != sector_id:
             continue
         entries.append((
-            f"{npc.name} ({npc.faction}) — {STATUS_LABELS[npc.status]}, "
-            f"здоровье {npc.health}/{npc.max_health}, выносл. {int(npc.stamina)}",
+            (f"{npc.name} ({npc.faction}) — {STATUS_LABELS[npc.status]}, "
+            f"здоровье {npc.health}/{npc.max_health}, выносл. {int(npc.stamina)}"),
             "npc", npc.id,
         ))
     for group in state.monster_groups.values():

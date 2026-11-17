@@ -27,8 +27,8 @@ from zonesim.relations.personal import PersonalRelations
 from zonesim.world.entity import EntityStatus, EntityType, HumanNPC, Monster, MonsterSpecies
 from zonesim.world.group import HumanGroup, MonsterGroup
 from zonesim.world.item import Item, ItemType
-from zonesim.world.shelter import Shelter, StormShelter
 from zonesim.world.sector import Sector
+from zonesim.world.shelter import Shelter, StormShelter
 from zonesim.world.stash import Stash
 
 if TYPE_CHECKING:
@@ -65,7 +65,7 @@ def _decode(value: Any) -> Any:
     if kind == "tuple":
         return tuple(_decode(item) for item in value["items"])
     if kind == "set":
-        return set(_decode(item) for item in value["items"])
+        return {_decode(item) for item in value["items"]}
     if kind == "dict":
         return {_decode(key): _decode(item) for key, item in value["items"]}
     return {key: _decode(item) for key, item in value.items()}

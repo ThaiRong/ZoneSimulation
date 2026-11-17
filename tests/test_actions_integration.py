@@ -14,11 +14,11 @@ from zonesim.world.item import ItemType, give_item
 
 
 def _ctx(**overrides):
-    base = dict(
-        hour=10, is_night=False, bravery=50, faction="Борзые",
-        health_share=1.0, stamina_share=1.0,
-        at_home=False, home_sector_id=None, distance_to_border=3,
-    )
+    base = {
+        "hour": 10, "is_night": False, "bravery": 50, "faction": "Борзые",
+        "health_share": 1.0, "stamina_share": 1.0,
+        "at_home": False, "home_sector_id": None, "distance_to_border": 3,
+    }
     base.update(overrides)
     return IntentionContext(**base)
 

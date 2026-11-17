@@ -5,7 +5,6 @@ from __future__ import annotations
 from zonesim.combat.loot import Corpse
 from zonesim.monsters.behavior import species_value
 
-
 __all__ = ["Corpse", "FeedManager"]
 
 
@@ -17,7 +16,7 @@ class FeedManager:
         monsters_in_sector: list,
         available_corpses: list[Corpse],
         hour: int,
-        rng_values: list[float] = None,
+        rng_values: list[float] | None = None,
     ) -> list[dict]:
         results = []
         rng_values = rng_values or []

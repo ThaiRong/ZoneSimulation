@@ -52,9 +52,12 @@ def calculate_hunt_chance(
         base_chance -= 10
 
     # Падьальщики избегают здоровых целей
-    if species in (MonsterSpecies.SCAVENGER_PACK, "ScavengerPack") and not prey_is_monster:
-        if prey_health_share > 0.7:
-            base_chance -= 15
+    if (
+        species in (MonsterSpecies.SCAVENGER_PACK, "ScavengerPack")
+        and not prey_is_monster
+        and prey_health_share > 0.7
+    ):
+        base_chance -= 15
 
     floor = 5.0
     if not prey_is_monster and prey_health_share > 0.6:
@@ -83,16 +86,21 @@ def decide_hunt_action(
     prey_health_share = getattr(best_target, "health_share", 0.5)
     prey_is_monster = isinstance(best_target, Monster)
 
-    # Проверка видовых приоритетов
-    if monster.species == MonsterSpecies.TERRITORIAL_PREDATOR:
-        # Предпочитает раненых
-        if prey_health_share > 0.8 and not prey_is_monster:
-            return {"should_hunt": False, "reason": "prey_too_healthy"}
+    # Проверка видовых приоритетов: территориальный хищник предпочитает раненых
+    if (
+        monster.species == MonsterSpecies.TERRITORIAL_PREDATOR
+        and not prey_is_monster
+        and prey_health_share > 0.8
+    ):
+        return {"should_hunt": False, "reason": "prey_too_healthy"}
 
-    elif monster.species == MonsterSpecies.SCAVENGER_PACK:
-        # Предпочитает слабые цели
-        if prey_health_share > 0.6 and not prey_is_monster:
-            return {"should_hunt": False, "reason": "prey_too_strong"}
+    # Падальщики предпочитают слабые цели: не охотятся на здоровых людей
+    if (
+        monster.species == MonsterSpecies.SCAVENGER_PACK
+        and not prey_is_monster
+        and prey_health_share > 0.6
+    ):
+        return {"should_hunt": False, "reason": "prey_too_strong"}
 
     hunt_chance = calculate_hunt_chance(
         predator=monster,

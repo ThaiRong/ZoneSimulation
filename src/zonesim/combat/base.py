@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-from zonesim.world.entity import EntityStatus, HumanNPC, Monster
+from zonesim.world.entity import HumanNPC, Monster
 
 
 class CombatResult(str, Enum):
@@ -248,8 +248,7 @@ class CombatRound:
         """Применяет урон к защитнику."""
         if self.success:
             self.defender.health -= self.damage
-            if self.defender.health <= 0:
-                self.defender.health = 0
+            self.defender.health = max(0, self.defender.health)
 
     def _calc_attack_bp(self, combatant: Combatant) -> float:
         """Вычисляет BP атакующего. (§11.2)"""

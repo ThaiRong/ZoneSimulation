@@ -5,7 +5,6 @@ from zonesim.combat.base import Combatant
 from zonesim.combat.loot import Corpse, LootManager
 from zonesim.persistence.serialization import state_to_dict
 from zonesim.simulation.engine import SimulationEngine
-from zonesim.world.entity import EntityStatus
 from zonesim.world.item import Item, ItemType
 
 
@@ -90,7 +89,7 @@ def test_leader_distributes_equipment_by_need_and_keeps_money():
     group = next(group for group in engine.state.human_groups.values() if group.member_count >= 2)
     members = [npc for npc in engine.state.humans if npc.id in group.members]
     leader = next(npc for npc in members if npc.id == group.leader_id)
-    other = next(npc for npc in members if npc.id != leader.id)
+    next(npc for npc in members if npc.id != leader.id)
     weak_member = min(members, key=lambda npc: engine.state.items[npc.equipped_weapon_id].condition)
     for npc in members:
         engine.state.items[npc.equipped_weapon_id].condition = 30 if npc is weak_member else 100

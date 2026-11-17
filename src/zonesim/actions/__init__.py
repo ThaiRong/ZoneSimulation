@@ -2,11 +2,6 @@
 
 from __future__ import annotations
 
-from zonesim.actions.stalk import (
-    StalkResult,
-    calculate_stalk_check,
-    create_stalk_knowledge,
-)
 from zonesim.actions.detection import (
     calculate_ambush_chance,
     calculate_detection_check,
@@ -27,23 +22,28 @@ from zonesim.actions.research import (
     research_anomaly,
     research_sector,
 )
+from zonesim.actions.stalk import (
+    StalkResult,
+    calculate_stalk_check,
+    create_stalk_knowledge,
+)
 
 __all__ = [
     "StalkResult",
-    "calculate_stalk_check",
-    "calculate_stalking_check",
-    "create_stalk_knowledge",
+    "add_knowledge_to_npc",
     "calculate_ambush_chance",
     "calculate_detection_check",
-    "check_anomaly_detection",
-    "create_ambush_action",
     "calculate_move_target",
+    "calculate_stalk_check",
+    "calculate_stalking_check",
+    "check_anomaly_detection",
     "check_border_exit",
+    "create_ambush_action",
+    "create_stalk_knowledge",
     "get_move_distance",
+    "get_research_cost",
     "move_entity",
     "move_group",
-    "add_knowledge_to_npc",
-    "get_research_cost",
     "research_anomaly",
     "research_sector",
 ]

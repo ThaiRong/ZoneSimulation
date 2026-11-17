@@ -1,25 +1,25 @@
 """Тесты Фазы 3: знания, обнаружение, исследование, тайники, убежища, новости."""
 
 import pytest
-from zonesim.core.time import PhaseOfDay, GameTime
-from zonesim.anomalies.core import Anomaly, AnomalyType
-from zonesim.world.entity import HumanNPC, EntityStatus
-from zonesim.world.stash import Stash
-from zonesim.world.shelter import Shelter
-from zonesim.knowledge.fact import KnowledgeBase, KnowledgeType
+
 from zonesim.actions.detection import (
+    calculate_ambush_chance,
+    calculate_detection_check,
     calculate_stalking_check,
     check_anomaly_detection,
-    calculate_ambush_chance,
     resolve_ambush,
-    calculate_detection_check,
 )
 from zonesim.actions.research import (
+    calculate_research_success,
     research_anomaly,
     research_sector,
-    calculate_research_success,
 )
-from zonesim.news.events import NewsManager, WorldEvent
+from zonesim.anomalies.core import Anomaly, AnomalyType
+from zonesim.knowledge.fact import KnowledgeBase, KnowledgeType
+from zonesim.news.events import NewsManager
+from zonesim.world.entity import HumanNPC
+from zonesim.world.shelter import Shelter
+from zonesim.world.stash import Stash
 
 
 class TestKnowledgeBase:

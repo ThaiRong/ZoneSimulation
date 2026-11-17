@@ -42,7 +42,6 @@ class Shelter:
     @property
     def remaining_hours(self) -> int:
         """Оставшиеся часы жизни (6 часов по умолчанию, +4 за каждое использование)."""
-        age = 0  # caller должен передать current_hour
         return 6 + (self.last_used_hour - self.created_hour)
 
     def can_accept_group(self, group_id: int, faction: str) -> bool:
@@ -55,9 +54,7 @@ class Shelter:
         if self.owner_faction and faction and faction != self.owner_faction:
             return False
         # Проверка что группа ещё не участвует
-        if group_id in self.participants:
-            return False
-        return True
+        return group_id not in self.participants
 
     def add_group(self, group_id: int, npc_ids: list[int]) -> bool:
         """Добавить группу в убежище."""

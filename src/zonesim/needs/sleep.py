@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
+from zonesim.ai import SLEEP
 from zonesim.core.time import PhaseOfDay
 from zonesim.world.entity import EntityStatus
 from zonesim.world.group import HumanGroup, MonsterGroup
-from zonesim.ai import SLEEP
-
 
 # Стоимость выносливости за час
 STAMINA_COST_AWAKE = 2.0  # базовый расход за бодрствование
@@ -55,7 +54,7 @@ def update_stamina(entity, cost: float, action: str, time) -> bool:
         return False
 
     current = getattr(entity, "stamina", 0)
-    max_st = getattr(entity, "max_stamina", 100)
+    getattr(entity, "max_stamina", 100)
 
     entity.stamina = max(0, current - cost)
 
@@ -166,9 +165,11 @@ def monster_sleep_recover(group: MonsterGroup, monsters: dict[int, object], time
             total_recovered += recovery
 
             start_h = getattr(monster, "unconscious_start_hour", 0)
-            if time.hour - start_h >= UNCONSCIOUS_MIN_HOURS:
-                if monster.stamina >= max_st * UNCONSCIOUS_MIN_STAMINA_PCT:
-                    monster.status = EntityStatus.SLEEPING
+            if (
+                time.hour - start_h >= UNCONSCIOUS_MIN_HOURS
+                and monster.stamina >= max_st * UNCONSCIOUS_MIN_STAMINA_PCT
+            ):
+                monster.status = EntityStatus.SLEEPING
 
     return total_recovered
 
@@ -179,9 +180,7 @@ def is_comfortable_sleep_needed(time_obj, current_phase) -> bool:
     if current_phase in (PhaseOfDay.MORNING, PhaseOfDay.EVENING):
         return True
     # Ночью все хотят спать
-    if current_phase == PhaseOfDay.NIGHT:
-        return True
-    return False
+    return current_phase == PhaseOfDay.NIGHT
 
 
 def calculate_guard_shift(group: HumanGroup, npcs: dict[int, object], hour: int) -> None:

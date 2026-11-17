@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from zonesim.monsters.behavior import Monster, MonsterSpecies
 
-
 # Лимиты миграции (§13.6)
 MONSTER_SOFT_MIN = 18
 MONSTER_SOFT_MAX = 45

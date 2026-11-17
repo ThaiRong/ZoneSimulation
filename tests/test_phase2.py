@@ -1,22 +1,24 @@
 """Тесты Фазы 2: группы, сон, выносливость, движение, миграция."""
 
 import random
+
 import pytest
-from zonesim.core.time import GameTime, PhaseOfDay, SeededRNG
-from zonesim.world.entity import HumanNPC, Monster, EntityStatus
-from zonesim.world.group import HumanGroup, MonsterGroup
-from zonesim.needs.sleep import (
-    update_stamina,
-    human_sleep_recover,
-    monster_sleep_recover,
-    calculate_stamina_cost,
-)
+
 from zonesim.actions.movement import (
     calculate_move_target,
-    move_entity,
     get_move_distance,
+    move_entity,
 )
+from zonesim.core.time import GameTime
 from zonesim.generation.migration import MigrationState, process_migration
+from zonesim.needs.sleep import (
+    calculate_stamina_cost,
+    human_sleep_recover,
+    monster_sleep_recover,
+    update_stamina,
+)
+from zonesim.world.entity import EntityStatus, HumanNPC, Monster
+from zonesim.world.group import HumanGroup, MonsterGroup
 
 
 class TestHumanGroup:

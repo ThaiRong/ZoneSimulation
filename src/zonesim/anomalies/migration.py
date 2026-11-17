@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from zonesim.anomalies.core import Anomaly, AnomalyStatus, AnomalyType
+from zonesim.anomalies.core import Anomaly, AnomalyStatus
 
 
 def check_anomaly_migration(
@@ -10,8 +10,8 @@ def check_anomaly_migration(
     current_hour: int,
     move_interval: int = 48,
     move_chance: float = 0.25,
-    sector_ids: list[int] = None,
-    faction_start_ids: set[int] = None,
+    sector_ids: list[int] | None = None,
+    faction_start_ids: set[int] | None = None,
     rng_value: float = 0.5,
 ) -> dict:
     """

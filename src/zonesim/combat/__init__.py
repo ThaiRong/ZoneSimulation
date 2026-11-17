@@ -7,10 +7,12 @@ from dataclasses import dataclass, field
 from zonesim.combat.base import (
     Combatant,
     CombatBase,
-    CombatFactory as CombatFactory,
     CombatResult,
     CombatRound,
     select_targets,
+)
+from zonesim.combat.base import (
+    CombatFactory as CombatFactory,
 )
 from zonesim.combat.loot import EquipmentManager
 from zonesim.combat.retreat import (

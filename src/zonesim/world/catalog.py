@@ -90,7 +90,7 @@ class ItemCatalog:
         self._entries = entries
 
     @classmethod
-    def load(cls, path: str | Path | None = None) -> "ItemCatalog":
+    def load(cls, path: str | Path | None = None) -> ItemCatalog:
         """Загружает каталог из файла; без пути — встроенный каталог пакета."""
         if path is None:
             text = (

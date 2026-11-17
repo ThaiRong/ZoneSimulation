@@ -7,13 +7,11 @@
 
 from __future__ import annotations
 
-from zonesim.world.entity import EntityStatus, MonsterSpecies
-from zonesim.world.shelter import StormShelter
+from zonesim.world.entity import EntityStatus
 
 
 class InvariantViolation(Exception):
     """Выбрасывается при обнаружении нарушения инварианта."""
-    pass
 
 
 # Количество охранников на базе — берём из конфига
@@ -136,12 +134,11 @@ def _check_status_intentions(state) -> list[str]:
     hour = state.time.hour
 
     for npc in state.humans:
-        if npc.status == EntityStatus.PRISONER:
-            if npc.intention and npc.intention not in ("sleep", "rest"):
-                errors.append(
-                    f"Инвариант #5 (ч. {hour}): NPC {npc.id} в плену, "
-                    f"но намерение='{npc.intention}'"
-                )
+        if npc.status == EntityStatus.PRISONER and npc.intention and npc.intention not in ("sleep", "rest"):
+            errors.append(
+                f"Инвариант #5 (ч. {hour}): NPC {npc.id} в плену, "
+                f"но намерение='{npc.intention}'"
+            )
 
     return errors
 
@@ -183,11 +180,10 @@ def _check_items_and_stats(state) -> list[str]:
             errors.append(f"Инвариант #8 (ч. {hour}): монстр {monster.id} health < 0")
 
     for item in state.items.values():
-        if hasattr(item, 'condition') and item.condition is not None:
-            if item.condition < 0:
-                errors.append(
-                    f"Инвариант #8 (ч. {hour}): предмет {item.id} condition < 0"
-                )
+        if hasattr(item, 'condition') and item.condition is not None and item.condition < 0:
+            errors.append(
+                f"Инвариант #8 (ч. {hour}): предмет {item.id} condition < 0"
+            )
 
     return errors
 
@@ -283,7 +279,7 @@ def _check_event_links(state) -> list[str]:
     events = state.news_manager.events if hasattr(state.news_manager, 'events') else []
     for i, evt in enumerate(events):
         evt_hour = getattr(evt, 'hour', -1)
-        evt_type = getattr(evt, 'event_type', None) or getattr(evt, 'type', None)
+        getattr(evt, 'event_type', None) or getattr(evt, 'type', None)
 
         if evt_hour < 0:
             errors.append(
@@ -324,9 +320,8 @@ def _check_finding_expiry(state) -> list[str]:
 
 def _check_shelter_occupancy(state) -> list[str]:
     errors: list[str] = []
-    hour = state.time.hour
 
-    for sid, shelter in state.shelters.items():
+    for shelter in state.shelters.values():
         if shelter.is_occupied and shelter.occupied_by is not None:
             # Допустимо: группа монстров в укрытии
             pass
