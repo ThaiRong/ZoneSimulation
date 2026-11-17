@@ -11,7 +11,7 @@ from zonesim.world.entity import HumanNPC, Monster, MonsterSpecies, EntityStatus
 from zonesim.combat.loot import Corpse, EquipmentManager, LootManager
 from zonesim.world.item import Item, ItemType, give_item, place_item_on_corpse
 
-from zonesim.core.config import GameConfig
+from zonesim.core.config import GameConfig, DEFAULT_GUARDS_PER_BASE
 from zonesim.generation.worldgen import generate_world
 from zonesim.generation.migration import MigrationState, process_migration
 
@@ -431,26 +431,6 @@ class SimulationEngine:
         }
         self.state.shelter_count = len(self.state.shelters)
 
-    def _shelter_sector_ids(self) -> set[int]:
-        """Сектора, дающие защиту: укрытия, базы, торговцы. (§12.7)"""
-        ids = {s.sector_id for s in self.state.shelters.values()}
-        ids |= {s.id for s in self.state.sectors.values() if s.is_faction_start}
-        ids |= {
-            npc.sector_id for npc in self.state.stationary_humans
-            if npc.stationary_role == "trader" and npc.status == EntityStatus.ACTIVE
-        }
-        # Временная база ситуативного торговца — только REST (не SLEEP)
-        if (
-            self.state.conditional_trader_id is not None
-            and self.state.conditional_trader_sector >= 0
-            and self.state.conditional_trader_start_hour >= 0
-            and self.state.conditional_trader_end_hour >= 0
-        ):
-            current_hour = self.state.time.hour
-            if self.state.conditional_trader_start_hour <= current_hour < self.state.conditional_trader_end_hour:
-                ids.add(self.state.conditional_trader_sector)
-        return ids
-
     def _conditional_trader_is_active(self) -> bool:
         """Проверяет, что ситуативный торговец ещё работает."""
         if self.state.conditional_trader_id is None:
@@ -503,6 +483,22 @@ class SimulationEngine:
             
             # Проверяем экспирацию
             if shelter.expire(hour):
+                # Эвакуируем участников из разрушенного убежища (§12.7, #20)
+                shelter_ids = self._shelter_sector_ids()
+                for group_id, npc_ids in list(shelter.participants.items()):
+                    group = self.state.human_groups.get(group_id)
+                    if group is None or not npc_ids:
+                        continue
+                    # Перемещаем к ближайшему Shelter
+                    path = self._walk(group.sector_id, shelter_ids, set(), points=1.0)
+                    if path and len(path) >= 2:
+                        for npc_id in npc_ids:
+                            npc = self.state.humans.__iter__()
+                            for n in self.state.humans:
+                                if n.id == npc_id:
+                                    n.sector_id = path[1]
+                                    group.sector_id = path[1]
+                                    break
                 self.state.news_manager.create_event(
                     hour=hour, minute=0, sector_id=shelter.sector_id,
                     event_type="shelter_expired", participants=[], result="expired",
@@ -514,7 +510,8 @@ class SimulationEngine:
 
     def _shelter_sector_ids(self) -> set[int]:
         """Сектора, дающие защиту: временные убежища, стационарные, базы, торговцы. (§12.7)"""
-        ids = {s.sector_id for s in self.state.temp_shelters.values() if s.is_active and s.participant_count > 0}
+        # Временные убежища — любые активные (не только с participant_count > 0)
+        ids = {s.sector_id for s in self.state.temp_shelters.values() if s.is_active}
         ids |= {s.sector_id for s in self.state.shelters.values()}
         ids |= {s.id for s in self.state.sectors.values() if s.is_faction_start}
         ids |= {
@@ -787,13 +784,28 @@ class SimulationEngine:
                 )
 
     def _apply_emission_exposure(self, hour: int) -> None:
-        """Урон группам, не успевшим укрыться. (§12.7)"""
+        """Урон группам, не успевшим укрыться. (§12.7)
+
+        Группы НЕ перемещаются во время выброса (запрет в Phase 5).
+        Группы в permanent shelter — защищены.
+        Группы вне shelter — получают урон.
+        """
+        # Только постоянные shelter (не temp_shelter)
+        permanent_shelter_ids = {
+            s.sector_id for s in self.state.shelters.values()
+        } | {
+            s.id for s in self.state.sectors.values() if s.is_faction_start
+        } | {
+            npc.sector_id for npc in self.state.stationary_humans
+            if npc.stationary_role == "trader" and npc.status == EntityStatus.ACTIVE
+        }
         for group in self.state.human_groups.values():
-            if self._group_in_shelter(group):
-                self.state.emission_exposed.pop(group.id, None)
-                continue
             members = self._active_members(group)
             if not members:
+                self.state.emission_exposed.pop(group.id, None)
+                continue
+            if members[0].sector_id in permanent_shelter_ids:
+                self.state.emission_exposed.pop(group.id, None)
                 continue
             first_hour = self.state.emission_exposed.get(group.id)
             if first_hour is None:
@@ -846,6 +858,22 @@ class SimulationEngine:
                     return
 
     # --- Занятие укрытий монстрами (§13.7) ---
+
+    def _free_emptied_shelters(self, hour: int) -> None:
+        """Освобождает укрытия, если монстры ушли из сектора (§13.7, #23)."""
+        for shelter in self.state.shelters.values():
+            if not shelter.is_occupied or shelter.occupied_by is None:
+                continue
+            group = self.state.monster_groups.get(shelter.occupied_by)
+            if group is None or group.sector_id != shelter.sector_id:
+                shelter.occupied_by = None
+                self.state.news_manager.create_event(
+                    hour=hour, minute=0, sector_id=shelter.sector_id,
+                    event_type="shelter", participants=[], result="freed_emptied",
+                    importance=15,
+                    summary=f"Укрытие {shelter.id} освобождено (монстры ушли)",
+                    details={"shelter_id": shelter.id},
+                )
 
     def _process_shelter_occupation(self, hour: int) -> None:
         # истечение занятия проверяется каждый час
@@ -1052,10 +1080,12 @@ class SimulationEngine:
         self._sync_npc_from_items(npc)
 
     # --- Ротация охраны: раненый уходит лечиться, пост занимает резервист ---
+    # Расхождение ТЗ/код: ТЗ указывает 2, в коде DEFAULT_GUARDS_PER_BASE = 4
+    # (см. config.py). Инвариант #11 проверяет >= DEFAULT_GUARDS_PER_BASE.
 
     GUARD_ROTATION_HEALTH = 0.5    # ниже этого доли здоровья — смена
     GUARD_RECOVERY_PER_DAY = 0.5   # лазарет базы лечит 50% в сутки
-    GUARDS_PER_BASE = 4            # штат охраны базы
+    GUARDS_PER_BASE = DEFAULT_GUARDS_PER_BASE  # штат охраны базы
 
     def _process_guard_rotation(self, hour: int) -> None:
         """Раненый охранник лечится и заменяется резервистом; погибших
@@ -1113,7 +1143,8 @@ class SimulationEngine:
                         and n.status not in (EntityStatus.DEAD, EntityStatus.EXILED)
                         for n in guards
                     )
-                    # Не отправляем на лечение, если это приведёт к падению ниже минимума
+                    # Не отправляем на лечение, если это приведёт к падению ниже
+                    # минимума (с учётом одного охранника на лечении)
                     and (active_count - 1) >= self.GUARDS_PER_BASE - 1
                 ):
                     guard.on_treatment = True
@@ -1698,6 +1729,9 @@ class SimulationEngine:
         # Фаза 9: Последствия
         self._phase9_consequences(hour)
 
+        # Перед проверкой инвариантов — финальная согласованность укрытий (#23)
+        self._free_emptied_shelters(hour)
+
         # Проверка инвариантов мира (§22 ТЗ) — ПОСЛЕ шага, на моменте часа
         errors = assert_world_invariants(self.state)
         if errors:
@@ -1730,6 +1764,8 @@ class SimulationEngine:
         self._sync_monster_groups()
         self._expire_findings(hour)
         self._update_shelter_participants(hour)
+        # Освобождаем укрытия, если монстры ушли (§13.7)
+        self._free_emptied_shelters(hour)
 
     def _sync_human_groups(self) -> None:
         """Убирает выбывших и удаляет пустые группы, сохраняя инварианты §7.5."""
@@ -1801,7 +1837,13 @@ class SimulationEngine:
             # мигранты сразу получают группу, как и люди
             self._sync_monster_groups()
         self._process_emission_schedule(hour)
+        # Выброс: урон применяется ДО движения групп (§8, инвариант #20)
+        # чтобы группы уже были укрыты или ранены перед фазой 5.
+        if self._emission_active(hour):
+            self._apply_emission_exposure(hour)
         self._process_shelter_occupation(hour)
+        # После занятия/освобождения — финальная проверка согласованности (#23)
+        self._free_emptied_shelters(hour)
         self._process_guard_rotation(hour)
         self._process_conditional_trader_schedule(hour)
         self._expire_conditional_trader_if_expired(hour)
@@ -1879,8 +1921,8 @@ class SimulationEngine:
             members = [npcs[mid] for mid in group.members if mid in npcs]
             if not members:
                 continue
-            if emission_known:
-                # Выброс: намерение «укрытие» приоритетно над любыми другими (§12.7)
+            if emission_known or self._emission_active(hour):
+                # Выброс: намерение «укрытие» приоритетно над любыми другими (§12.7, #20)
                 group.intention = SHELTER
                 for member in members:
                     if member.status == EntityStatus.ACTIVE:
@@ -2117,8 +2159,14 @@ class SimulationEngine:
         """Фаза 5: перемещение в пределах пунктов движения (§10.4).
 
         Люди получают 1,0 пункта в час; обычное ребро стоит 1,0, тропа 0,5.
+        Во время выброса движение запрещено (§12.7, инвариант #20).
         """
         self._moved_human_ids: set[int] = set()
+
+        # Запрет движения во время выброса (§12.7, #20)
+        if self._emission_active(hour):
+            return
+
         border_ids = {s.id for s in self.state.sectors.values() if s.is_border}
 
         npcs = {npc.id: npc for npc in self.state.humans}
@@ -2128,9 +2176,14 @@ class SimulationEngine:
                 continue
             members = [npcs[mid] for mid in group.members if mid in npcs]
             if not members or any(npc.status != EntityStatus.ACTIVE for npc in members):
-                continue  # группа не оставляет спящих и бессознательных членов
-            if self._emission_active(hour) and self._group_in_shelter(group):
-                continue  # покидать укрытие до завершения выброса нельзя (§12.7)
+                continue  # группа не оставляет спящих и бессознательных членей
+            if self._emission_active(hour):
+                # Во время выброса разрешено ТОЛЬКО движение к Shelter
+                if group.intention == SHELTER:
+                    # Продолжаем обработку SHELTER ниже
+                    pass
+                else:
+                    continue  # остальные движения запрещены
 
             avoid = self._known_anomaly_sectors(leader)
             trails = self._trail_set
@@ -3659,8 +3712,7 @@ class SimulationEngine:
             if group.sector_id == distress["sector_id"]:
                 self._aid_distress_group(group, members, distress, hour)
                 acted_groups.add(group.id)
-        if self._emission_active(hour):
-            self._apply_emission_exposure(hour)
+        # _apply_emission_exposure вызывается в фазе 1 — ДО движения групп
         for npc in self.state.humans:
             if npc.id in self._combat_human_ids or npc.group_id in acted_groups:
                 continue
