@@ -1685,13 +1685,6 @@ class SimulationEngine:
         phase = self.state.time.current_phase
         is_night = self.state.time.is_night()
 
-        # Проверка инвариантов мира (§22 ТЗ) — перед началом расчёта
-        errors = assert_world_invariants(self.state)
-        if errors:
-            raise InvariantViolation(
-                f"Hour={hour}, Day={day}: " + "; ".join(errors[:10])
-            )
-
         events: list[dict] = []
 
         # Фаза 0: Проверка состояния
@@ -1723,6 +1716,13 @@ class SimulationEngine:
 
         # Фаза 9: Последствия
         self._phase9_consequences(hour)
+
+        # Проверка инвариантов мира (§22 ТЗ) — ПОСЛЕ шага, на моменте часа
+        errors = assert_world_invariants(self.state)
+        if errors:
+            raise InvariantViolation(
+                f"Hour={hour}, Day={day}: " + "; ".join(errors[:10])
+            )
 
         # Фаза 10: сначала фиксируется следующий час, затем выполняется автосохранение
         self.state.time.advance()
