@@ -795,15 +795,21 @@ class SimulationEngine:
                     details=migration,
                 )
 
-    def _apply_emission_exposure(self, hour: int) -> None:
-        """Урон группам, не успевшим укрыться. (§12.7)
+    # === Helpers для выброса (§12.7, #20) ===
 
-        Группы НЕ перемещаются во время выброса (запрет в Phase 5).
-        Группы в permanent shelter — защищены.
-        Группы вне shelter — получают урон.
+    def _emission_safe_sectors(self) -> set[int]:
+        """Постоянные секторы, защищающие от выброса (§12.7, #20).
+
+        Включает:
+        - Сектора StormShelter (стационарные убежища)
+        - Стартовые сектора фракций (базы)
+        - Сектора активных стационарных торговцев
+        Временные убежища (temp_shelters) НЕ защищают (§12.7).
+
+        Возвращает множество секторов. Используется в _apply_emission_exposure,
+        _check_emission_movement (инвариант #20) и _apply_battle_result.
         """
-        # Только постоянные shelter (не temp_shelter)
-        permanent_shelter_ids = {
+        return {
             s.sector_id for s in self.state.shelters.values()
         } | {
             s.id for s in self.state.sectors.values() if s.is_faction_start
@@ -811,46 +817,75 @@ class SimulationEngine:
             npc.sector_id for npc in self.state.stationary_humans
             if npc.stationary_role == "trader" and npc.status == EntityStatus.ACTIVE
         }
+
+    def _is_group_emission_sheltered(self, group: HumanGroup) -> bool:
+        """Проверяет, укрота ли группа от выброса (§12.7, #20).
+
+        Использует group.sector_id (синхронизирован с членами группы)
+        и единое множество безопасных секторов.
+        """
+        return group.sector_id in self._emission_safe_sectors()
+
+    def _mark_group_emission_exposed(self, group: HumanGroup, hour: int) -> None:
+        """Записывает группу в emission_exposed и применяет урон (§12.7).
+
+        Вызывается когда группа НЕ shelter во время выброса.
+        Первый час: урон + лёгкая травма; второй час: гибель.
+        """
+        first_hour = self.state.emission_exposed.get(group.id)
+        if first_hour is None:
+            self.state.emission_exposed[group.id] = hour
+            members = self._active_members(group)
+            if not members:
+                return
+            for npc in members:
+                if npc.health_share < 0.5:
+                    self._emergency_medkit(npc, members)
+                start = npc.health
+                npc.health = max(0, npc.health - int(npc.max_health * EMISSION_EXPOSURE_DAMAGE))
+                npc.stamina = max(1, npc.stamina - 5)  # гарантированная лёгкая травма
+                npc.attentiveness = max(1, npc.attentiveness - 3)
+                if npc.health <= 0:
+                    self._set_unconscious_or_dead(npc, start, hour, cause="emission")
+            self.state.news_manager.create_event(
+                hour=hour, minute=30, sector_id=group.sector_id,
+                event_type="emission", participants=[m.id for m in members],
+                result="exposed", importance=50,
+                summary=f"Группа {group.id} оказалась под выбросом без укрытия",
+                details={"group_id": group.id},
+            )
+        elif hour - first_hour >= EMISSION_EXPOSURE_KILL_HOUR - 1:
+            members = self._active_members(group)
+            for npc in members:
+                npc.health = 0
+                npc.status = EntityStatus.DEAD
+                self._create_corpse(npc, hour)
+            self.state.emission_exposed.pop(group.id, None)
+            self.state.news_manager.create_event(
+                hour=hour, minute=30, sector_id=group.sector_id,
+                event_type="emission", participants=[m.id for m in members],
+                result="wiped", importance=60,
+                summary=f"Группа {group.id} погибла под выбросом",
+                details={"group_id": group.id},
+            )
+
+    def _apply_emission_exposure(self, hour: int) -> None:
+        """Урон группам, не успевшим укрыться. (§12.7)
+
+        Группы НЕ перемещаются во время выброса (запрет в Phase 5).
+        Группы в permanent shelter — защищены.
+        Группы вне shelter — получают урон.
+        """
         for group in self.state.human_groups.values():
             members = self._active_members(group)
             if not members:
                 self.state.emission_exposed.pop(group.id, None)
                 continue
-            if members[0].sector_id in permanent_shelter_ids:
+            # Используем единый helper — group.sector_id (синхронизирован с членами)
+            if self._is_group_emission_sheltered(group):
                 self.state.emission_exposed.pop(group.id, None)
                 continue
-            first_hour = self.state.emission_exposed.get(group.id)
-            if first_hour is None:
-                self.state.emission_exposed[group.id] = hour
-                for npc in members:
-                    if npc.health_share < 0.5:
-                        self._emergency_medkit(npc, members)
-                    start = npc.health
-                    npc.health = max(0, npc.health - int(npc.max_health * EMISSION_EXPOSURE_DAMAGE))
-                    npc.stamina = max(1, npc.stamina - 5)  # гарантированная лёгкая травма
-                    npc.attentiveness = max(1, npc.attentiveness - 3)
-                    if npc.health <= 0:
-                        self._set_unconscious_or_dead(npc, start, hour, cause="emission")
-                self.state.news_manager.create_event(
-                    hour=hour, minute=30, sector_id=group.sector_id,
-                    event_type="emission", participants=[m.id for m in members],
-                    result="exposed", importance=50,
-                    summary=f"Группа {group.id} оказалась под выбросом без укрытия",
-                    details={"group_id": group.id},
-                )
-            elif hour - first_hour >= EMISSION_EXPOSURE_KILL_HOUR - 1:
-                for npc in members:
-                    npc.health = 0
-                    npc.status = EntityStatus.DEAD
-                    self._create_corpse(npc, hour)
-                self.state.emission_exposed.pop(group.id, None)
-                self.state.news_manager.create_event(
-                    hour=hour, minute=30, sector_id=group.sector_id,
-                    event_type="emission", participants=[m.id for m in members],
-                    result="wiped", importance=60,
-                    summary=f"Группа {group.id} погибла под выбросом",
-                    details={"group_id": group.id},
-                )
+            self._mark_group_emission_exposed(group, hour)
 
     def _emergency_medkit(self, npc: HumanNPC, members: list[HumanNPC]) -> None:
         """Экстренное применение на ходу: половина эффекта, без часа действия. (§14.3)"""
@@ -3361,6 +3396,14 @@ class SimulationEngine:
                 for member_id in group.members + group.prisoners:
                     if member_id in entities and entities[member_id].status != EntityStatus.DEAD:
                         entities[member_id].sector_id = retreat_sector
+                # Фикс: если во время выброса группа отступает НЕ shelter —
+                # она получает урон выброса и записывается в emission_exposed (§12.7)
+                if (
+                    group.id in self.state.human_groups
+                    and self._emission_active(hour)
+                    and not self._is_group_emission_sheltered(group)
+                ):
+                    self._mark_group_emission_exposed(group, hour)
             monster_group_key = (
                 "attacker_monster_group_id" if side == "attackers" else "defender_monster_group_id"
             )

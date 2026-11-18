@@ -478,6 +478,8 @@ def _check_emission_movement(state) -> list[str]:
     Проверка: во время выброса группа либо в permanent shelter, либо уже
     получила урон (engine._apply_emission_exposure). Группа вне shelter
     должна быть в emission_exposed (получила урон в этом или прошлом часу).
+
+    Использование: единое shelter-множество как в engine._emission_safe_sectors().
     """
     errors: list[str] = []
     hour = state.time.hour
@@ -488,7 +490,7 @@ def _check_emission_movement(state) -> list[str]:
     if not is_emission_active(emission_start, emission_end, hour):
         return errors
 
-    # Permanent shelter сектора
+    # Единое shelter-множество как в engine._emission_safe_sectors()
     shelter_ids = {
         s.sector_id for s in getattr(state, "shelters", {}).values()
     } | {
@@ -501,20 +503,22 @@ def _check_emission_movement(state) -> list[str]:
     for group in state.human_groups.values():
         if not group.members:
             continue
+        # Используем group.sector_id (синхронизирован с членами в Phase 9)
+        # Группы без активных членов — пропускаем
         members = {
             n.id: n for n in state.humans
             if n.id in group.members and n.status not in (EntityStatus.DEAD, EntityStatus.EXILED)
         }
         if not members:
             continue
-        first_sector = next(iter(members.values())).sector_id
-        if first_sector in shelter_ids:
+        group_sector = group.sector_id
+        if group_sector in shelter_ids:
             continue  # в shelter — ок
         # Вне shelter: должна быть в emission_exposed (получила урон)
         exposed = getattr(state, "emission_exposed", {})
         if group.id not in exposed:
             errors.append(
-                f"Инвариант #20 (ч. {hour}): группа {group.id} в секторе {first_sector} "
+                f"Инвариант #20 (ч. {hour}): группа {group.id} в секторе {group_sector} "
                 f"во время выброса — не в укрытии и не получила урон (не в emission_exposed)"
             )
 
