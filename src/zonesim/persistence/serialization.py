@@ -140,6 +140,8 @@ def state_to_dict(state: SimulationState) -> dict[str, Any]:
         "conditional_trader_start_hour": state.conditional_trader_start_hour,
         "conditional_trader_end_hour": state.conditional_trader_end_hour,
         "conditional_trader_knowledge_hour": state.conditional_trader_knowledge_hour,
+        # Штурм убежищ в выброс (§12.7)
+        "ongoing_shelter_assaults": _encode(state.ongoing_shelter_assaults),
         # Временные убежища (§7.10)
         "temp_shelters": _encode({str(key): value.to_dict() for key, value in state.temp_shelters.items()}),
         "next_shelter_id": state.next_shelter_id,
@@ -292,6 +294,8 @@ def state_from_dict(data: dict[str, Any]) -> SimulationState:
         conditional_trader_start_hour=data["conditional_trader_start_hour"],
         conditional_trader_end_hour=data["conditional_trader_end_hour"],
         conditional_trader_knowledge_hour=data["conditional_trader_knowledge_hour"],
+        # Штурм убежищ в выброс (§12.7)
+        ongoing_shelter_assaults=_decode(data.get("ongoing_shelter_assaults", {})),
         # Временные убежища (§7.10)
         temp_shelters={
             int(key): _restore(Shelter, value)

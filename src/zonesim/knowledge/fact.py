@@ -17,6 +17,7 @@ class KnowledgeType(str, Enum):
     ROUTE = "route"  # безопасный маршрут
     FACTION = "faction"  # состояние фракции
     EVENT = "event"  # важное событие
+    SHELTER_OCCUPIED = "shelter_occupied"  # убежище занято монстрами (§12.7, условие D)
 
 
 @dataclass

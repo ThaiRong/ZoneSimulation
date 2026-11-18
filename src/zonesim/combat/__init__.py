@@ -77,6 +77,7 @@ class CombatSystem:
         relation: int = 0,
         attacker_bonus: float = 0.1,
         defender_bonus: float = 0.1,
+        force_no_retreat: bool = False,  # условие B: бой до исхода (§12.7, люди не отступают)
     ):
         self.attackers = attackers
         self.defenders = defenders
@@ -93,6 +94,8 @@ class CombatSystem:
         self.defender_ambush = defender_ambush
         self.battle_sector_id = battle_sector_id
         self.relation = relation
+        # Бой до исхода: атакующие НЕ отступают и НЕ сдаются (§12.7, условие B)
+        self.force_no_retreat = force_no_retreat
 
         self.battle_log: list[dict] = []
         self.rounds_fought = 0
@@ -224,6 +227,10 @@ class CombatSystem:
         if not alive or not enemies:
             return False
 
+        # Условие B: при force_no_retreat атакующие НЕ отступают (§12.7)
+        if self.force_no_retreat and side == "attacker":
+            return False
+
         pre_combat = self.rounds_fought == 0
         if pre_combat and not all(c.is_human for c in alive):
             return False
@@ -296,6 +303,9 @@ class CombatSystem:
 
     def _check_surrender_phase(self, side: str, rng_func) -> None:
         if not self._failed_retreat[side]:
+            return
+        # Условие B: при force_no_retreat атакующие НЕ сдаются (§12.7)
+        if self.force_no_retreat and side == "attacker":
             return
         combatants = self._active(self._side(side))
         enemies = self._active(self._enemy(side))
@@ -439,9 +449,13 @@ class CombatSystem:
     def _compile_result(self) -> BattleResult:
         attackers_active = self._active(self.attackers)
         defenders_active = self._active(self.defenders)
-        attacker_retreated = [c.id for c in self.attackers if c.is_retreating]
+        attacker_retreated = (
+            [] if self.force_no_retreat else [c.id for c in self.attackers if c.is_retreating]
+        )
         defender_retreated = [c.id for c in self.defenders if c.is_retreating]
-        attacker_surrendered = [c.id for c in self.attackers if c.surrendered]
+        attacker_surrendered = (
+            [] if self.force_no_retreat else [c.id for c in self.attackers if c.surrendered]
+        )
         defender_surrendered = [c.id for c in self.defenders if c.surrendered]
 
         if attacker_retreated:
