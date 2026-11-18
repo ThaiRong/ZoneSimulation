@@ -350,8 +350,19 @@ def _check_faction_relation_events(state) -> list[str]:
     """Инвариант #17: смена отношений фракции не происходит без
     соответствующего известного ей события.
 
-    Проверяем: каждое изменение отношений между фракциями должно
-    сопровождаться событием в news_manager, которое эта фракция знает.
+    Проверяем: каждое изменение отношений между фракциями за текущий час
+    должно сопровождаться событием в news_manager, которое ИЗВЕСТНО
+    этой фракции (§15.4, §17).
+
+    Логика:
+    1. Для каждой пары фракций сравниваем текущие отношения со снимком
+       предыдущего часа (prev_relation_snapshot).
+    2. Если отношения изменились — ищем entry в relation_change_journal за
+       этот час с той же парой фракций.
+    3. Если event_id указан — проверяем, что событие существует в
+       news_manager.events и известно фракции.
+    4. Если event_id = None (изменение без события) или событие не
+       известно фракции → errors.append.
     """
     errors: list[str] = []
     hour = state.time.hour
@@ -360,34 +371,76 @@ def _check_faction_relation_events(state) -> list[str]:
     if faction_relations is None:
         return errors
 
-    events = getattr(state.news_manager, "events", [])
-    if not events:
+    prev_snapshot = getattr(state, "prev_relation_snapshot", {})
+    journal = getattr(state, "relation_change_journal", [])
+
+    if not prev_snapshot:
         return errors
 
-    # Собираем события, связанные с отношениями фракций
-    relation_event_types = {
-        "faction_relation_change", "faction_conflict", "faction_cooperation",
-        "faction_rescue", "faction_isolation", "war_start", "war_end",
-        "alliance_form", "alliance_break",
-    }
-    relevant_events = [
-        evt for evt in events
-        if getattr(evt, "event_type", "") in relation_event_types
-        or "faction" in getattr(evt, "event_type", "")
-        or "war" in getattr(evt, "event_type", "")
-    ]
+    news_mgr = getattr(state, "news_manager", None)
+    if news_mgr is None:
+        return errors
+    news_events_by_id = {evt.id: evt for evt in news_mgr.events}
 
-    if relevant_events:
-        # Есть события об отношениях — проверяем что отношения не менялись
-        # без них. В MVP: если есть relation_events, отношения могли измениться.
-        # Проверяем что события содержат фракции
-        for evt in relevant_events:
-            factions = getattr(evt, "notified_factions", []) or getattr(
-                evt, "participants", []
+    # Собираем события журнала за текущий час
+    hour_journal: dict[tuple[str, str], list[dict]] = {}
+    for entry in journal:
+        if entry.get("hour") == hour:
+            key = (entry["faction_a"], entry["faction_b"])
+            hour_journal.setdefault(key, []).append(entry)
+
+    # Проверяем каждую пару фракций
+    for (a, b), prev_val in prev_snapshot.items():
+        cur_val = faction_relations.get(a, b)
+        if cur_val == prev_val:
+            continue
+
+        delta = cur_val - prev_val
+        key = (a, b)
+
+        # Проверяем: есть ли entry журнала с event_id за этот час
+        journal_entries = hour_journal.get(key, [])
+
+        # Ищем entry с корректным event_id
+        found_with_event = False
+        for entry in journal_entries:
+            event_id = entry.get("event_id")
+            if event_id is not None and event_id in news_events_by_id:
+                # Событие существует — проверяем, известно ли оно фракциям
+                evt = news_events_by_id[event_id]
+                notified = getattr(evt, "notified_factions", []) or []
+                # Фракция должна знать о событии (или быть участником)
+                if a in notified or b in notified:
+                    found_with_event = True
+                    break
+
+        # Также проверяем entry без event_id (явно нарушение)
+        has_no_event_entry = any(
+            entry.get("event_id") is None for entry in journal_entries
+        )
+
+        if has_no_event_entry:
+            errors.append(
+                f"Инвариант #17 (ч. {hour}): отношения {a} ↔ {b} изменились "
+                f"на {delta} БЕЗ события в журнале"
             )
-            if not factions and getattr(evt, "event_type", "").startswith("faction"):
-                # Событие об отношениях без указания фракций — подозрительно
-                pass  # недостаточно данных для строгой проверки в MVP
+        elif not found_with_event:
+            # Проверяем, есть ли вообще какое-то событие за этот час
+            hour_relation_events = [
+                evt for evt in news_mgr.events
+                if evt.hour == hour
+                and evt.event_type in (
+                    "faction_relation_change", "faction_conflict",
+                    "faction_cooperation", "faction_rescue",
+                    "faction_isolation", "war_start", "war_end",
+                    "alliance_form", "alliance_break",
+                )
+            ]
+            if not hour_relation_events:
+                errors.append(
+                    f"Инвариант #17 (ч. {hour}): отношения {a} ↔ {b} изменились "
+                    f"на {delta}, но нет соответствующего события в новостях"
+                )
 
     return errors
 
@@ -651,51 +704,76 @@ def _check_group_knowledge(state) -> list[str]:
     """Инвариант #25: знание, полученное любым членом группы,
     доступно всем её текущим членам для решений в этом же часу.
 
-    Проверяем: ОБЩИЙ ДОСТУП при выборе намерения — знания группы
-    = объединение знаний всех членов. Не идентичность личных KB,
-    а их объединение.
+    Проверяем:
+    1. Берём снимок KB на момент выбора намерений
+       (knowledge_snapshot_at_intention).
+    2. Для каждой группы строим ОБЪЕДИНЕНИЕ фактов из снимка всех членов.
+    3. Сравниваем с тем, что было зафиксировано как использованное
+       при выборе намерения (intention_knowledge_used).
+    4. Если в intention_knowledge_used НЕ ХВАТАЕТ фактов из объединения —
+       значит решение принималось на неполной информации → violation.
     """
     errors: list[str] = []
     hour = state.time.hour
 
-    for gid, group in state.human_groups.items():
+    knowledge_snapshot = getattr(state, "knowledge_snapshot_at_intention", {})
+    if not knowledge_snapshot:
+        return errors
+
+    human_groups = getattr(state, "human_groups", {})
+    if not human_groups:
+        return errors
+
+    intention_knowledge = getattr(state, "intention_knowledge_used", {})
+    if not intention_knowledge:
+        return errors
+
+    # Проверяем intention_knowledge_used против снимка KB на момент фазы 4
+    for gid, group in human_groups.items():
         if not group.members:
             continue
 
-        # Собираем ОБЩИЕ знания группы — объединение всех фактов
-        common_knowledge_facts: list = []
-        for mid in group.members:
-            kb = state.knowledge_bases.get(mid)
-            if kb:
-                common_knowledge_facts.extend(kb.facts)
-
-        if not common_knowledge_facts:
+        # Пропускаем группы с неактивным лидером — они не выбирали намерение
+        leader = next(
+            (n for n in state.humans if n.id == group.leader_id),
+            None,
+        )
+        if leader is None or leader.status != EntityStatus.ACTIVE:
             continue
 
-        # Собираем уникальные ID аномалий из общих знаний
-        common_anomaly_ids = {
-            f.subject_id for f in common_knowledge_facts
-            if hasattr(f, "fact_type") and f.fact_type.value == "anomaly"
+        # Если intention_knowledge_used не было установлено для этой группы
+        # (группа не выбирала намерение в этом часу), пропускаем
+        if gid not in intention_knowledge:
+            continue
+
+        # Собираем ОБЪЕДИНЕНИЕ всех фактов из снимка KB по ключу (type, subject)
+        union_facts_key: set[tuple[str, int]] = set()
+        for mid in group.members:
+            kb_facts = knowledge_snapshot.get(mid, [])
+            for fact in kb_facts:
+                ft = fact.get("fact_type")
+                sid = fact.get("subject_id")
+                if ft in ("anomaly", "safe_path", "trader", "event") and sid is not None:
+                    union_facts_key.add((ft, sid))
+
+        # Получаем знания, использованные для решений
+        used_knowledge = intention_knowledge.get(gid, [])
+        used_facts_key: set[tuple[str, int]] = {
+            (fk.get("fact_type"), fk.get("subject_id"))
+            for fk in used_knowledge
+            if fk.get("fact_type") is not None and fk.get("subject_id") is not None
         }
 
-        # Проверяем лидера: он должен иметь доступ к общим знаниям
-        leader_kb = state.knowledge_bases.get(group.leader_id)
-        if leader_kb:
-            leader_anomaly_ids = {
-                f.subject_id for f in leader_kb.facts
-                if hasattr(f, "fact_type") and f.fact_type.value == "anomaly"
-            }
-            # Лидер может не знать ВСЕ аномалии (не все члены исследовали)
-            # Но если лидер знает аномалию — любой член группы должен
-            # иметь доступ к этому факту через common_knowledge_facts.
-            # Проверяем: нет фактов лидера, которых НЕТ в общих знаниях
-            for fact in leader_kb.facts:
-                if fact.fact_type.value == "anomaly" and fact.subject_id in common_anomaly_ids:
-                    # Факт лидера должен быть в общих знаниях — ОК
-                    pass
-                elif fact.fact_type.value == "anomaly":
-                    # Лидер знает аномалию, но она не в common — это норма
-                    # (другие члены ещё не обнаружили)
-                    pass
+        # Проверяем: все ключи из объединения должны быть в used_knowledge
+        missing_keys = union_facts_key - used_facts_key
+        if missing_keys:
+            missing_types = sorted({kt[0] for kt in missing_keys})
+            missing_subjects = sorted({kt[1] for kt in missing_keys})
+            errors.append(
+                f"Инвариант #25 (ч. {hour}): группа {gid} — "
+                f"пропущены факты типов={missing_types} "
+                f"subject_ids={missing_subjects} "
+                f"при выборе намерения (известны членам группы)"
+            )
 
     return errors

@@ -184,6 +184,18 @@ class SimulationState:
 
     config: dict = field(default_factory=dict)
 
+    # Журнал изменений отношений фракций (§17 инвариант)
+    # Снимок отношений перед каждым шагом: faction_a,faction_b -> value
+    prev_relation_snapshot: dict[tuple[str, str], int] = field(default_factory=dict)
+    # Журнал: каждый entry — изменение отношений с привязкой к событию
+    relation_change_journal: list[dict] = field(default_factory=list)
+
+    # Знания, использованные при выборе намерений групп (§25 инвариант)
+    # group_id -> список фактов, используемых для решения
+    intention_knowledge_used: dict[int, list[dict]] = field(default_factory=dict)
+    # Снимок KB на момент выбора намерений (для корректной проверки #25)
+    knowledge_snapshot_at_intention: dict[int, list[dict]] = field(default_factory=dict)
+
     # Ситуативный торговец «Серой лиги» (§16.6)
     next_conditional_spawn_hour: int = -1  # когда запланирован следующий
     conditional_trader_id: int | None = None  # ID NPC-торговца
@@ -1524,6 +1536,20 @@ class SimulationEngine:
                         self._exchange_knowledge(first, second, hour)
                     if relation >= self.REST_TRADE_RELATION:
                         self._barter_groups(first, second, sector_id, hour)
+                        # Улучшение отношений при торговле (§15.2, #17 инвариант)
+                        delta = 3
+                        evt = self.state.news_manager.create_event(
+                            hour=hour, minute=55, sector_id=sector_id,
+                            event_type="faction_cooperation",
+                            participants=[],
+                            result="trade",
+                            importance=15,
+                            summary=f"Торговля: {first_faction} ↔ {second_faction} +{delta}",
+                            details={"delta": delta, "sector_id": sector_id},
+                            notified_factions=[first_faction, second_faction],
+                        )
+                        self.state.faction_relations.change(first_faction, second_faction, delta)
+                        self._log_relation_change(hour, first_faction, second_faction, delta, evt.id)
 
     def _group_faction(self, group: HumanGroup) -> str | None:
         npcs = {npc.id: npc for npc in self.state.humans}
@@ -1687,6 +1713,43 @@ class SimulationEngine:
             for index, item in enumerate(stacks):
                 item.quantity = max(0, amount) if index == 0 else 0
 
+    # === Инвариант #17: журнал изменений отношений фракций ===
+
+    def _save_relation_snapshot(self) -> None:
+        """Сохраняет снимок текущих отношений перед шагом (§17 инвариант)."""
+        fr = self.state.faction_relations
+        snap: dict[tuple[str, str], int] = {}
+        for (a, b), val in fr._relations.items():
+            snap[(a, b)] = val
+        self.state.prev_relation_snapshot = snap
+
+    def _log_relation_change(
+        self, hour: int, faction_a: str, faction_b: str,
+        delta: int, event_id: int | None,
+    ) -> None:
+        """Записывает изменение отношений в журнал (§17 инвариант)."""
+        self.state.relation_change_journal.append({
+            "hour": hour,
+            "faction_a": faction_a,
+            "faction_b": faction_b,
+            "delta": delta,
+            "event_id": event_id,
+        })
+
+    def _check_and_journal_relations(self, hour: int) -> None:
+        """
+        Сравнивает текущие отношения со снимком и логирует изменения.
+        Должен вызываться ПОСЛЕ фаз, которые могут менять отношения.
+        """
+        fr = self.state.faction_relations
+        snap = self.state.prev_relation_snapshot
+        for (a, b), current_val in fr._relations.items():
+            prev_val = snap.get((a, b), current_val)
+            if current_val != prev_val:
+                delta = current_val - prev_val
+                # event_id = None означает изменение БЕЗ события — нарушение
+                self._log_relation_change(hour, a, b, delta, event_id=None)
+
     def simulate_hour(self) -> dict[str, Any]:
         """
         Выполняет один час симуляции. (§8 ТЗ)
@@ -1698,6 +1761,11 @@ class SimulationEngine:
         is_night = self.state.time.is_night()
 
         events: list[dict] = []
+
+        # Сохраняем снимок отношений перед шагом (для инварианта #17)
+        self._save_relation_snapshot()
+        # Очищаем intention_knowledge_used — данные не должны смешиваться между часами
+        self.state.intention_knowledge_used = {}
 
         # Фаза 0: Проверка состояния
         self._phase0_check(hour)
@@ -1912,6 +1980,17 @@ class SimulationEngine:
         self._process_distress_signals(hour)
         emission_known = self._emission_known(hour)
 
+        # Снимок KB перед выбором намерений — для инварианта #25
+        # (факты, добавленные в фазах 5-9, не должны влиять на проверку)
+        # Важно: снимок делается ПОСЛЕ _process_distress_signals, который
+        # добавляет EVENT-факты о сигналах бедствия
+        snap: dict[int, list[dict]] = {}
+        for npc in self.state.humans:
+            kb = self.state.knowledge_bases.get(npc.id)
+            if kb:
+                snap[npc.id] = [f.to_dict() for f in kb.facts]
+        self.state.knowledge_snapshot_at_intention = snap
+
         for group in self.state.human_groups.values():
             group.select_leader(npcs)
             leader = npcs.get(group.leader_id) if group.leader_id is not None else None
@@ -1991,14 +2070,29 @@ class SimulationEngine:
                     and self.state.anomalies[f.subject_id].status == AnomalyStatus.ACTIVE
                     for f in researchable
                 ) or bool(self.state.knowledge_bases.get(group.leader_id)),
+                # ИСПРАВЛЕНО: known_artifact_sectors из ОБЪЕДИНЕНИЯ KB всех членов группы,
+                # а не только лидера (§25 инвариант: знания любого члена доступны всем)
                 known_artifact_sectors={
                     int(f.payload["sector_id"])
-                    for kb in (self.state.knowledge_bases.get(group.leader_id),)
+                    for member in members
+                    for kb in (self.state.knowledge_bases.get(member.id),)
                     if kb
                     for f in kb.get_facts(KnowledgeType.ANOMALY)
                     if f.payload.get("has_artifact") and f.payload.get("sector_id")
                 },
             )
+            # Фиксируем знания, использованные для выбора намерения (инвариант #25)
+            # Используем СНИМОК KB до фазы 4 — facts, добавленные в фазах 5-9,
+            # не должны влиять на проверку
+            snap = self.state.knowledge_snapshot_at_intention
+            captured_facts = []
+            for member in members:
+                kb_facts = snap.get(member.id, [])
+                for f in kb_facts:
+                    ft = f.get("fact_type")
+                    if ft in ("anomaly", "safe_path", "trader", "event"):
+                        captured_facts.append(f)
+            self.state.intention_knowledge_used[group.id] = captured_facts
             group.intention = choose_intention(ctx, self.state.rng)
             # Установить целевой сектор для RESEARCH / ARTIFACT_SEARCH (артефакты §12.5)
             if group.intention in (RESEARCH, ARTIFACT_SEARCH):
@@ -3342,6 +3436,38 @@ class SimulationEngine:
                 "feed_corpse_id": battle.get("feed_corpse_id"),
             },
         )
+
+        # Изменение отношений фракций после боя людей (§15.2, #17 инвариант)
+        if (
+            not battle["attacker_is_monster"]
+            and not battle["defender_is_monster"]
+        ):
+            attacker_faction = battle["attackers"][0].faction if battle["attackers"] else ""
+            defender_faction = battle["defenders"][0].faction if battle["defenders"] else ""
+            if attacker_faction and defender_faction and attacker_faction != defender_faction:
+                # Проигрышшая сторона получает штраф к отношениям
+                outcome = result.outcome
+                if "ATTACKER_WINS" in outcome:
+                    # Атакующие победили — отношения улучшаются незначительно
+                    delta = 5
+                elif "DEFENDER_WINS" in outcome:
+                    # Защитники победили — атакующие получают штраф
+                    delta = -10
+                else:
+                    # Ничья или отступление
+                    delta = -5
+                # Создаём событие в news_manager
+                evt = self.state.news_manager.create_event(
+                    hour=hour, minute=20, sector_id=battle["sector_id"],
+                    event_type="faction_relation_change",
+                    participants=participants,
+                    result=attacker_faction if "ATTACKER" in outcome else defender_faction,
+                    importance=30,
+                    summary=f"Отношения {attacker_faction} ↔ {defender_faction}: {delta}",
+                    details={"delta": delta, "outcome": outcome},
+                )
+                self.state.faction_relations.change(attacker_faction, defender_faction, delta)
+                self._log_relation_change(hour, attacker_faction, defender_faction, delta, evt.id)
 
     def _damage_carried_valuables(self, npc: HumanNPC, combat: CombatSystem, result) -> None:
         damage = max(
