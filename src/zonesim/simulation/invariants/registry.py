@@ -36,6 +36,7 @@ class InvariantInfo:
     description: str
     check_fn: Callable | None  # None для static-инвариантов
     kind: str  # "runtime" | "static"
+    coverage: str  # "full" | "partial" | "missing" | "static"
 
 
 _INVARIANT_REGISTRY: list[InvariantInfo] = []
@@ -47,14 +48,23 @@ def register_invariant(
     description: str,
     check_fn: Callable | None = None,
     kind: str = "runtime",
+    coverage: str = "missing",
 ) -> None:
-    """Зарегистрировать инвариант."""
+    """Зарегистрировать инвариант.
+
+    coverage: "full" | "partial" | "missing" | "static"
+    - full: check_fn реально enforcing (есть достижимый errors.append, ловит нарушение)
+    - partial: check_fn есть, но покрывает инвариант не полностью
+    - missing: проверки нет ИЛИ функция-заглушка (никогда не append'ит ошибки)
+    - static: architecture-тест
+    """
     _INVARIANT_REGISTRY.append(InvariantInfo(
         id=invariant_id,
         sec_ref=sec_ref,
         description=description,
         check_fn=check_fn,
         kind=kind,
+        coverage=coverage,
     ))
 
 
@@ -90,6 +100,30 @@ def invariant_kind(inv_id: int) -> str:
 def invariant_id(inv_id: int) -> int:
     """Возвращает id инварианта (identity)."""
     return get_invariant(inv_id).id
+
+
+def invariant_coverage(inv_id: int) -> str:
+    """Coverage инварианта по id."""
+    info = get_invariant(inv_id)
+    return info.coverage
+
+
+def full_invariant_ids() -> list[int]:
+    """Runtime-инварианты с coverage=full."""
+    return [info.id for info in _INVARIANT_REGISTRY
+            if info.kind == "runtime" and info.coverage == "full"]
+
+
+def partial_invariant_ids() -> list[int]:
+    """Runtime-инварианты с coverage=partial."""
+    return [info.id for info in _INVARIANT_REGISTRY
+            if info.kind == "runtime" and info.coverage == "partial"]
+
+
+def missing_invariant_ids() -> list[int]:
+    """Runtime-инварианты с coverage=missing."""
+    return [info.id for info in _INVARIANT_REGISTRY
+            if info.kind == "runtime" and info.coverage == "missing"]
 
 
 # ---------------------------------------------------------------------------
@@ -204,184 +238,201 @@ CANONICAL_DESCRIPTIONS: dict[int, str] = {
 # АУДИТ check_fn: для каждого инварианта проверяем, какая _check_* функция покрывает
 # его содержание на 100%. Если проверки нет — check_fn=None + честное описание.
 
-# Инвариант #1: NPC ≤1 группа → _check_human_groups (第一部分, group_map)
+# Инвариант #1: NPC ≤1 группа → _check_human_groups (part 1, group_map)
 register_invariant(1, "§22.1",
     CANONICAL_DESCRIPTIONS[1],
-    check_fn=None,  # через _check_human_groups (invariants_file.py)
-    kind="runtime")
+    check_fn=None,  # через _check_human_groups
+    kind="runtime",
+    coverage="full")  # group_map check → errors.append
 
-# Инвариант #2: группа 1-4 активных → _check_human_groups (第二部分, len > 4)
+# Инвариант #2: группа 1-4 активных → _check_human_groups (part 2, len > 4)
 register_invariant(2, "§22.2",
     CANONICAL_DESCRIPTIONS[2],
     check_fn=None,  # через _check_human_groups
-    kind="runtime")
+    kind="runtime",
+    coverage="full")  # len > 4 check → errors.append
 
 # Инвариант #3: размер группы монстров → ❌ ПРОВЕРКА ОТСУТСТВУЕТ
-# _check_human_groups проверяет только людей, нет _check_monster_group_size
 register_invariant(3, "§22.3",
     CANONICAL_DESCRIPTIONS[3],
     check_fn=None,  # ❌ нет проверки
-    kind="runtime")
+    kind="runtime",
+    coverage="missing")
 
 # Инвариант #4: все активные участники и пленные в одном секторе
-# → _check_human_groups (第三部分, sector check for members + prisoners)
+# → _check_human_groups (part 3, sector check)
 register_invariant(4, "§22.4",
     CANONICAL_DESCRIPTIONS[4],
     check_fn=None,  # через _check_human_groups
-    kind="runtime")
+    kind="runtime",
+    coverage="full")  # sector check → errors.append
 
-# Инвариант #5: спящие/пленные не выбирают действий
-# → _check_status_intentions (проверяет prisoner + intention)
-# ⚠️ НО: _check_status_intentions НЕ проверяет "спящие" — только prisoner
+# Инвариант #5: спящие/пленные ≠ действия → _check_status_intentions
+# ⚠️ Проверяет ТОЛЬКО prisoner, НЕ проверяет sleepers
 register_invariant(5, "§22.5",
     CANONICAL_DESCRIPTIONS[5],
-    check_fn=None,  # через _check_status_intentions (частично — только prisoner)
-    kind="runtime")
+    check_fn=None,  # через _check_status_intentions
+    kind="runtime",
+    coverage="partial")  # только prisoner, не все статусы
 
 # Инвариант #6: один владелец/местонахождение предмета
-# → _check_items_and_stats (owner_counts для npc.inventory)
+# → _check_items_and_stats (owner_counts)
 register_invariant(6, "§22.6",
     CANONICAL_DESCRIPTIONS[6],
     check_fn=None,  # через _check_items_and_stats
-    kind="runtime")
+    kind="runtime",
+    coverage="full")  # owner_counts check → errors.append
 
-# Инвариант #7: предмет не продан + в тайнике + у владельца одновременно
+# Инвариант #7: предмет не продан + в тайнике + владелец одновременно
 # → ❌ ПРОВЕРКА ОТСУТСТВУЕТ
-# _check_items_and_stats проверяет только owner_counts (один владелец), но не
-# проверяет что предмет не может быть и в stash и продан одновременно
 register_invariant(7, "§22.7",
     CANONICAL_DESCRIPTIONS[7],
     check_fn=None,  # ❌ нет проверки
-    kind="runtime")
+    kind="runtime",
+    coverage="missing")
 
 # Инвариант #8: деньги/боеприпасы/запасы/прочность ≥ 0
-# → _check_items_and_stats (health < 0, stamina < 0, money < 0, debt < 0, condition < 0)
+# → _check_items_and_stats (health/stamina/money/debt/condition < 0)
 register_invariant(8, "§22.8",
     CANONICAL_DESCRIPTIONS[8],
     check_fn=None,  # через _check_items_and_stats
-    kind="runtime")
+    kind="runtime",
+    coverage="full")  # negative check → errors.append
 
-# Инвариант #9: здоровье/выносливость/состояние предметов/отношения в границах
-# → _check_items_and_stats проверяет health < 0, stamina < 0, condition < 0
-# но НЕ проверяет UPPER bounds (max health) и НЕ проверяет relations bounds
+# Инвариант #9: здоровье/выносливость/состояние в границах
+# → _check_items_and_stats (только lower bounds)
 register_invariant(9, "§22.9",
     CANONICAL_DESCRIPTIONS[9],
-    check_fn=None,  # через _check_items_and_stats (частично — только lower bounds)
-    kind="runtime")
+    check_fn=None,  # через _check_items_and_stats (только lower bounds)
+    kind="runtime",
+    coverage="partial")  # НЕ проверяет upper bounds и relations
 
 # Инвариант #10: аномалия не в стартовом секторе
-# → _check_anomalies_and_bases (start_ids check for anomalies)
+# → _check_anomalies_and_bases (part 1)
 register_invariant(10, "§22.10",
     CANONICAL_DESCRIPTIONS[10],
     check_fn=None,  # через _check_anomalies_and_bases
-    kind="runtime")
+    kind="runtime",
+    coverage="full")  # start_ids check → errors.append
 
-# Инвариант #11: база: торговец + 2 охранника
-# → _check_anomalies_and_bases (traders + guards check)
-# ⚠️ Код проверяет DEFAULT_GUARDS_PER_BASE - 1 = 3, ТЗ говорит 2
+# Инвариант #11: база: торговец + охранники
+# → _check_anomalies_and_bases (part 2)
 register_invariant(11, "§22.11",
     CANONICAL_DESCRIPTIONS[11],
     check_fn=None,  # через _check_anomalies_and_bases
-    kind="runtime")
+    kind="runtime",
+    coverage="full")  # traders + guards check → errors.append
 
-# Инвариант #12: стартовый сектор ≤1 edge от границы, ≥4 ребра до другого старта
+# Инвариант #12: расстояния стартовых секторов
 # → ❌ ПРОВЕРКА ОТСУТСТВУЕТ
-# Нет кода, проверяющего edge-distance от границы и до другого старта
 register_invariant(12, "§22.12",
     CANONICAL_DESCRIPTIONS[12],
     check_fn=None,  # ❌ нет проверки
-    kind="runtime")
+    kind="runtime",
+    coverage="missing")
 
 # Инвариант #13: комфортный сон = охранник/убежище/дежурный
-# → _check_comfort_sleep_guard — но это ЗАГЛУШКА (pass, не append'ит ошибки)
+# → _check_comfort_sleep_guard — ЗАГЛУШКА (pass, никогда не append)
 register_invariant(13, "§22.13",
     CANONICAL_DESCRIPTIONS[13],
-    check_fn=None,  # ❌ заглушка (pass, не блокирует)
-    kind="runtime")
+    check_fn=None,  # через _check_comfort_sleep_guard (заглушка)
+    kind="runtime",
+    coverage="missing")  # ❌ stub: pass, никогда не append'ит ошибки
 
-# Инвариант #14: ситуативный торговец недоступен по времени ≠ сделка
+# Инвариант #14: ситуативный торговец ≠ сделка
 # → ❌ ПРОВЕРКА ОТСУТСТВУЕТ
-# Нет кода, проверяющего time-bound traders
 register_invariant(14, "§22.14",
     CANONICAL_DESCRIPTIONS[14],
     check_fn=None,  # ❌ нет проверки
-    kind="runtime")
+    kind="runtime",
+    coverage="missing")
 
 # Инвариант #15: труп ≠ looted + eaten одновременно
-# → _check_corpses (status available + looted = True; status eaten/looted + items)
+# → _check_corpses (status check + items check)
 register_invariant(15, "§22.15",
     CANONICAL_DESCRIPTIONS[15],
     check_fn=None,  # через _check_corpses
-    kind="runtime")
+    kind="runtime",
+    coverage="full")  # looted/eaten check → errors.append
 
 # Инвариант #16: знание = снимок (неизменность)
 # → _check_knowledge_immutability (observed_hour > hour + 24)
 register_invariant(16, "§22.16",
     CANONICAL_DESCRIPTIONS[16],
     check_fn=None,  # через _check_knowledge_immutability
-    kind="runtime")
+    kind="runtime",
+    coverage="full")  # future observed_hour → errors.append
 
 # Инвариант #17: отношения = известное событие
 # → _check_faction_relation_events (journal + news check)
 register_invariant(17, "§22.17",
     CANONICAL_DESCRIPTIONS[17],
     check_fn=None,  # через _check_faction_relation_events
-    kind="runtime")
+    kind="runtime",
+    coverage="full")  # journal/event check → errors.append
 
 # Инвариант #18: корректные ссылки в событиях (hour, type, refs)
-# → _check_event_links (только hour check, без type/refs)
+# → _check_event_links (только hour check)
 register_invariant(18, "§22.18",
     CANONICAL_DESCRIPTIONS[18],
-    check_fn=None,  # через _check_event_links (частично — только hour)
-    kind="runtime")
+    check_fn=None,  # через _check_event_links (только hour)
+    kind="runtime",
+    coverage="partial")  # только hour, НЕ type/entity refs
 
 # Инвариант #19: UI не мутирует мир → STATIC
 register_invariant(19, "§22.19",
     CANONICAL_DESCRIPTIONS[19],
     check_fn=None,  # static
-    kind="static")
+    kind="static",
+    coverage="static")
 
 # Инвариант #20: выброс = только shelter
-# → _check_emission_movement (emission active check + shelter_ids + emission_exposed)
+# → _check_emission_movement (emission active + shelter_ids + emission_exposed)
 register_invariant(20, "§22.20",
     CANONICAL_DESCRIPTIONS[20],
     check_fn=None,  # через _check_emission_movement
-    kind="runtime")
+    kind="runtime",
+    coverage="full")  # shelter check → errors.append
 
 # Инвариант #21: находка ≤24ч, одно местонахождение, один владелец
-# → _check_finding_expiry (только age check, без ownership check)
+# → _check_finding_expiry (только age check)
 register_invariant(21, "§22.21",
     CANONICAL_DESCRIPTIONS[21],
-    check_fn=None,  # через _check_finding_expiry (частично — только age)
-    kind="runtime")
+    check_fn=None,  # через _check_finding_expiry (только age)
+    kind="runtime",
+    coverage="partial")  # только age, НЕ ownership/loc
 
 # Инвариант #22: выброс-знания не стареют
-# → _check_emission_knowledge_staleness (проверяет valid_until, но partial)
+# → _check_emission_knowledge_staleness (только during emission)
 register_invariant(22, "§22.22",
     CANONICAL_DESCRIPTIONS[22],
-    check_fn=None,  # через _check_emission_knowledge_staleness (частично)
-    kind="runtime")
+    check_fn=None,  # через _check_emission_knowledge_staleness (только during)
+    kind="runtime",
+    coverage="partial")  # только during emission, НЕ after
 
 # Инвариант #23: shelter free OR 1 monster group
-# → _check_shelter_occupancy (только occupied_by reference check, group count check absent)
+# → _check_shelter_occupancy (только occupied_by reference)
 register_invariant(23, "§22.23",
     CANONICAL_DESCRIPTIONS[23],
-    check_fn=None,  # через _check_shelter_occupancy (частично — только occupied_by ref)
-    kind="runtime")
+    check_fn=None,  # через _check_shelter_occupancy (только occupied_by ref)
+    kind="runtime",
+    coverage="partial")  # только occupied_by, НЕ group count
 
 # Инвариант #24: одна аномалия = одна тропа
 # → _check_trail_blockages (active anomalies on same trail_id)
 register_invariant(24, "§22.24",
     CANONICAL_DESCRIPTIONS[24],
-    check_fn=None,  # через _check_trail_blockages (groups.py)
-    kind="runtime")
+    check_fn=None,  # через _check_trail_blockages
+    kind="runtime",
+    coverage="full")  # trail anomaly count → errors.append
 
 # Инвариант #25: знания группы — общие
-# → _check_group_knowledge (knowledge_snapshot_at_intention vs intention_knowledge_used)
+# → _check_group_knowledge (union facts check)
 register_invariant(25, "§22.25",
     CANONICAL_DESCRIPTIONS[25],
-    check_fn=None,  # через _check_group_knowledge (knowledge.py)
-    kind="runtime")
+    check_fn=None,  # через _check_group_knowledge
+    kind="runtime",
+    coverage="full")  # union_facts vs used_facts → errors.append
 
 
 # ---------------------------------------------------------------------------

@@ -6,11 +6,15 @@ from zonesim.simulation.invariants.registry import (
     CANONICAL_DESCRIPTIONS,
     invariant_id,
     invariant_kind,
+    invariant_coverage,
     register_invariant,
     get_invariant,
     all_invariant_ids,
     runtime_invariant_ids,
     static_invariant_ids,
+    full_invariant_ids,
+    partial_invariant_ids,
+    missing_invariant_ids,
 )
 
 # Re-export check functions from registry for backward compatibility
@@ -47,11 +51,15 @@ __all__ = [
     "CANONICAL_DESCRIPTIONS",
     "invariant_id",
     "invariant_kind",
+    "invariant_coverage",
     "register_invariant",
     "get_invariant",
     "all_invariant_ids",
     "runtime_invariant_ids",
     "static_invariant_ids",
+    "full_invariant_ids",
+    "partial_invariant_ids",
+    "missing_invariant_ids",
     # Check functions (backward compatibility)
     "_check_human_groups",
     "_check_status_intentions",
