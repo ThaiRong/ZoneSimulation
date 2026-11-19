@@ -206,6 +206,7 @@ def _restore_dataclass(cls_name: str, fields_data: dict[str, Any]) -> Any:
         "PracticeProgress": zonesim.relations.development.PracticeProgress,
         # Knowledge
         "KnowledgeFact": zonesim.knowledge.fact.KnowledgeFact,
+        "KnowledgeBase": zonesim.knowledge.fact.KnowledgeBase,
         # Economy
         "Contract": zonesim.economy.contracts.Contract,
         "ExportRecord": zonesim.economy.trade.ExportRecord,

@@ -31,6 +31,9 @@ from zonesim.world.shelter import Shelter, StormShelter
 from zonesim.world.sector import Sector
 from zonesim.world.stash import Stash
 
+# Импорт schema-driven функций для state_from_dict
+from zonesim.persistence.schema import decode_value  # noqa: F401
+
 if TYPE_CHECKING:
     from zonesim.simulation.engine import SimulationState
 
@@ -129,8 +132,20 @@ def _encode_manager_field(name: str, value: Any) -> Any:
 
 # Dataclass dict fields — vars() + _encode (ключи int остаются int)
 _DATACLASS_DICT_NAMES: set[str] = {
-    "sectors", "human_groups", "monster_groups", "anomalies", "items", "knowledge_bases",
+    "sectors", "human_groups", "monster_groups", "items", "knowledge_bases",
 }
+# Anomalies требуют enum-восстановления
+_DATACLASS_DICT_NAMES_WITH_ENUM: set[str] = {"anomalies"}
+# Маппинг: field_name → dataclass class для dict values
+_DATACLASS_DICT_CLASS_MAP: dict[str, type] = {
+    "sectors": Sector,
+    "human_groups": HumanGroup,
+    "monster_groups": MonsterGroup,
+    "items": Item,
+    "knowledge_bases": KnowledgeBase,
+}
+# Маппинг enum-полей для Item
+_ITEM_ENUM_FIELDS: dict[str, type[Enum]] = {"type": ItemType}
 
 
 def _encode_dict_dataclass(name: str, value: dict) -> Any:
@@ -161,6 +176,94 @@ _STR_KEY_DICT_NAMES: set[str] = {"trader_stock", "emission_exposed"}
 
 def _encode_str_key_dict(name: str, value: dict) -> Any:
     return _encode({str(k): v for k, v in value.items()})
+
+
+# --- restore_dict_keys ---
+# При кодировании JSON ключи dict stringifyруются → при декодировании нужно
+# восстановить типы ключей по аннотациям полей SimulationState.
+
+
+def _restore_dict_keys(data: Any, field_type: Any, field_name: str) -> Any:
+    """Восстановить типы ключей dict и элементов коллекций по аннотации типа.
+
+    КРИТИЧНО: проверяем тип ДАННЫХ, затем аннотацию field_type.
+    Иначе _restore_dict_keys({"id": 1}, list[dict], ...) → origin=list →
+    for item in data → итерация по ключам dict → превращение в ["id", ...].
+    """
+    try:
+        from typing import get_origin, get_args
+        origin = get_origin(field_type)
+        args = get_args(field_type)
+    except Exception:
+        origin, args = None, ()
+
+    # ДАННЫЕ — dict, аннотация — dict[key_type, value_type] → восстанавливаем ключи
+    if isinstance(data, dict) and origin is dict and args and len(args) >= 2:
+        key_type = args[0]
+        value_type = args[1]
+        result: dict[Any, Any] = {}
+        for k, v in data.items():
+            restored_key = _convert_key(k, key_type, field_name)
+            restored_val = _restore_dict_keys(v, value_type, f"{field_name}#{k}")
+            result[restored_key] = restored_val
+        return result
+
+    # ДАННЫЕ — list, аннотация — list[element_type] → восстанавливаем элементы
+    if isinstance(data, list) and origin is list and args:
+        elem_type = args[0]
+        return [_restore_dict_keys(item, elem_type, field_name) for item in data]
+
+    # ДАННЫЕ — dict, но аннотация не dict → рекурсивно декодируем значения
+    if isinstance(data, dict):
+        return {k: _restore_dict_keys(v, field_type, field_name) for k, v in data.items()}
+
+    # ДАННЫЕ — list, но аннотация не list → рекурсивно декодируем элементы
+    if isinstance(data, list):
+        return [_restore_dict_keys(item, field_type, field_name) for item in data]
+
+    return data
+
+
+def _convert_key(raw_key: Any, key_type: type, field_name: str) -> Any:
+    """Конвертировать raw_key (str из JSON) в key_type."""
+    # Параметризованные generics (tuple[str, str]) нельзя использовать в isinstance
+    try:
+        from typing import get_origin
+        base_type = get_origin(key_type) or key_type
+    except Exception:
+        base_type = key_type
+
+    # Проверка на уже восстановленный тип
+    if isinstance(raw_key, base_type):
+        return raw_key
+
+    # key_type = int
+    if base_type is int:
+        try:
+            return int(raw_key)
+        except (ValueError, TypeError):
+            return raw_key
+
+    # key_type = tuple[str, str] или другой tuple
+    if base_type is tuple:
+        if isinstance(raw_key, str):
+            try:
+                import json
+                parsed = json.loads(raw_key)
+                if isinstance(parsed, list):
+                    return tuple(parsed)
+            except (json.JSONDecodeError, ValueError):
+                pass
+            if ',' in raw_key:
+                parts = raw_key.split(',', 1)
+                return tuple(parts)
+            return raw_key
+
+    # key_type = str
+    if base_type is str:
+        return str(raw_key)
+
+    return raw_key
 
 
 # Register all strategies
@@ -211,154 +314,246 @@ def _restore_monster(data: dict) -> Monster:
     return monster
 
 
+# --- Маппинг менеджеров: имя поля → класс менеджера ---
+# Это НЕ ручное перечисление полей в state_from_dict — это метаданные
+# для восстановления типа менеджера по имени поля (аналогично _MANAGER_NAMES).
+_MANAGER_FIELD_CLASS: dict[str, type] = {
+    "artifacts": ArtifactManager,
+    "contracts": ContractManager,
+    "import_export": ImportExportManager,
+    "personal_relations": PersonalRelations,
+    "faction_relations": FactionRelations,
+    "development": DevelopmentManager,
+    "exile_manager": ExileManager,
+    "faction_change_manager": FactionChangeManager,
+    "news_manager": NewsManager,
+    "migration_state": MigrationState,
+    "monster_migration": MonsterMigrationManager,
+}
+
+
+def _decode_raw(value: Any) -> Any:
+    """Простой рекурсивный decode без __kind__ обработки (для vars-данных)."""
+    if isinstance(value, list):
+        return [_decode_raw(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    kind = value.get("__kind__")
+    if kind == "tuple":
+        return tuple(_decode_raw(item) for item in value["items"])
+    if kind == "set":
+        return {_decode_raw(item) for item in value["items"]}
+    if kind == "dict":
+        pairs = value["items"]
+        return {_decode_raw(k): _decode_raw(v) for k, v in pairs}
+    return {k: _decode_raw(v) for k, v in value.items()}
+
+
+def _restore_dataclass(cls: type, data: dict[str, Any],
+                        enum_fields: dict[str, type[Enum]] | None = None) -> Any:
+    """Восстановить dataclass-объект (или менеджер) из vars-словаря."""
+    obj = cls.__new__(cls)
+    obj.__dict__.update(_decode_raw(data))
+    if enum_fields:
+        for field_name, enum_type in enum_fields.items():
+            value = getattr(obj, field_name, None)
+            if value is not None:
+                setattr(obj, field_name, enum_type(value))
+    return obj
+
+
+def _decode_with_key_restore(name: str, data: Any, field_type: Any,
+                              manager_map: dict[str, type]) -> Any:
+    """Декодировать поле с восстановлением типов ключей по аннотации."""
+    decoded = _decode_raw(data)
+    # Если это менеджер — восстановим класс
+    if name in manager_map:
+        manager_cls = manager_map[name]
+        decoded = _restore_dataclass(manager_cls, decoded)
+    # Восстановим типы ключей по аннотации
+    return _restore_dict_keys(decoded, field_type, name)
+
+
 def state_from_dict(data: dict[str, Any]) -> SimulationState:
+    """Рефлексивная десериализация SimulationState через dataclasses.fields.
+
+    Никакого ручного перечисления полей — поля перебираются рефлексией,
+    стратегия декодирования определяется по типу поля и имени.
+    Для менеджеров используется _MANAGER_FIELD_CLASS маппинг.
+    Для dataclass dict/list полей — decode + restore via class.
+    Для остальных — decode + restore_dict_keys по аннотации типа.
+    """
+    import dataclasses
+    from typing import get_type_hints, Any as typing_Any
     from zonesim.simulation.engine import SimulationState
 
-    rng = SeededRNG(data["rng"]["seed"])
-    rng.set_state(_decode(data["rng"]["state"]))
+    # Получаем аннотации типов из SimulationState
+    hints = get_type_hints(SimulationState, localns=dict(globals()))
 
-    humans = [
-        _restore(HumanNPC, value, {"status": EntityStatus, "type": EntityType})
-        for value in _decode(data["humans"])
-    ]
-    stationary_humans = [
-        _restore(HumanNPC, value, {"status": EntityStatus, "type": EntityType})
-        for value in _decode(data["stationary_humans"])
-    ]
-    anomalies = {
-        key: _restore(
-            Anomaly,
-            value,
-            {"anomaly_type": AnomalyType, "status": AnomalyStatus},
-        )
-        for key, value in _decode(data["anomalies"]).items()
-    }
+    result: dict[str, Any] = {}
+    for field in dataclasses.fields(SimulationState):
+        name = field.name
+        field_type = hints.get(name, typing_Any)
+        raw = data.get(name)
 
-    artifacts = _restore(ArtifactManager, data["artifacts"])
-    artifacts.artifacts = [_restore(Artifact, value) for value in artifacts.artifacts]
+        if raw is None:
+            result[name] = None
+            continue
 
-    contracts = _restore(ContractManager, data["contracts"])
-    contracts.contracts = {
-        key: _restore(
-            Contract,
-            value,
-            {"contract_type": ContractType, "status": ContractStatus},
-        )
-        for key, value in contracts.contracts.items()
-    }
+        strategy = _FIELD_ENCODE_STRATEGY.get(name)
 
-    import_export = _restore(ImportExportManager, data["import_export"])
-    import_export.export_records = [
-        _restore(ExportRecord, value) for value in import_export.export_records
-    ]
-    import_export.import_records = [
-        _restore(ImportRecord, value) for value in import_export.import_records
-    ]
+        if strategy is not None:
+            decoded = decode_value(raw)
 
-    development = DevelopmentManager()
-    for npc_id, stats in _decode(data["development"])["progress"].items():
-        development.progress[npc_id] = {
-            StatType(stat_type): _restore(
-                PracticeProgress,
-                progress,
-                {"stat_type": StatType},
-            )
-            for stat_type, progress in stats.items()
-        }
+            # time/rng — специальные типы
+            if name == "time":
+                result[name] = GameTime(decoded["hour"])
+                continue
+            elif name == "rng":
+                rng = SeededRNG(decoded["seed"])
+                rng.set_state(decode_value(decoded["state"]))
+                result[name] = rng
+                continue
 
-    news_manager = _restore(NewsManager, data["news_manager"])
-    news_manager.events = [_restore(WorldEvent, value) for value in news_manager.events]
+            # Менеджеры: decode_value → dataclass объекты + restore_dict_keys для ключей
+            if name in _MANAGER_FIELD_CLASS:
+                manager_cls = _MANAGER_FIELD_CLASS[name]
+                decoded = _restore_dataclass(manager_cls, decoded)
+                # Для managers с enum-полями нужно дообработать
+                if name == "contracts":
+                    decoded.contracts = {
+                        k: _restore(Contract, v,
+                                    {"contract_type": ContractType,
+                                     "status": ContractStatus})
+                        for k, v in decoded.contracts.items()
+                    }
+                elif name == "development":
+                    dm = decoded
+                    if hasattr(dm, 'progress') and dm.progress:
+                        for npc_id, stats in dm.progress.items():
+                            dm.progress[npc_id] = {
+                                StatType(st): _restore(PracticeProgress, p,
+                                                       {"stat_type": StatType})
+                                for st, p in stats.items()
+                            }
+                elif name == "news_manager":
+                    nm = decoded
+                    if hasattr(nm, 'events'):
+                        nm.events = [_restore(WorldEvent, e) for e in nm.events]
+                    if hasattr(nm, 'hourly_summaries'):
+                        nm.hourly_summaries = _decode_raw(
+                            data.get("news_manager", {}).get("hourly_summaries", []))
+                elif name == "knowledge_bases":
+                    # KnowledgeBase — dataclass, decode_value восстановил через schema
+                    pass
+                elif name in ("personal_relations", "faction_relations"):
+                    pass
 
-    knowledge_bases = {}
-    for npc_id, value in _decode(data["knowledge_bases"]).items():
-        knowledge_base = _restore(KnowledgeBase, value)
-        knowledge_base.facts = [
-            _restore(KnowledgeFact, fact, {"fact_type": KnowledgeType})
-            for fact in knowledge_base.facts
-        ]
-        knowledge_bases[npc_id] = knowledge_base
+                result[name] = decoded
+                continue
 
-    return SimulationState(
-        time=GameTime(data["time"]["hour"]),
-        rng=rng,
-        sectors={
-            key: _restore(Sector, value)
-            for key, value in _decode(data["sectors"]).items()
-        },
-        humans=humans,
-        stationary_humans=stationary_humans,
-        human_groups={
-            key: _restore(HumanGroup, value)
-            for key, value in _decode(data["human_groups"]).items()
-        },
-        monsters=[_restore_monster(value) for value in _decode(data["monsters"])],
-        monster_groups={
-            key: _restore(MonsterGroup, value)
-            for key, value in _decode(data["monster_groups"]).items()
-        },
-        anomalies=anomalies,
-        artifacts=artifacts,
-        corpses=[_restore(Corpse, value) for value in _decode(data["corpses"])],
-        items={
-            key: _restore(Item, value, {"type": ItemType})
-            for key, value in _decode(data["items"]).items()
-        },
-        contracts=contracts,
-        import_export=import_export,
-        personal_relations=_restore(PersonalRelations, data["personal_relations"]),
-        faction_relations=_restore(FactionRelations, data["faction_relations"]),
-        development=development,
-        exile_manager=_restore(ExileManager, data["exile_manager"]),
-        faction_change_manager=_restore(FactionChangeManager, data["faction_change_manager"]),
-        news_manager=news_manager,
-        knowledge_bases=knowledge_bases,
-        stashs=[_restore(Stash, value) for value in _decode(data["stashs"])],
-        shelter_count=data["shelter_count"],
-        trader_stock={
-            int(key): value for key, value in _decode(data["trader_stock"]).items()
-        },
-        trails=data["trails"],
-        shelters={
-            int(key): _restore(StormShelter, value)
-            for key, value in _decode(data["shelters"]).items()
-        },
-        next_emission_hour=data["next_emission_hour"],
-        emission_start_hour=data["emission_start_hour"],
-        emission_end_hour=data["emission_end_hour"],
-        emission_warning_hour=data["emission_warning_hour"],
-        emission_exposed={
-            int(key): value for key, value in _decode(data["emission_exposed"]).items()
-        },
-        migration_state=_restore(MigrationState, data["migration_state"]),
-        monster_migration=_restore(MonsterMigrationManager, data["monster_migration"]),
-        next_human_id=data["next_human_id"],
-        next_monster_id=data["next_monster_id"],
-        next_group_id=data["next_group_id"],
-        next_monster_group_id=data["next_monster_group_id"],
-        next_anomaly_id=data["next_anomaly_id"],
-        next_stash_id=data["next_stash_id"],
-        next_corpse_id=data["next_corpse_id"],
-        next_item_id=data["next_item_id"],
-        visit_memory=_decode(data["visit_memory"]),
-        config=_decode(data["config"]),
-        # Ситуативный торговец (§16.6)
-        next_conditional_spawn_hour=data["next_conditional_spawn_hour"],
-        conditional_trader_id=data["conditional_trader_id"],
-        conditional_trader_sector=data["conditional_trader_sector"],
-        conditional_trader_start_hour=data["conditional_trader_start_hour"],
-        conditional_trader_end_hour=data["conditional_trader_end_hour"],
-        conditional_trader_knowledge_hour=data["conditional_trader_knowledge_hour"],
-        # Штурм убежищ в выброс (§12.7)
-        ongoing_shelter_assaults=_decode(data.get("ongoing_shelter_assaults", {})),
-        # Временные убежища (§7.10)
-        temp_shelters={
-            int(key): _restore(Shelter, value)
-            for key, value in _decode(data["temp_shelters"]).items()
-        },
-        next_shelter_id=data["next_shelter_id"],
-        # Журнал изменений отношений (§21 — теперь сериализуются)
-        prev_relation_snapshot=_decode(data.get("prev_relation_snapshot", {})),
-        relation_change_journal=_decode(data.get("relation_change_journal", [])),
-        intention_knowledge_used=_decode(data.get("intention_knowledge_used", {})),
-        knowledge_snapshot_at_intention=_decode(data.get("knowledge_snapshot_at_intention", [])),
-    )
+            # Dataclass dict fields (vars-based encoding): decode_value → dict,
+            # нужно восстановить dataclass объекты + restore int-ключи
+            if name in _DATACLASS_DICT_NAMES_WITH_ENUM:
+                # anomalies: Anomaly с AnomalyType/AnomalyStatus
+                restored = {}
+                for k, v in decoded.items():
+                    restored[k] = _restore(Anomaly, v,
+                                           {"anomaly_type": AnomalyType,
+                                            "status": AnomalyStatus})
+                result[name] = restored
+                result[name] = _restore_dict_keys(result[name], field_type, name)
+                continue
+
+            if name in _DATACLASS_DICT_NAMES:
+                cls = _DATACLASS_DICT_CLASS_MAP[name]
+                enum_fields = _ITEM_ENUM_FIELDS if name == "items" else None
+                restored = {}
+                for k, v in decoded.items():
+                    # vars-based encoding: decoded fields are raw dicts
+                    # Для knowledge_bases — facts нужно дополнительно восстановить KnowledgeFact
+                    if name == "knowledge_bases" and isinstance(v, dict):
+                        facts = v.get("facts", [])
+                        if facts and isinstance(facts, list):
+                            v = dict(v)  # copy
+                            v["facts"] = [
+                                _restore(KnowledgeFact, f, {"fact_type": KnowledgeType})
+                                if isinstance(f, dict) else f
+                                for f in facts
+                            ]
+                    if enum_fields:
+                        restored[k] = _restore(cls, v, enum_fields)
+                    else:
+                        restored[k] = _restore(cls, v)
+                result[name] = restored
+                # restore_dict_keys для int-ключей
+                result[name] = _restore_dict_keys(result[name], field_type, name)
+                continue
+
+            # shelters/temp_shelters: vars-based encoding → restore StormShelter/Shelter
+            if name == "shelters":
+                decoded_dict = decode_value(raw)
+                result[name] = {
+                    int(k): _restore(StormShelter, v)
+                    for k, v in decoded_dict.items()
+                }
+                continue
+            if name == "temp_shelters":
+                decoded_dict = decode_value(raw)
+                result[name] = {
+                    int(k): _restore(Shelter, v)
+                    for k, v in decoded_dict.items()
+                }
+                continue
+
+            # List dataclass fields: decode_value → list[dict], restore objects
+            if name in _DATACLASS_LIST_NAMES:
+                restored = []
+                for v in decoded:
+                    if name == "humans" or name == "stationary_humans":
+                        restored.append(_restore(HumanNPC, v,
+                                    {"status": EntityStatus, "type": EntityType})
+                                        if isinstance(v, dict) else v)
+                    elif name == "monsters":
+                        restored.append(_restore_monster(v) if isinstance(v, dict) else v)
+                    elif name == "corpses":
+                        restored.append(_restore(Corpse, v) if isinstance(v, dict) else v)
+                    elif name == "stashs":
+                        restored.append(_restore(Stash, v) if isinstance(v, dict) else v)
+                result[name] = restored
+                continue
+
+            # Остальные поля: decode_value → restore_dict_keys
+            result[name] = _restore_dict_keys(decoded, field_type, name)
+        else:
+            # Поле НЕ в _FIELD_ENCODE_STRATEGY
+            if name == "anomalies":
+                decoded = decode_value(raw)
+                restored = {}
+                for k, v in decoded.items():
+                    restored[k] = _restore(Anomaly, v,
+                                           {"anomaly_type": AnomalyType,
+                                            "status": AnomalyStatus})
+                result[name] = restored
+            elif name == "relation_change_journal":
+                # list[dict] encoded через _encode → list of {"__kind__": "dict", ...}
+                # decode_value восстанавливает list of dict
+                decoded = decode_value(raw)
+                result[name] = decoded if isinstance(decoded, list) else []
+            elif name == "knowledge_snapshot_at_intention":
+                # dict[int, list[dict]] — restore int keys
+                decoded = decode_value(raw)
+                result[name] = _restore_dict_keys(decoded, field_type, name)
+            elif name == "intention_knowledge_used":
+                # dict[int, list[dict]] — restore int keys
+                decoded = decode_value(raw)
+                result[name] = _restore_dict_keys(decoded, field_type, name)
+            elif name == "prev_relation_snapshot":
+                # dict[tuple[str,str], int] — restore tuple keys
+                decoded = decode_value(raw)
+                result[name] = _restore_dict_keys(decoded, field_type, name)
+            else:
+                result[name] = _decode_with_key_restore(
+                    name, raw, field_type, _MANAGER_FIELD_CLASS)
+
+    return SimulationState(**result)

@@ -34,25 +34,86 @@ def test_serialization_completeness_gate(controlled_state: SimulationState,
 # 2. Истинный round-trip: поле-за-полем совпадает оригинал и restored state
 # ---------------------------------------------------------------------------
 
+def _values_equal(a: Any, b: Any) -> bool:
+    """Рекурсивно сравниваем значения: примитивы ==, объекты с __dict__ → vars."""
+    if type(a) is not type(b):
+        return False
+    # Objects with __dict__ → compare vars
+    if hasattr(a, '__dict__') and hasattr(b, '__dict__'):
+        return vars(a) == vars(b)
+    # dict → compare keys and values recursively
+    if isinstance(a, dict) and isinstance(b, dict):
+        if a.keys() != b.keys():
+            return False
+        return all(_values_equal(a[k], b[k]) for k in a)
+    # list → compare items recursively
+    if isinstance(a, list) and isinstance(b, list):
+        if len(a) != len(b):
+            return False
+        return all(_values_equal(x, y) for x, y in zip(a, b))
+    # Set
+    if isinstance(a, set) and isinstance(b, set):
+        return a == b
+    # Tuple
+    if isinstance(a, tuple) and isinstance(b, tuple):
+        return all(_values_equal(x, y) for x, y in zip(a, b))
+    # Primitives
+    return a == b
+
+
 def _compare_state_field_by_field(original: SimulationState,
                                   restored: SimulationState) -> list[str]:
-    """Сравнивает два SimulationState поле-за-полем, возвращает список差异."""
+    """Сравнивает два SimulationState поле-за-полем, возвращает список расхождений.
+
+    Поскольку ни один класс не определяет __eq__, для объектов с __dict__
+    сравниваем vars() (value-based), для примитивов — напрямую.
+    Для SeededRNG сравниваем seed + state.
+    """
     diffs: list[str] = []
     for field in dataclasses.fields(original):
         fname = field.name
         orig_val = getattr(original, fname)
         rest_val = getattr(restored, fname)
-        if orig_val != rest_val:
+
+        # SeededRNG: сравниваем seed и get_state()
+        if fname == 'rng':
+            try:
+                orig_state = orig_val.get_state()
+                rest_state = rest_val.get_state()
+                if orig_val.seed != rest_val.seed or orig_state != rest_state:
+                    diffs.append(fname)
+            except Exception:
+                diffs.append(fname)
+            continue
+
+        # Рекурсивное сравнение
+        if not _values_equal(orig_val, rest_val):
             diffs.append(fname)
     return diffs
 
 
-@pytest.mark.xfail(strict=True, reason="4 поля не выживают при round-trip")
 def test_true_roundtrip_field_by_field(controlled_state: SimulationState) -> None:
     """state_from_dict(state_to_dict(s)) == s по ВСЕМ 56 полям."""
     d = state_to_dict(controlled_state)
     restored = state_from_dict(d)
     diffs = _compare_state_field_by_field(controlled_state, restored)
+
+    # Debug: показываем что именно отличается
+    if diffs:
+        for fname in diffs:
+            ov = getattr(controlled_state, fname)
+            rv = getattr(restored, fname)
+            if hasattr(ov, '__dict__') and hasattr(rv, '__dict__'):
+                ok, rk = set(vars(ov).keys()), set(vars(rv).keys())
+                if ok != rk:
+                    import sys; sys.stderr.write(f'{fname} keys: +{rk-ok} -{ok-rk}\n')
+                for k in sorted(ok & rk):
+                    a, b = vars(ov)[k], vars(rv)[k]
+                    if a != b:
+                        import sys; sys.stderr.write(f'{fname}.{k}: {a!r:.120} vs {b!r:.120}\n')
+            else:
+                import sys; sys.stderr.write(f'{fname}: {ov!r:.200} vs {rv!r:.200}\n')
+
     assert diffs == [], f"Поля с расхождениями: {diffs}"
 
 
