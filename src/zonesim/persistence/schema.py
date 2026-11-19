@@ -162,11 +162,67 @@ def decode_value(data: Any) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# Enum field mapping — enum-поля dataclass для восстановления
+# ---------------------------------------------------------------------------
+
+# Маппинг: cls_name → {field_name: enum_type}
+# decode_value декодирует enum как строку/число, нужно восстановить в enum
+_ENUM_FIELD_MAP: dict[str, dict[str, type]] = {
+    "Anomaly": {
+        "anomaly_type": "zonesim.anomalies.core.AnomalyType",
+        "status": "zonesim.anomalies.core.AnomalyStatus",
+    },
+    "HumanNPC": {
+        "status": "zonesim.world.entity.EntityStatus",
+        "type": "zonesim.world.entity.EntityType",
+    },
+    "Monster": {
+        "status": "zonesim.world.entity.EntityStatus",
+        "type": "zonesim.world.entity.EntityType",
+        "species": "zonesim.world.entity.MonsterSpecies",
+    },
+    "Item": {
+        "type": "zonesim.world.item.ItemType",
+    },
+    "KnowledgeFact": {
+        "fact_type": "zonesim.knowledge.fact.KnowledgeType",
+    },
+    "Corpse": {},  # Corpse без enum-полей
+    "Contract": {
+        "contract_type": "zonesim.economy.contracts.ContractType",
+        "status": "zonesim.economy.contracts.ContractStatus",
+    },
+    "PracticeProgress": {
+        "stat_type": "zonesim.relations.development.StatType",
+    },
+    "WorldEvent": {},  # WorldEvent без enum-полей
+    "Sector": {},
+    "Artifact": {},
+    "Shelter": {},
+    "StormShelter": {},
+    "HumanGroup": {},
+    "MonsterGroup": {},
+    "GroupMembership": {},
+    "StatsMixin": {},
+    "BaseEntity": {},
+    "EquipmentDamage": {},
+    "ExportRecord": {},
+    "ImportRecord": {},
+    "Stash": {},
+    "KnowledgeBase": {},
+}
+
+
+# ---------------------------------------------------------------------------
 # Dataclass reconstruction
 # ---------------------------------------------------------------------------
 
 def _restore_dataclass(cls_name: str, fields_data: dict[str, Any]) -> Any:
-    """Восстановить dataclass из декодированных полей."""
+    """Восстановить dataclass из декодированных полей.
+
+    КРИТИЧНО: восстанавливаем enum-поля из строковых/числовых значений,
+    потому что JSON сериализует enum как строку/число, не как объект.
+    """
     import zonesim.world.entity
     import zonesim.world.group
     import zonesim.world.item
@@ -221,7 +277,23 @@ def _restore_dataclass(cls_name: str, fields_data: dict[str, Any]) -> Any:
     # fields_data уже декодирован decode_value → fields_data → _decode_dataclass_fields
     # Присваиваем явно через setattr чтобы гарантировать типизацию
     for key, value in fields_data.items():
-        setattr(obj, key, value)
+        # Восстанавливаем enum-поля
+        enum_map = _ENUM_FIELD_MAP.get(cls_name, {})
+        enum_module_path = enum_map.get(key)
+        if enum_module_path and not isinstance(value, (int, float, str)):
+            # value уже enum-тип
+            setattr(obj, key, value)
+        elif enum_module_path and isinstance(value, (int, str)) and not isinstance(value, type):
+            # Нужно восстановить enum из int/str
+            try:
+                parts = enum_module_path.rsplit('.', 1)
+                mod = __import__(parts[0], fromlist=[parts[1]])
+                enum_type = getattr(mod, parts[1])
+                setattr(obj, key, enum_type(value))
+            except (ValueError, AttributeError, IndexError):
+                setattr(obj, key, value)
+        else:
+            setattr(obj, key, value)
     return obj
 
 

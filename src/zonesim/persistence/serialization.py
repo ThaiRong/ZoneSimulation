@@ -43,8 +43,15 @@ def _encode(value: Any) -> Any:
         return value
     if isinstance(value, Enum):
         return value.value
+    # Dataclass → кодировать с __kind__='dataclass' чтобы decode_value мог восстановить
     if hasattr(value, "__dataclass_fields__"):
-        return _encode(vars(value))
+        import dataclasses
+        return {
+            "__kind__": "dataclass",
+            "__type__": value.__class__.__name__,
+            "fields": {f.name: _encode(getattr(value, f.name))
+                       for f in dataclasses.fields(value)},
+        }
     if isinstance(value, list):
         return [_encode(item) for item in value]
     if isinstance(value, tuple):
@@ -347,9 +354,14 @@ def _decode_raw(value: Any) -> Any:
 
 def _restore_dataclass(cls: type, data: dict[str, Any],
                         enum_fields: dict[str, type[Enum]] | None = None) -> Any:
-    """Восстановить dataclass-объект (или менеджер) из vars-словаря."""
+    """Восстановить dataclass-объект (или менеджер) из vars-словаря.
+
+    decode_value из schema.py знает про __kind__='dataclass' и реконструирует
+    вложенные dataclass-объекты (Artifact, Contract и т.д.).
+    """
+    decoded = decode_value(data)
     obj = cls.__new__(cls)
-    obj.__dict__.update(_decode_raw(data))
+    obj.__dict__.update(decoded)
     if enum_fields:
         for field_name, enum_type in enum_fields.items():
             value = getattr(obj, field_name, None)
@@ -416,26 +428,49 @@ def state_from_dict(data: dict[str, Any]) -> SimulationState:
                 manager_cls = _MANAGER_FIELD_CLASS[name]
                 decoded = _restore_dataclass(manager_cls, decoded)
                 # Для managers с enum-полями нужно дообработать
+                # decode_value из _restore_dataclass уже восстановил вложенные dataclass
+                # Поэтому проверяем: если v уже объект нужного типа — не вызывать _restore
                 if name == "contracts":
-                    decoded.contracts = {
-                        k: _restore(Contract, v,
-                                    {"contract_type": ContractType,
-                                     "status": ContractStatus})
-                        for k, v in decoded.contracts.items()
-                    }
+                    new_contracts = {}
+                    for k, v in decoded.contracts.items():
+                        if isinstance(v, Contract):
+                            # Уже восстановлен из __kind__='dataclass'
+                            # Но нужно восстановить enum-поля
+                            if hasattr(v, 'contract_type') and not isinstance(v.contract_type, ContractType):
+                                v.contract_type = ContractType(v.contract_type)
+                            if hasattr(v, 'status') and not isinstance(v.status, ContractStatus):
+                                v.status = ContractStatus(v.status)
+                            new_contracts[k] = v
+                        else:
+                            new_contracts[k] = _restore(Contract, v,
+                                        {"contract_type": ContractType,
+                                         "status": ContractStatus})
+                    decoded.contracts = new_contracts
                 elif name == "development":
                     dm = decoded
                     if hasattr(dm, 'progress') and dm.progress:
+                        new_progress = {}
                         for npc_id, stats in dm.progress.items():
-                            dm.progress[npc_id] = {
-                                StatType(st): _restore(PracticeProgress, p,
-                                                       {"stat_type": StatType})
-                                for st, p in stats.items()
-                            }
+                            new_stats = {}
+                            for st, p in stats.items():
+                                if isinstance(p, PracticeProgress):
+                                    if hasattr(p, 'stat_type') and not isinstance(p.stat_type, StatType):
+                                        p.stat_type = StatType(p.stat_type)
+                                    new_stats[st] = p
+                                else:
+                                    new_stats[st] = _restore(PracticeProgress, p,
+                                                             {"stat_type": StatType})
+                            dm.progress[npc_id] = new_stats
                 elif name == "news_manager":
                     nm = decoded
-                    if hasattr(nm, 'events'):
-                        nm.events = [_restore(WorldEvent, e) for e in nm.events]
+                    if hasattr(nm, 'events') and nm.events:
+                        new_events = []
+                        for e in nm.events:
+                            if isinstance(e, WorldEvent):
+                                new_events.append(e)
+                            else:
+                                new_events.append(_restore(WorldEvent, e))
+                        nm.events = new_events
                     if hasattr(nm, 'hourly_summaries'):
                         nm.hourly_summaries = _decode_raw(
                             data.get("news_manager", {}).get("hourly_summaries", []))
@@ -452,11 +487,16 @@ def state_from_dict(data: dict[str, Any]) -> SimulationState:
             # нужно восстановить dataclass объекты + restore int-ключи
             if name in _DATACLASS_DICT_NAMES_WITH_ENUM:
                 # anomalies: Anomaly с AnomalyType/AnomalyStatus
+                # decode_value уже восстановил Anomaly из __kind__='dataclass'
+                # Если v уже Anomaly — использовать напрямую, иначе _restore
                 restored = {}
                 for k, v in decoded.items():
-                    restored[k] = _restore(Anomaly, v,
-                                           {"anomaly_type": AnomalyType,
-                                            "status": AnomalyStatus})
+                    if isinstance(v, Anomaly):
+                        restored[k] = v
+                    else:
+                        restored[k] = _restore(Anomaly, v,
+                                               {"anomaly_type": AnomalyType,
+                                                "status": AnomalyStatus})
                 result[name] = restored
                 result[name] = _restore_dict_keys(result[name], field_type, name)
                 continue
@@ -525,11 +565,15 @@ def state_from_dict(data: dict[str, Any]) -> SimulationState:
             # Поле НЕ в _FIELD_ENCODE_STRATEGY
             if name == "anomalies":
                 decoded = decode_value(raw)
+                # decode_value уже восстановил Anomaly из __kind__='dataclass'
                 restored = {}
                 for k, v in decoded.items():
-                    restored[k] = _restore(Anomaly, v,
-                                           {"anomaly_type": AnomalyType,
-                                            "status": AnomalyStatus})
+                    if isinstance(v, Anomaly):
+                        restored[k] = v
+                    else:
+                        restored[k] = _restore(Anomaly, v,
+                                               {"anomaly_type": AnomalyType,
+                                                "status": AnomalyStatus})
                 result[name] = restored
             elif name == "relation_change_journal":
                 # list[dict] encoded через _encode → list of {"__kind__": "dict", ...}
