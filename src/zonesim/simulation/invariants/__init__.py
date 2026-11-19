@@ -24,6 +24,7 @@ from zonesim.simulation.invariants.invariants_file import (
 
 from zonesim.simulation.invariants.registry import (
     INVARIANT_REGISTRY,
+    CANONICAL_DESCRIPTIONS,
     invariant_id,
     invariant_kind,
     register_invariant,
@@ -54,6 +55,7 @@ __all__ = [
     "_check_group_knowledge",
     # registry
     "INVARIANT_REGISTRY",
+    "CANONICAL_DESCRIPTIONS",
     "invariant_id",
     "invariant_kind",
     "register_invariant",

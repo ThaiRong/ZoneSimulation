@@ -19,11 +19,78 @@ from zonesim.simulation.invariants import (
     static_invariant_ids,
     get_invariant,
     invariant_kind,
+    CANONICAL_DESCRIPTIONS,  # эталонные формулировки §22
 )
 
 
 # ====================================================================
-# 1. Регистрация всех 25 инвариантов
+# 1. Гейт ВЕРНОСТИ §22 — описания реестра совпадают с эталоном
+# ====================================================================
+
+
+def test_fidelity_canonical_descriptions_match_registry() -> None:
+    """Гейт верности: каждое описание реестра ДОСЛОВНО совпадает с ТЗ §22.
+
+    Это ПРЕДОТВРАЩАЕТ повторное искажение описаний (bug #1 из ревью).
+    Если описание отличается — тест ПАДАЕТ.
+    """
+    errors = []
+    for inv_id in all_invariant_ids():
+        info = get_invariant(inv_id)
+        canonical = CANONICAL_DESCRIPTIONS.get(inv_id)
+        if canonical is None:
+            errors.append(f"Инвариант {inv_id}: отсутствует в эталоне CANONICAL_DESCRIPTIONS")
+            continue
+        if info.description.strip() != canonical.strip():
+            errors.append(
+                f"Инвариант {inv_id}: описание реестра отличается от эталона §22.\n"
+                f"  Реестр:   {repr(info.description[:80])}...\n"
+                f"  Этalon:   {repr(canonical[:80])}..."
+            )
+    assert not errors, (
+        f"Гейт верности §22 ПРОВАЛЕН: {len(errors)} описаний не совпадают с эталоном\n"
+        + "\n".join(errors)
+    )
+
+
+def test_canonical_descriptions_complete() -> None:
+    """Эталон содержит все 25 инвариантов."""
+    assert len(CANONICAL_DESCRIPTIONS) == 25, (
+        f"Ожидаем 25 описаний, получено {len(CANONICAL_DESCRIPTIONS)}"
+    )
+    assert set(CANONICAL_DESCRIPTIONS.keys()) == set(range(1, 26)), (
+        f"Пропущенные id в эталоне: {set(range(1, 26)) - set(CANONICAL_DESCRIPTIONS.keys())}"
+    )
+
+
+def test_canonical_descriptions_non_empty() -> None:
+    """Все описания из ТЗ — не пустые, не «заглушка», не выдуманные."""
+    for inv_id, desc in CANONICAL_DESCRIPTIONS.items():
+        assert len(desc.strip()) > 20, (
+            f"Инвариант {inv_id}: описание слишком короткое ({len(desc)} символов)"
+        )
+        assert "заглушка" not in desc.lower(), (
+            f"Инвариант {inv_id}: описание содержит слово 'заглушка'"
+        )
+        # Проверка что описание НЕ выдумано (должно содержать слова из §22)
+        # §22 формулировки всегда содержат конкретные термины:
+        assert any(word in desc.lower() for word in [
+            "групп", "человек", "предмет", "аномали", "база", "труп", "знание",
+            "охран", "сектор", "сон", "событи", "выброс", "находк", "троп",
+            "монстр", "статус", "отношен", "торговец", "склад", "участник",
+            "пленн", "действ", "владель", "местонахожд", "продан", "долг",
+            "здоров", "вынослив", "границ", "ребр", "грани", "убежищ",
+            "засада", "бонус", "блокир", "перемещ", "состав", "вид",
+            "поедан", "содержим", "снимок", "наблюдени", "импортирован",
+            "ситуативн", "сделк", "покинувш", "бессознательн", "комфортн",
+        ]), (
+            f"Инвариант {inv_id}: описание не содержит ключевых терминов §22 "
+            f"(desc starts with: {desc[:50]})"
+        )
+
+
+# ====================================================================
+# 2. Регистрация всех 25 инвариантов
 # ====================================================================
 
 
