@@ -66,9 +66,9 @@ class TestInvariant17:
         )
 
         # (b) С мутацией
-        from zonesim.simulation import invariants as inv_mod
-        original_func = inv_mod._check_faction_relation_events
-        inv_mod._check_faction_relation_events = lambda s: []
+        import zonesim.simulation.invariants.invariants_file as inf_mod
+        original_func = inf_mod._check_faction_relation_events
+        inf_mod._check_faction_relation_events = lambda s: []
 
         try:
             errors_muted = assert_world_invariants(state)
@@ -76,7 +76,7 @@ class TestInvariant17:
                 "Мутационный #17 (b): после замены проверки на [] нарушение должно ПРОПАСТЬ"
             )
         finally:
-            inv_mod._check_faction_relation_events = original_func
+            inf_mod._check_faction_relation_events = original_func
 
 
 # ====================================================================
@@ -221,9 +221,9 @@ class TestInvariant25:
         )
 
         # (b) С мутацией
-        from zonesim.simulation import invariants as inv_mod
-        original_func = inv_mod._check_group_knowledge
-        inv_mod._check_group_knowledge = lambda s: []
+        import zonesim.simulation.invariants.invariants_file as inf_mod
+        original_func = inf_mod._check_group_knowledge
+        inf_mod._check_group_knowledge = lambda s: []
 
         try:
             errors_muted = assert_world_invariants(state)
@@ -231,7 +231,7 @@ class TestInvariant25:
                 "Мутационный #25 (b): после замены проверки на [] нарушение должно ПРОПАСТЬ"
             )
         finally:
-            inv_mod._check_group_knowledge = original_func
+            inf_mod._check_group_knowledge = original_func
 
     def test_behavioral_union_knowledge_allows_research(self):
         """Поведенческий #25: член A НЕ знает аномалию X, член B знает →

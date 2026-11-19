@@ -117,9 +117,9 @@ class TestInvariant20:
         )
 
         # (b) С мутацией: подменяем _check_emission_movement на return []
-        from zonesim.simulation import invariants as inv_mod
-        original_func = inv_mod._check_emission_movement
-        inv_mod._check_emission_movement = lambda s: []
+        import zonesim.simulation.invariants.invariants_file as inf_mod
+        original_func = inf_mod._check_emission_movement
+        inf_mod._check_emission_movement = lambda s: []
 
         try:
             errors_muted = assert_world_invariants(state)
@@ -127,7 +127,7 @@ class TestInvariant20:
                 "Мутационный #20 (b): после замены проверки на [] нарушение должно ПРОПАСТЬ"
             )
         finally:
-            inv_mod._check_emission_movement = original_func
+            inf_mod._check_emission_movement = original_func
 
     def test_sheltered_group_no_damage(self):
         """Укрытая группа (StormShelter / база / торговец): урона нет, не в emission_exposed."""
