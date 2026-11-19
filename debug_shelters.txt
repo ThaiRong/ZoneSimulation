@@ -1,0 +1,39 @@
+
+Temp shelters:
+  id=121 sector=16 active=True participants=4
+  id=122 sector=15 active=True participants=4
+  id=123 sector=1 active=True participants=2
+  id=124 sector=4 active=True participants=4
+  id=125 sector=9 active=True participants=2
+  id=126 sector=1 active=True participants=1
+  id=127 sector=9 active=True participants=3
+  id=128 sector=1 active=True participants=1
+  id=130 sector=7 active=True participants=2
+  id=131 sector=13 active=True participants=2
+  id=133 sector=19 active=True participants=2
+  id=135 sector=0 active=True participants=1
+  id=136 sector=6 active=True participants=2
+  id=137 sector=18 active=True participants=1
+
+Storm shelters:
+  id=0 sector=7
+  id=1 sector=12
+  id=2 sector=3
+  id=3 sector=6
+  id=4 sector=19
+  id=5 sector=0
+  id=6 sector=15
+  id=7 sector=17
+
+Shelter check for sector 4:
+  StormShelter: 0, TempShelter: 1
+
+Shelter check for sector 9:
+  StormShelter: 0, TempShelter: 2
+
+Sleeping NPCs: 10
+  NPC 16: comfort=True sector=4
+  NPC 17: comfort=True sector=4
+  NPC 18: comfort=True sector=4
+  NPC 19: comfort=True sector=4
+  NPC 23: comfort=True sector=9

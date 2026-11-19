@@ -1,0 +1,11 @@
+Created engine at hour 7
+  Iteration 0, hour=8
+  Iteration 50, hour=58
+  Iteration 100, hour=108
+  Iteration 150, hour=158
+  Iteration 200, hour=208
+SUCCESS! Completed 240 iterations to hour 247
+Invariant errors at end:
+  #13: 0
+  #23: 0
+  #17: 0
