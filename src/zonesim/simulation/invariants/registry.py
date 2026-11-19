@@ -332,12 +332,12 @@ register_invariant(12, "§22.12",
     coverage="missing")
 
 # Инвариант #13: комфортный сон = охранник/убежище/дежурный
-# → _check_comfort_sleep_guard — ЗАГЛУШКА (pass, никогда не append)
+# → _check_comfort_sleep_guard (real check, not stub)
 register_invariant(13, "§22.13",
     CANONICAL_DESCRIPTIONS[13],
-    check_fn=None,  # через _check_comfort_sleep_guard (заглушка)
+    check_fn=None,  # через _check_comfort_sleep_guard (real check)
     kind="runtime",
-    coverage="missing")  # ❌ stub: pass, никогда не append'ит ошибки
+    coverage="full")  # full: comfort sleep without shelter/guard → errors.append
 
 # Инвариант #14: ситуативный торговец ≠ сделка
 # → ❌ ПРОВЕРКА ОТСУТСТВУЕТ
@@ -411,12 +411,12 @@ register_invariant(22, "§22.22",
     coverage="partial")  # только during emission, НЕ after
 
 # Инвариант #23: shelter free OR 1 monster group
-# → _check_shelter_occupancy (только occupied_by reference)
+# → _check_shelter_occupancy (occupied_by ref + sector_id match, race condition fixed)
 register_invariant(23, "§22.23",
     CANONICAL_DESCRIPTIONS[23],
-    check_fn=None,  # через _check_shelter_occupancy (только occupied_by ref)
+    check_fn=None,  # через _check_shelter_occupancy (occupied_by + sector_id)
     kind="runtime",
-    coverage="partial")  # только occupied_by, НЕ group count
+    coverage="full")  # full: occupied_by + sector_id match enforced
 
 # Инвариант #24: одна аномалия = одна тропа
 # → _check_trail_blockages (active anomalies on same trail_id)

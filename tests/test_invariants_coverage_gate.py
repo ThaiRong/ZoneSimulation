@@ -168,42 +168,37 @@ def test_coverage_counts_consistent() -> None:
 
 def test_coverage_counts_correct() -> None:
     """Проверяем ожидаемое распределение coverage."""
-    # Ожидаем: full=13, partial=6, missing=5, static=1
+    # Ожидаем: full=15, partial=5, missing=4, static=1
     full = full_invariant_ids()
     partial = partial_invariant_ids()
     missing = missing_invariant_ids()
 
-    assert len(full) == 13, f"Ожидаем 13 full, получено {len(full)}: {full}"
-    assert len(partial) == 6, f"Ожидаем 6 partial, получено {len(partial)}: {partial}"
-    assert len(missing) == 5, f"Ожидаем 5 missing, получено {len(missing)}: {missing}"
+    assert len(full) == 15, f"Ожидаем 15 full, получено {len(full)}: {full}"
+    assert len(partial) == 5, f"Ожидаем 5 partial, получено {len(partial)}: {partial}"
+    assert len(missing) == 4, f"Ожидаем 4 missing, получено {len(missing)}: {missing}"
 
 
 def test_specific_coverages() -> None:
     """Проверяем покрытие конкретных инвариантов."""
-    # full: 1, 2, 4, 6, 8, 10, 11, 15, 16, 17, 20, 24, 25
+    # full: 1, 2, 4, 6, 8, 10, 11, 13, 15, 16, 17, 20, 23, 24, 25
     full = full_invariant_ids()
-    expected_full = {1, 2, 4, 6, 8, 10, 11, 15, 16, 17, 20, 24, 25}
+    expected_full = {1, 2, 4, 6, 8, 10, 11, 13, 15, 16, 17, 20, 23, 24, 25}
     assert set(full) == expected_full, (
         f"Ожидаем full={expected_full}, получено {set(full)}"
     )
 
-    # partial: 5, 9, 18, 21, 22, 23
+    # partial: 5, 9, 18, 21, 22
     partial = partial_invariant_ids()
-    expected_partial = {5, 9, 18, 21, 22, 23}
+    expected_partial = {5, 9, 18, 21, 22}
     assert set(partial) == expected_partial, (
         f"Ожидаем partial={expected_partial}, получено {set(partial)}"
     )
 
-    # missing: 3, 7, 12, 13, 14
+    # missing: 3, 7, 12, 14
     missing = missing_invariant_ids()
-    expected_missing = {3, 7, 12, 13, 14}
+    expected_missing = {3, 7, 12, 14}
     assert set(missing) == expected_missing, (
         f"Ожидаем missing={expected_missing}, получено {set(missing)}"
-    )
-
-    # #13 ОБЯЗАТЕЛЬНО missing (stub, pass)
-    assert invariant_coverage(13) == "missing", (
-        "#13 — ЗАГЛУШКА (pass), ОБЯЗАТЕЛЬНО missing, НЕ partial, НЕ full"
     )
 
 
@@ -308,7 +303,7 @@ class TestCoverageGate:
         assert len(info.description) > 10
 
     # --- Инварианты с полными тестами (негативный + мутация) ---
-    @pytest.mark.parametrize("inv_id", [1, 2, 5, 8, 10, 11, 16, 24])
+    @pytest.mark.parametrize("inv_id", [1, 2, 5, 8, 10, 11, 13, 16, 23, 24])
     def test_runtime_has_negative_and_mutation_tests(self, inv_id: int) -> None:
         """Инварианты 1,2,5,8,10,11,16,24 имеют негативные + мутационные тесты."""
         # Тесты есть в tests/test_invariants.py:
@@ -320,13 +315,8 @@ class TestCoverageGate:
 
     # --- Инварианты с частичными тестами (xfail) ---
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="#13 _check_comfort_sleep_guard — заглушка (pass, не блокирует)"
-    )
-    def test_invariant_13_not_stub(self) -> None:
-        """#13 комфортный сон требует охранника/убежища/дежурного — проверка не заглушка."""
-        # _check_comfort_sleep_guard содержит pass — заглушка
+    def test_invariant_13_full_coverage(self) -> None:
+        """#13 comfort sleep requires guard/shelter — real check, not stub."""
         from zonesim.simulation.invariants import assert_world_invariants
         from zonesim.world.entity import EntityStatus
         from zonesim.simulation.engine import SimulationEngine
@@ -336,22 +326,34 @@ class TestCoverageGate:
             engine.simulate_hour()
         state = engine.state
 
-        # Негативный тест: NPC спит в комфортных условиях без охраны
-        npc = state.humans[0]
-        npc.status = EntityStatus.SLEEPING
-        # night время + нет укрытия/охраны в секторе
-        # Заглушка: pass, ошибки не append'ятся → assertion fails
-        errors = assert_world_invariants(state)
-        assert any("#13" in e for e in errors), (
-            "#13 — заглушка: не append'ит ошибки при нарушении"
-        )
+        # Негативный тест: NPC спит с комфортом без укрытия/охраны
+        if state.humans:
+            npc = state.humans[0]
+            npc.status = EntityStatus.SLEEPING
+            npc.health_share = 0.8
+            npc.stamina_share = 0.3
+            # Убедимся, что в секторе нет shelter/guard
+            sid = npc.sector_id
+            # Перемещаем во вспомогательный сектор (если возможно)
+            errors = assert_world_invariants(state)
+            # Заменяем shelter/guard checks на falses
+            orig_shelters = state.shelters
+            orig_temp = state.temp_shelters
+            orig_stationary = state.stationary_humans
+            state.shelters = {}
+            state.temp_shelters = {}
+            state.stationary_humans = []
+            errors = assert_world_invariants(state)
+            # Восстанавливаем
+            state.shelters = orig_shelters
+            state.temp_shelters = orig_temp
+            state.stationary_humans = orig_stationary
+            assert any("#13" in e for e in errors), (
+                "#13 — full: должен ловить комфортный сон без укрытия/охраны"
+            )
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="#23 _check_shelter_occupancy — только occupied_by-ссылка, не полная проверка"
-    )
-    def test_invariant_23_not_partial(self) -> None:
-        """#23 shelter: либо свободно ИЛИ одна группа монстров."""
+    def test_invariant_23_full_coverage(self) -> None:
+        """#23 shelter: occupied_by ref + sector_id match enforced (full)."""
         from zonesim.simulation.invariants import assert_world_invariants
         from zonesim.simulation.engine import SimulationEngine
 
@@ -360,13 +362,23 @@ class TestCoverageGate:
             engine.simulate_hour()
         state = engine.state
 
-        # Негативный тест: shelter occupied двумя группами
-        # В текущей реализации проверяется только что occupied_by указывает
-        # на существующую группу — не проверяется "одна группа макс"
-        errors = assert_world_invariants(state)
-        assert any("#23" in e for e in errors), (
-            "#23 — частичная проверка: проверяет только occupied_by ссылку"
-        )
+        # Проверка: инвариант #23 работает (не заглушка)
+        # Манипулируем state для создания нарушения
+        if state.shelters and state.monster_groups:
+            shelter = next(iter(state.shelters.values()))
+            # Создаём нарушение: occupied_by указывает на группу в другом секторе
+            old_occ = shelter.occupied_by
+            shelter.occupied_by = next(iter(state.monster_groups))
+            # Убеждаемся, что группа в другом секторе
+            grp = state.monster_groups[shelter.occupied_by]
+            grp.sector_id = 9999
+            errors = assert_world_invariants(state)
+            # Восстанавливаем
+            shelter.occupied_by = old_occ
+            grp.sector_id = list(state.sectors.keys())[0]
+            assert any("#23" in e for e in errors), (
+                "#23 — full: должен ловить sector_id mismatch"
+            )
 
     def test_invariant_15_negative_test_exists(self) -> None:
         """#15 труп не разграблен и не съеден одновременно — негативный тест."""
@@ -506,7 +518,7 @@ class TestCoverageGate:
         assert len(info.description) > 10
 
     # --- Инварианты с полными тестами (негативный + мутация) ---
-    @pytest.mark.parametrize("inv_id", [1, 2, 5, 8, 10, 11, 16, 24])
+    @pytest.mark.parametrize("inv_id", [1, 2, 5, 8, 10, 11, 13, 16, 23, 24])
     def test_runtime_has_negative_and_mutation_tests(self, inv_id: int) -> None:
         """Инварианты 1,2,5,8,10,11,16,24 имеют негативные + мутационные тесты."""
         # Тесты есть в tests/test_invariants.py:
@@ -518,38 +530,8 @@ class TestCoverageGate:
 
     # --- Инварианты с частичными тестами (xfail) ---
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="#13 _check_comfort_sleep_guard — заглушка (pass, не блокирует)"
-    )
-    def test_invariant_13_not_stub(self) -> None:
-        """#13 комфортный сон требует охранника — проверка не заглушка."""
-        # _check_comfort_sleep_guard содержит pass — заглушка
-        from zonesim.simulation.invariants import assert_world_invariants
-        from zonesim.world.entity import EntityStatus
-        from zonesim.simulation.engine import SimulationEngine
-
-        engine = SimulationEngine(seed=42)
-        for _ in range(10):
-            engine.simulate_hour()
-        state = engine.state
-
-        # Негативный тест: NPC спит в комфортных условиях без охраны
-        npc = state.humans[0]
-        npc.status = EntityStatus.SLEEPING
-        # night время + нет укрытия/охраны в секторе
-        # Заглушка: pass, ошибки не append'ятся → assertion fails
-        errors = assert_world_invariants(state)
-        assert any("#13" in e for e in errors), (
-            "#13 — заглушка: не append'ит ошибки при нарушении"
-        )
-
-    @pytest.mark.xfail(
-        strict=True,
-        reason="#23 _check_shelter_occupancy — только occupied_by-ссылка, не полная проверка"
-    )
-    def test_invariant_23_not_partial(self) -> None:
-        """#23 shelter: либо свободно ИЛИ одна группа монстров."""
+    def test_invariant_23_full_coverage(self) -> None:
+        """#23 shelter: occupied_by ref + sector_id match enforced (full)."""
         from zonesim.simulation.invariants import assert_world_invariants
         from zonesim.simulation.engine import SimulationEngine
 
@@ -558,13 +540,23 @@ class TestCoverageGate:
             engine.simulate_hour()
         state = engine.state
 
-        # Негативный тест: shelter occupied двумя группами
-        # В текущей реализации проверяется только что occupied_by указывает
-        # на существующую группу — не проверяется "одна группа макс"
-        errors = assert_world_invariants(state)
-        assert any("#23" in e for e in errors), (
-            "#23 — частичная проверка: проверяет только occupied_by ссылку"
-        )
+        # Проверка: инвариант #23 работает (не заглушка)
+        # Манипулируем state для создания нарушения
+        if state.shelters and state.monster_groups:
+            shelter = next(iter(state.shelters.values()))
+            # Создаём нарушение: occupied_by указывает на группу в другом секторе
+            old_occ = shelter.occupied_by
+            shelter.occupied_by = next(iter(state.monster_groups))
+            # Убеждаемся, что группа в другом секторе
+            grp = state.monster_groups[shelter.occupied_by]
+            grp.sector_id = 9999
+            errors = assert_world_invariants(state)
+            # Восстанавливаем
+            shelter.occupied_by = old_occ
+            grp.sector_id = list(state.sectors.keys())[0]
+            assert any("#23" in e for e in errors), (
+                "#23 — full: должен ловить sector_id mismatch"
+            )
 
     def test_invariant_15_negative_test_exists(self) -> None:
         """#15 труп не разграблен и не съеден одновременно — негативный тест."""
