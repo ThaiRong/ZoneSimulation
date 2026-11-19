@@ -74,10 +74,6 @@ def _decode(value: Any) -> Any:
     return {key: _decode(item) for key, item in value.items()}
 
 
-def _object_data(obj: Any) -> Any:
-    return _encode(vars(obj))
-
-
 def _restore(cls, data: dict, enum_fields: dict[str, type[Enum]] | None = None):
     obj = cls.__new__(cls)
     obj.__dict__.update(_decode(data))
