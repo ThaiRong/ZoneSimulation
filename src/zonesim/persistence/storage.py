@@ -10,12 +10,20 @@ from contextlib import closing
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from zonesim.persistence.schema import (
+    SCHEMA_FINGERPRINT,
+    is_migration_needed,
+    apply_migration,
+    MIGRATION_TARGETS,
+)
 from zonesim.persistence.serialization import state_from_dict, state_to_dict
 
 if TYPE_CHECKING:
     from zonesim.simulation.engine import SimulationState
 
-FORMAT_VERSION = 12
+# Текущая версия формата — инкрементируется при изменении структуры SimulationState
+# Fingerprint вычисляется автоматически из FIELD_TYPES в schema.py
+FORMAT_VERSION = 13
 
 
 class SaveError(Exception):
@@ -66,6 +74,7 @@ class SaveManager:
                     "INSERT INTO metadata (key, value) VALUES (?, ?)",
                     [
                         ("format_version", str(FORMAT_VERSION)),
+                        ("schema_fingerprint", SCHEMA_FINGERPRINT),
                         ("seed", str(state.rng.seed)),
                         ("hour", str(state.time.hour)),
                     ],
@@ -97,15 +106,49 @@ class SaveManager:
         try:
             version = int(metadata["format_version"])
         except (KeyError, ValueError) as error:
-            raise SaveFormatError(f"Некорректная версия сохранения: {slot}") from error
-        if version != FORMAT_VERSION:
             raise SaveFormatError(
-                f"Несовместимая версия сохранения: {version}; поддерживается {FORMAT_VERSION}"
+                f"Некорректная версия сохранения: {slot}. "
+                f"Файл повреждён или имеет неизвестный формат."
+            ) from error
+
+        # Получаем fingerprint (может отсутствовать в очень старых сейвах)
+        saved_fingerprint = metadata.get("schema_fingerprint")
+
+        # Проверка: не старше ли сейв чем поддерживаемые версии для миграции
+        if version > FORMAT_VERSION:
+            raise SaveFormatError(
+                f"Несовместимая версия сохранения: {version}; "
+                f"поддерживается {FORMAT_VERSION}. "
+                f"Обновите ZoneSimulation до последней версии."
             )
-        if payload is None:
-            raise SaveFormatError(f"В сохранении отсутствует состояние мира: {slot}")
-        try:
-            data = json.loads(payload[0])
-            return state_from_dict(data)
-        except (ValueError, TypeError, KeyError) as error:
-            raise SaveFormatError(f"Повреждено состояние мира в сохранении: {slot}") from error
+
+        # Проверка fingerprint и миграция
+        if is_migration_needed(version, saved_fingerprint):
+            if saved_fingerprint is None:
+                raise SaveFormatError(
+                    f"Несовместимая версия сохранения: {version}. "
+                    f"Требуется сохранение версии {MIGRATION_TARGETS + 1} или новее. "
+                    f"Пожалуйста, сохраните игру в текущей версии ZoneSimulation."
+                )
+            # Fingerprint не совпадает, но версия <= MIGRATION_TARGETS — пробуем миграцию
+            try:
+                data = json.loads(payload[0])
+                data = apply_migration(data, version)
+            except (ValueError, TypeError) as error:
+                raise SaveFormatError(
+                    f"Повреждено состояние мира в сохранении: {slot}"
+                ) from error
+        else:
+            # Совместимая версия — загружаем напрямую
+            if payload is None:
+                raise SaveFormatError(
+                    f"В сохранении отсутствует состояние мира: {slot}"
+                )
+            try:
+                data = json.loads(payload[0])
+            except (ValueError, TypeError) as error:
+                raise SaveFormatError(
+                    f"Повреждено состояние мира в сохранении: {slot}"
+                ) from error
+
+        return state_from_dict(data)

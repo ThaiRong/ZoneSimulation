@@ -678,4 +678,83 @@ __all__ = [
     "register_type",
     "get_adapter",
     "FIELD_TYPES",
+    "SCHEMA_FINGERPRINT",
+    "compute_schema_fingerprint",
+    "MIGRATION_TARGETS",
+    "is_migration_needed",
+    "apply_migration",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Schema fingerprint — hash имён и типов полей
+# ---------------------------------------------------------------------------
+
+def compute_schema_fingerprint() -> str:
+    """Вычислить хэш-отпечаток схемы на основе FIELD_TYPES.
+
+    Если структура SimulationState изменится (новые поля, изменённые типы),
+    fingerprint изменится → загрузка старого сейва потребует миграции.
+    """
+    import hashlib
+    # Сортируем поля по имени для детерминизма
+    sorted_fields = sorted(FIELD_TYPES, key=lambda x: x[0])
+    # Создаём строковое представление: "name:type;name:type;..."
+    schema_str = ";".join(f"{name}:{type_}" for name, type_ in sorted_fields)
+    return hashlib.sha256(schema_str.encode("utf-8")).hexdigest()[:16]
+
+
+# Вычисляем fingerprint один раз при импорте
+SCHEMA_FINGERPRINT: str = compute_schema_fingerprint()
+
+
+# ---------------------------------------------------------------------------
+# Миграция старых сейвов (v≤12, без 4 новых полей)
+# ---------------------------------------------------------------------------
+
+# Новые поля, добавленные в v13
+_NEW_FIELDS = {
+    "prev_relation_snapshot": {},
+    "relation_change_journal": [],
+    "intention_knowledge_used": {},
+    "knowledge_snapshot_at_intention": [],
+}
+
+# Поддерживаемые версии для миграции (включительно)
+MIGRATION_TARGETS: int = 12
+
+
+def is_migration_needed(saved_version: int, saved_fingerprint: str | None) -> bool:
+    """Проверить, нужна ли миграция сейва.
+
+    Миграция нужна если:
+    1. Сохранение старше MIGRATION_TARGETS (v≤12)
+    2. Отсутствует fingerprint (очень старый сейв)
+    """
+    if saved_fingerprint is None:
+        # Старый сейв без fingerprint — проверяем version
+        return saved_version <= MIGRATION_TARGETS
+    # Fingerprint есть — сравниваем с текущим
+    return saved_fingerprint != SCHEMA_FINGERPRINT
+
+
+def apply_migration(data: dict[str, Any], saved_version: int) -> dict[str, Any]:
+    """Применить миграцию к данным старого сейва.
+
+    Политика миграции (v≤12 → v13+):
+    - Заполняем 4 новых поля дефолтными значениями:
+      * prev_relation_snapshot = {}
+      * relation_change_journal = []
+      * intention_knowledge_used = {}
+      * knowledge_snapshot_at_intention = []
+
+    Миграция НЕ изменяет данные симуляции — только добавляет отсутствующие поля.
+    """
+    migrated = dict(data)
+
+    # Добавляем 4 новых поля с дефолтами
+    for field_name, default_value in _NEW_FIELDS.items():
+        if field_name not in migrated:
+            migrated[field_name] = default_value
+
+    return migrated
