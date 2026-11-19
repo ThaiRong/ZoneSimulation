@@ -85,67 +85,121 @@ def _restore(cls, data: dict, enum_fields: dict[str, type[Enum]] | None = None):
     return obj
 
 
+def _encode_simple(value: Any) -> Any:
+    """Простая кодировка: _encode(value) без special handling."""
+    return _encode(value)
+
+
+# Strategy mapping: имя поля → функция кодирования
+# Используется рефлексией по dataclasses.fields — поля НЕ перечисляются вручную.
+_FIELD_ENCODE_STRATEGY: dict[str, Any] = {}
+
+
+def _register_field_strategy(name: str, encoder: Any) -> None:
+    _FIELD_ENCODE_STRATEGY[name] = encoder
+
+
+# GameTime — special format {"hour": int}
+def _encode_time(name: str, value: Any) -> dict[str, int]:
+    return {"hour": value.hour}
+
+
+# SeededRNG — special format {"seed": int, "state": tuple}
+def _encode_rng(name: str, value: Any) -> dict[str, Any]:
+    return {"seed": value.seed, "state": _encode(value.get_state())}
+
+
+# temp_shelters — to_dict() для Shelter
+def _encode_temp_shelters(name: str, value: dict) -> dict[str, Any]:
+    return _encode({str(k): v.to_dict() for k, v in value.items()})
+
+
+# Managers (non-dataclass) — vars() + _encode
+_MANAGER_NAMES: set[str] = {
+    "artifacts", "contracts", "import_export", "personal_relations",
+    "faction_relations", "development", "exile_manager",
+    "faction_change_manager", "news_manager", "migration_state",
+    "monster_migration",
+}
+
+
+def _encode_manager_field(name: str, value: Any) -> Any:
+    return _encode(vars(value))
+
+
+# Dataclass dict fields — vars() + _encode (ключи int остаются int)
+_DATACLASS_DICT_NAMES: set[str] = {
+    "sectors", "human_groups", "monster_groups", "anomalies", "items", "knowledge_bases",
+}
+
+
+def _encode_dict_dataclass(name: str, value: dict) -> Any:
+    return _encode({k: vars(v) for k, v in value.items()})
+
+
+# Dataclass dict fields — vars() + _encode (ключи int → str)
+_DATACLASS_DICT_STR_KEY_NAMES: set[str] = {"shelters"}
+
+
+def _encode_dict_dataclass_str_key(name: str, value: dict) -> Any:
+    return _encode({str(k): vars(v) for k, v in value.items()})
+
+
+# Dataclass list fields — vars() + _encode
+_DATACLASS_LIST_NAMES: set[str] = {
+    "humans", "stationary_humans", "monsters", "corpses", "stashs",
+}
+
+
+def _encode_list_dataclass(name: str, value: list) -> Any:
+    return _encode([vars(v) for v in value])
+
+
+# Collections with str keys
+_STR_KEY_DICT_NAMES: set[str] = {"trader_stock", "emission_exposed"}
+
+
+def _encode_str_key_dict(name: str, value: dict) -> Any:
+    return _encode({str(k): v for k, v in value.items()})
+
+
+# Register all strategies
+for _fname in _MANAGER_NAMES:
+    _register_field_strategy(_fname, _encode_manager_field)
+for _fname in _DATACLASS_DICT_NAMES:
+    _register_field_strategy(_fname, _encode_dict_dataclass)
+for _fname in _DATACLASS_DICT_STR_KEY_NAMES:
+    _register_field_strategy(_fname, _encode_dict_dataclass_str_key)
+for _fname in _DATACLASS_LIST_NAMES:
+    _register_field_strategy(_fname, _encode_list_dataclass)
+for _fname in _STR_KEY_DICT_NAMES:
+    _register_field_strategy(_fname, _encode_str_key_dict)
+
+# Special names with unique handlers
+register_field_strategy = _register_field_strategy  # alias для читаемости
+register_field_strategy("time", _encode_time)
+register_field_strategy("rng", _encode_rng)
+register_field_strategy("temp_shelters", _encode_temp_shelters)
+
+
 def state_to_dict(state: SimulationState) -> dict[str, Any]:
-    return {
-        "time": {"hour": state.time.hour},
-        "rng": {
-            "seed": state.rng.seed,
-            "state": _encode(state.rng.get_state()),
-        },
-        "sectors": _encode({key: vars(value) for key, value in state.sectors.items()}),
-        "humans": _encode([vars(value) for value in state.humans]),
-        "stationary_humans": _encode([vars(value) for value in state.stationary_humans]),
-        "human_groups": _encode({key: vars(value) for key, value in state.human_groups.items()}),
-        "monsters": _encode([vars(value) for value in state.monsters]),
-        "monster_groups": _encode({key: vars(value) for key, value in state.monster_groups.items()}),
-        "anomalies": _encode({key: vars(value) for key, value in state.anomalies.items()}),
-        "artifacts": _object_data(state.artifacts),
-        "corpses": _encode([vars(value) for value in state.corpses]),
-        "items": _encode({key: vars(value) for key, value in state.items.items()}),
-        "contracts": _object_data(state.contracts),
-        "import_export": _object_data(state.import_export),
-        "personal_relations": _object_data(state.personal_relations),
-        "faction_relations": _object_data(state.faction_relations),
-        "development": _object_data(state.development),
-        "exile_manager": _object_data(state.exile_manager),
-        "faction_change_manager": _object_data(state.faction_change_manager),
-        "news_manager": _object_data(state.news_manager),
-        "knowledge_bases": _encode({key: vars(value) for key, value in state.knowledge_bases.items()}),
-        "stashs": _encode([vars(value) for value in state.stashs]),
-        "shelter_count": state.shelter_count,
-        "trader_stock": _encode({str(key): value for key, value in state.trader_stock.items()}),
-        "trails": state.trails,
-        "shelters": _encode({str(key): vars(value) for key, value in state.shelters.items()}),
-        "next_emission_hour": state.next_emission_hour,
-        "emission_start_hour": state.emission_start_hour,
-        "emission_end_hour": state.emission_end_hour,
-        "emission_warning_hour": state.emission_warning_hour,
-        "emission_exposed": _encode({str(key): value for key, value in state.emission_exposed.items()}),
-        "migration_state": _object_data(state.migration_state),
-        "monster_migration": _object_data(state.monster_migration),
-        "next_human_id": state.next_human_id,
-        "next_monster_id": state.next_monster_id,
-        "next_group_id": state.next_group_id,
-        "next_monster_group_id": state.next_monster_group_id,
-        "next_anomaly_id": state.next_anomaly_id,
-        "next_stash_id": state.next_stash_id,
-        "next_corpse_id": state.next_corpse_id,
-        "next_item_id": state.next_item_id,
-        "visit_memory": _encode(state.visit_memory),
-        "config": _encode(state.config),
-        # Ситуативный торговец (§16.6)
-        "next_conditional_spawn_hour": state.next_conditional_spawn_hour,
-        "conditional_trader_id": state.conditional_trader_id,
-        "conditional_trader_sector": state.conditional_trader_sector,
-        "conditional_trader_start_hour": state.conditional_trader_start_hour,
-        "conditional_trader_end_hour": state.conditional_trader_end_hour,
-        "conditional_trader_knowledge_hour": state.conditional_trader_knowledge_hour,
-        # Штурм убежищ в выброс (§12.7)
-        "ongoing_shelter_assaults": _encode(state.ongoing_shelter_assaults),
-        # Временные убежища (§7.10)
-        "temp_shelters": _encode({str(key): value.to_dict() for key, value in state.temp_shelters.items()}),
-        "next_shelter_id": state.next_shelter_id,
-    }
+    """Рефлексивная сериализация SimulationState через dataclasses.fields.
+
+    Никакого ручного перечисления полей — поля перебираются рефлексией,
+    стратегия кодирования определяется стратегией, зарегистрированной для имени поля.
+    """
+    import dataclasses
+
+    result: dict[str, Any] = {}
+    for field in dataclasses.fields(state):
+        name = field.name
+        value = getattr(state, name)
+        strategy = _FIELD_ENCODE_STRATEGY.get(name)
+        if strategy is not None:
+            result[name] = strategy(name, value)
+        else:
+            result[name] = _encode_simple(value)
+    return result
 
 
 def _restore_monster(data: dict) -> Monster:
@@ -302,4 +356,9 @@ def state_from_dict(data: dict[str, Any]) -> SimulationState:
             for key, value in _decode(data["temp_shelters"]).items()
         },
         next_shelter_id=data["next_shelter_id"],
+        # Журнал изменений отношений (§21 — теперь сериализуются)
+        prev_relation_snapshot=_decode(data.get("prev_relation_snapshot", {})),
+        relation_change_journal=_decode(data.get("relation_change_journal", [])),
+        intention_knowledge_used=_decode(data.get("intention_knowledge_used", {})),
+        knowledge_snapshot_at_intention=_decode(data.get("knowledge_snapshot_at_intention", [])),
     )
