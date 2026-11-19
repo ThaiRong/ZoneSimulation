@@ -78,11 +78,14 @@ class Shelter:
         """Проверяет, истёк ли срок. Возвращает True если уничтожено."""
         if not self.is_active:
             return True
+        # Если участники есть — shelter не expire (разбудит их и лишит укрытия)
+        if self.participant_count > 0:
+            return False
         # 4 часа без использования
-        if current_hour - self.last_used_hour >= 4 and self.participant_count == 0:
+        if current_hour - self.last_used_hour >= 4:
             self.destroyed = True
             return True
-        # Максимум 6 часов жизни
+        # Максимум 6 часов жизни (только если нет участников)
         if current_hour - self.created_hour >= 6:
             self.destroyed = True
             return True

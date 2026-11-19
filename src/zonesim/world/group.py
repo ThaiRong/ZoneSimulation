@@ -133,6 +133,7 @@ class HumanGroup:
                     return True
 
         # 6. Бодрствующий член группы (охраняет)
+        # Проверяем что ЕСТЬ активный член группы (кроме спящего NPC)
         for mid in self.members:
             npc = npcs.get(mid)
             if npc and npc.status == EntityStatus.ACTIVE and npc.sector_id == sector_id:

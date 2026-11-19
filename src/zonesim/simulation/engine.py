@@ -514,6 +514,10 @@ class SimulationEngine:
                                 if n.id == npc_id:
                                     n.sector_id = path[1]
                                     group.sector_id = path[1]
+                                    # Разбуживаем спящих участников (#13 invariant)
+                                    if n.status == EntityStatus.SLEEPING:
+                                        n.status = EntityStatus.ACTIVE
+                                        n.intention = REST
                                     break
                 self.state.news_manager.create_event(
                     hour=hour, minute=0, sector_id=shelter.sector_id,
@@ -2212,6 +2216,18 @@ class SimulationEngine:
                     leader.faction, distress.get("faction", ""),
                 ) >= 20
 
+            # Устанавливаем group.comfort для инварианта #13
+            all_npcs = {n.id: n for n in self.state.humans}
+            group.comfort = group.is_comfort_sleep_possible(
+                all_npcs,
+                {n.id: n for n in self.state.stationary_humans},
+                self.state.shelters,
+                self.state.temp_shelters,
+                self.state.sectors,
+                group.sector_id,
+                leader.faction if leader else None,
+            )
+
             ctx = IntentionContext(
                 hour=hour,
                 is_night=is_night,
@@ -2241,7 +2257,6 @@ class SimulationEngine:
                     group.sector_id,
                     leader.faction if leader else None,
                 ),
-                hours_awake=hours_awake,
                 can_help=can_help,
                 distress_distance=distress_distance,
                 can_create_shelter=self._group_can_create_shelter(group, members),
@@ -4049,61 +4064,6 @@ class SimulationEngine:
 
     def _phase7_actions(self, hour: int, is_night: bool) -> None:
         """Фаза 7: сначала бои, затем остальные основные действия (§8)."""
-        # Инвариант #13: пробуждаем спящих без комфорта ДО любых других действий.
-        # Иначе группа может быть помечена как "acted" и NPC пропустит проверку.
-        for npc in self.state.humans:
-            if npc.status != EntityStatus.SLEEPING:
-                continue
-            if getattr(npc, "on_treatment", False):
-                continue
-            if npc.health_share >= 0.5 and npc.stamina_share <= 0.65 and npc.stamina_share <= 0.85:
-                group = self.state.human_groups.get(npc.group_id)
-                sector_id = npc.sector_id
-                faction = npc.faction
-                # ВАЖНО: проверяем комфорт БЕЗ condition 6 (awake_member),
-                # т.к. спящий NPC не может охранять себя.
-                can_rest_now = False
-                has_base = False
-                if faction:
-                    for sid, s in self.state.sectors.items():
-                        if sid == sector_id and getattr(s, "is_faction_start", False):
-                            controller = getattr(s, "controller_faction", None)
-                            if controller is None or controller == faction:
-                                has_base = True
-                                break
-                if not has_base:
-                    for shelter in self.state.temp_shelters.values():
-                        if hasattr(shelter, "sector_id") and shelter.sector_id == sector_id:
-                            if hasattr(shelter, "destroyed") and shelter.destroyed:
-                                continue
-                            if hasattr(shelter, "is_active") and not shelter.is_active:
-                                continue
-                            if hasattr(shelter, "participant_count") and shelter.participant_count > 0:
-                                can_rest_now = True
-                                break
-                if not can_rest_now:
-                    for shelter in self.state.shelters.values():
-                        if hasattr(shelter, "sector_id") and shelter.sector_id == sector_id:
-                            if type(shelter).__name__ == "StormShelter":
-                                can_rest_now = True
-                                break
-                if not can_rest_now:
-                    for n in self.state.stationary_humans:
-                        if (n.stationary_role == "guard" and n.status == EntityStatus.ACTIVE
-                                and n.sector_id == sector_id):
-                            can_rest_now = True
-                            break
-                if not can_rest_now:
-                    for entry in (group.guard_schedule if group else []):
-                        if entry.get("npc_id") in (group.members if group else []):
-                            member_npc = self.state.humans.__iter__()
-                            for m in self.state.humans:
-                                if m.id == entry["npc_id"] and m.status == EntityStatus.ACTIVE and m.sector_id == sector_id:
-                                    can_rest_now = True
-                                    break
-                if not can_rest_now:
-                    npc.status = EntityStatus.ACTIVE
-                    npc.intention = REST
         self._execute_battles(hour)
         fed_monster_groups = self._process_monster_feeding(hour)
         acted_groups = set()
@@ -4164,57 +4124,8 @@ class SimulationEngine:
                 continue  # истощение → потеря сознания
 
             if npc.intention == SLEEP:
-                # Инвариант #13: комфортный сон без укрытия/охраны невозможен.
-                # Разрешаем сон только при:
-                # 1. Есть комфорт (shelter/guard/base) ИЛИ
-                # 2. Критическое истощение (stamina > 0.85) — экстренный сон
-                group = self.state.human_groups.get(npc.group_id)
-                sector_id = npc.sector_id
-                faction = npc.faction
-                all_npcs = {n.id: n for n in self.state.humans}
-                stationary_map = {n.id: n for n in self.state.stationary_humans}
-                # ВАЖНО: проверяем комфорт БЕЗ condition 6 (awake_member),
-                # т.к. NPC ещё ACTIVE и не спит. Если NPC единственный член группы —
-                # они не могут "охранять" себя.
-                can_rest_now = False
-                if group:
-                    # Временно проверяем comfort без awake_member check
-                    has_base = False
-                    if faction:
-                        for sid, s in self.state.sectors.items():
-                            if sid == sector_id and getattr(s, "is_faction_start", False):
-                                controller = getattr(s, "controller_faction", None)
-                                if controller is None or controller == faction:
-                                    has_base = True
-                                    break
-                    if not has_base:
-                        for shelter in self.state.temp_shelters.values():
-                            if hasattr(shelter, "sector_id") and shelter.sector_id == sector_id:
-                                if hasattr(shelter, "destroyed") and shelter.destroyed:
-                                    continue
-                                if hasattr(shelter, "is_active") and not shelter.is_active:
-                                    continue
-                                if hasattr(shelter, "participant_count") and shelter.participant_count > 0:
-                                    can_rest_now = True
-                                    break
-                    if not can_rest_now:
-                        for shelter in self.state.shelters.values():
-                            if hasattr(shelter, "sector_id") and shelter.sector_id == sector_id:
-                                if type(shelter).__name__ == "StormShelter":
-                                    can_rest_now = True
-                                    break
-                    if not can_rest_now:
-                        for n in self.state.stationary_humans:
-                            if (n.stationary_role == "guard" and n.status == EntityStatus.ACTIVE
-                                    and n.sector_id == sector_id):
-                                can_rest_now = True
-                                break
-                if can_rest_now or npc.stamina_share > 0.85:
-                    npc.status = EntityStatus.SLEEPING
-                    npc.intention = SLEEP  # инвариант #5: спящие имеют SLEEP
-                else:
-                    # Нет комфорта и не критическое истощение — отменяем сон
-                    npc.intention = REST
+                npc.status = EntityStatus.SLEEPING
+                npc.intention = SLEEP  # инвариант #5: спящие имеют SLEEP
             elif npc.intention == REST:
                 self._rest_tick(npc)
             elif npc.intention in (RESEARCH, ARTIFACT_SEARCH):

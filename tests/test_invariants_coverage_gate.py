@@ -327,30 +327,30 @@ class TestCoverageGate:
         state = engine.state
 
         # Негативный тест: NPC спит с комфортом без укрытия/охраны
-        if state.humans:
+        # Ключевое: group.comfort=True — это то, что invariant проверяет
+        if state.humans and state.human_groups:
             npc = state.humans[0]
-            npc.status = EntityStatus.SLEEPING
-            npc.health_share = 0.8
-            npc.stamina_share = 0.3
-            # Убедимся, что в секторе нет shelter/guard
-            sid = npc.sector_id
-            # Перемещаем во вспомогательный сектор (если возможно)
-            errors = assert_world_invariants(state)
-            # Заменяем shelter/guard checks на falses
-            orig_shelters = state.shelters
-            orig_temp = state.temp_shelters
-            orig_stationary = state.stationary_humans
-            state.shelters = {}
-            state.temp_shelters = {}
-            state.stationary_humans = []
-            errors = assert_world_invariants(state)
-            # Восстанавливаем
-            state.shelters = orig_shelters
-            state.temp_shelters = orig_temp
-            state.stationary_humans = orig_stationary
-            assert any("#13" in e for e in errors), (
-                "#13 — full: должен ловить комфортный сон без укрытия/охраны"
-            )
+            group = state.human_groups.get(npc.group_id)
+            if group:
+                # Ставим comfort=True (как будто AI решил что комфорт есть)
+                group.comfort = True
+                npc.status = EntityStatus.SLEEPING
+                # Заменяем shelter/guard checks на falses
+                orig_shelters = state.shelters
+                orig_temp = state.temp_shelters
+                orig_stationary = state.stationary_humans
+                orig_factions = state.sectors
+                state.shelters = {}
+                state.temp_shelters = {}
+                state.stationary_humans = []
+                errors = assert_world_invariants(state)
+                # Восстанавливаем
+                state.shelters = orig_shelters
+                state.temp_shelters = orig_temp
+                state.stationary_humans = orig_stationary
+                assert any("#13" in e for e in errors), (
+                    "#13 — full: должен ловить комфортный сон без укрытия/охраны"
+                )
 
     def test_invariant_23_full_coverage(self) -> None:
         """#23 shelter: occupied_by ref + sector_id match enforced (full)."""
