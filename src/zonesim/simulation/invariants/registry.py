@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass
 class InvariantInfo:
     """Метаданные одного инварианта."""
     id: int
@@ -373,23 +373,93 @@ register_invariant(23, "§22.23",
 # → _check_trail_blockages (active anomalies on same trail_id)
 register_invariant(24, "§22.24",
     CANONICAL_DESCRIPTIONS[24],
-    check_fn=None,  # через _check_trail_blockages
+    check_fn=None,  # через _check_trail_blockages (groups.py)
     kind="runtime")
 
 # Инвариант #25: знания группы — общие
 # → _check_group_knowledge (knowledge_snapshot_at_intention vs intention_knowledge_used)
 register_invariant(25, "§22.25",
     CANONICAL_DESCRIPTIONS[25],
-    check_fn=None,  # через _check_group_knowledge
+    check_fn=None,  # через _check_group_knowledge (knowledge.py)
     kind="runtime")
 
 
 # ---------------------------------------------------------------------------
-# Экспорт
+# Wiring: check_fn → actual check functions from modules
 # ---------------------------------------------------------------------------
 
-INVARIANT_REGISTRY = _INVARIANT_REGISTRY
+# Import check functions from modules
+from zonesim.simulation.invariants.groups import (
+    _check_human_groups as _fn_human_groups,
+    _check_status_intentions as _fn_status_intentions,
+)
+from zonesim.simulation.invariants.items import (
+    _check_items_and_stats as _fn_items_and_stats,
+)
+from zonesim.simulation.invariants.knowledge import (
+    _check_knowledge_immutability as _fn_knowledge_immutability,
+    _check_group_knowledge as _fn_group_knowledge,
+)
+from zonesim.simulation.invariants.anomalies_bases import (
+    _check_anomalies_and_bases as _fn_anomalies_and_bases,
+)
+from zonesim.simulation.invariants.sleep import (
+    _check_comfort_sleep_guard as _fn_comfort_sleep_guard,
+)
+from zonesim.simulation.invariants.corpses import (
+    _check_corpses as _fn_corpses,
+    _check_finding_expiry as _fn_finding_expiry,
+)
+from zonesim.simulation.invariants.relations import (
+    _check_faction_relation_events as _fn_faction_relation_events,
+)
+from zonesim.simulation.invariants.events import (
+    _check_event_links as _fn_event_links,
+)
+from zonesim.simulation.invariants.emission import (
+    _check_emission_movement as _fn_emission_movement,
+    _check_emission_knowledge_staleness as _fn_emission_knowledge_staleness,
+)
+from zonesim.simulation.invariants.shelter import (
+    _check_shelter_occupancy as _fn_shelter_occupancy,
+)
+from zonesim.simulation.invariants.trails import (
+    _check_trail_blockages as _fn_trail_blockages,
+)
 
+# Wire check_fn for all registered invariants
+_FN_MAP: dict[int, Any] = {
+    1: _fn_human_groups,    # full: groups
+    2: _fn_human_groups,    # full: groups
+    3: None,                # missing
+    4: _fn_human_groups,    # full: groups
+    5: _fn_status_intentions,  # full: prisoner check (partial: doesn't check sleepers)
+    6: _fn_items_and_stats,  # full
+    7: None,                # missing
+    8: _fn_items_and_stats,  # full
+    9: _fn_items_and_stats,  # partial: only lower bounds
+    10: _fn_anomalies_and_bases,  # full
+    11: _fn_anomalies_and_bases,  # full
+    12: None,               # missing
+    13: _fn_comfort_sleep_guard,  # partial: stub
+    14: None,               # missing
+    15: _fn_corpses,        # full
+    16: _fn_knowledge_immutability,  # full
+    17: _fn_faction_relation_events,  # full
+    18: _fn_event_links,    # partial: only hour check
+    20: _fn_emission_movement,  # full
+    21: _fn_finding_expiry, # partial: only age check
+    22: _fn_emission_knowledge_staleness,  # partial: only during emission
+    23: _fn_shelter_occupancy,  # partial: only occupied_by ref
+    24: _fn_trail_blockages,  # full
+    25: _fn_group_knowledge,  # full
+}
+
+for inv_id, fn in _FN_MAP.items():
+    info = get_invariant(inv_id)
+    info.check_fn = fn  # type: ignore[assignment]
+
+# Export check functions
 __all__ = [
     "INVARIANT_REGISTRY",
     "InvariantInfo",
@@ -400,4 +470,42 @@ __all__ = [
     "runtime_invariant_ids",
     "static_invariant_ids",
     "invariant_kind",
+    # check functions
+    "_check_human_groups",
+    "_check_status_intentions",
+    "_check_items_and_stats",
+    "_check_anomalies_and_bases",
+    "_check_comfort_sleep_guard",
+    "_check_corpses",
+    "_check_knowledge_immutability",
+    "_check_faction_relation_events",
+    "_check_event_links",
+    "_check_emission_movement",
+    "_check_finding_expiry",
+    "_check_emission_knowledge_staleness",
+    "_check_shelter_occupancy",
+    "_check_trail_blockages",
+    "_check_group_knowledge",
 ]
+
+# Set module-level names
+import sys as _sys
+_mod = _sys.modules[__name__]
+_mod._check_human_groups = _fn_human_groups
+_mod._check_status_intentions = _fn_status_intentions
+_mod._check_items_and_stats = _fn_items_and_stats
+_mod._check_anomalies_and_bases = _fn_anomalies_and_bases
+_mod._check_comfort_sleep_guard = _fn_comfort_sleep_guard
+_mod._check_corpses = _fn_corpses
+_mod._check_knowledge_immutability = _fn_knowledge_immutability
+_mod._check_faction_relation_events = _fn_faction_relation_events
+_mod._check_event_links = _fn_event_links
+_mod._check_emission_movement = _fn_emission_movement
+_mod._check_finding_expiry = _fn_finding_expiry
+_mod._check_emission_knowledge_staleness = _fn_emission_knowledge_staleness
+_mod._check_shelter_occupancy = _fn_shelter_occupancy
+_mod._check_trail_blockages = _fn_trail_blockages
+_mod._check_group_knowledge = _fn_group_knowledge
+
+# Export for other modules
+INVARIANT_REGISTRY = _INVARIANT_REGISTRY
