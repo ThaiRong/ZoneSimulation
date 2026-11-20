@@ -1,4 +1,0 @@
-1. Starting
-2. Imported engine
-3. Created engine
-4. After simulate_hour

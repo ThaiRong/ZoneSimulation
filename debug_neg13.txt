@@ -1,8 +1,0 @@
-import OK
-engine OK
-sim OK
-Humans: 40
-Group: HumanGroup(id=0, members=[0, 1, 2, 3], sector_id=16, intention='search_artifact', leader_id=1, prisoners=[], guard_schedule=[], comfort=True, last_combat_hour=14, last_distress_hour=-100, last_shelter_hour=7, target_sector_id=None)
-  members=[0, 1, 2, 3] comfort=True
-After change: comfort=True
-Errors: []

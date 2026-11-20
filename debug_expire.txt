@@ -1,7 +1,0 @@
-
-Hour 25 state:
-  NPC 16: status=EntityStatus.SLEEPING sector=4 comfort=True
-  NPC 17: status=EntityStatus.SLEEPING sector=4 comfort=True
-  NPC 23: status=EntityStatus.SLEEPING sector=9 comfort=True
-  NPC 24: status=EntityStatus.SLEEPING sector=9 comfort=True
-  Invariant #13 errors: 0

@@ -46,3 +46,8 @@ Thumbs.db
 *.json.gz
 *.bak
 *.tmp
+
+# Debug files
+debug_*.txt
+result_*.txt
+debug*.py

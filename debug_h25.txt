@@ -1,6 +1,0 @@
-Hour 25 OK
-  Sleeping: 10
-FAIL at iteration 18, hour=25
-  Hour=25, Day=1: Инвариант #13 (ч. 25): NPC 16 (Борзые) спит с комфортом (group.comfort=True) в секторе 4 но shelter/guard/base/дежурный отсутствуют (is_comfort_sleep_possible=False) (§22.13); Инвариан
-  FAILING: NPC 16 comfort=True is_comfort=False sector=4
-    temp_shelters in sector: 0
