@@ -4,7 +4,8 @@ import dataclasses
 import pytest
 
 from zonesim.persistence.serialization import state_from_dict, state_to_dict
-from zonesim.simulation.engine import SimulationEngine, SimulationState
+from zonesim.simulation.engine import SimulationEngine
+from zonesim.simulation.state import SimulationState
 
 
 @pytest.fixture()

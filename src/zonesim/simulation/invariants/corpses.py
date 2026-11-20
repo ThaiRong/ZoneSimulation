@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from zonesim.simulation.engine import SimulationState
+    from zonesim.simulation.state import SimulationState
 
 
 def _check_corpses(state: "SimulationState") -> list[str]:

@@ -20,7 +20,7 @@ import dataclasses
 from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
-    from zonesim.simulation.engine import SimulationState
+    from zonesim.simulation.state import SimulationState
 
 
 # ---------------------------------------------------------------------------

@@ -24,7 +24,8 @@ from zonesim.persistence.serialization import (
     _encode_simple,
     state_to_dict,
 )
-from zonesim.simulation.engine import SimulationEngine, SimulationState
+from zonesim.simulation.engine import SimulationEngine
+from zonesim.simulation.state import SimulationState
 
 
 def _get_field_names(state: SimulationState) -> set[str]:

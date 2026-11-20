@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from zonesim.simulation.engine import SimulationState
+    from zonesim.simulation.state import SimulationState
 
 
 def _check_faction_relation_events(state: "SimulationState") -> list[str]:

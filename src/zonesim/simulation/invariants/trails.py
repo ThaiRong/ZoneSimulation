@@ -15,7 +15,7 @@ from zonesim.anomalies.core import AnomalyStatus
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from zonesim.simulation.engine import SimulationState
+    from zonesim.simulation.state import SimulationState
 
 
 def _check_trail_blockages(state: "SimulationState") -> list[str]:

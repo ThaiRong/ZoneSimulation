@@ -360,7 +360,7 @@ class SchemaEncoder:
 
     def encode_state(self, state: Any) -> dict[str, Any]:
         """Кодировать SimulationState в dict (schema-driven, все 56 полей)."""
-        from zonesim.simulation.engine import SimulationState
+        from zonesim.simulation.state import SimulationState
 
         # type: name-ignore
         s: SimulationState = state
@@ -452,7 +452,7 @@ class SchemaEncoder:
 
     def decode_state(self, data: dict[str, Any]) -> Any:
         """Декодировать dict обратно в SimulationState."""
-        from zonesim.simulation.engine import SimulationState
+        from zonesim.simulation.state import SimulationState
         from zonesim.core.time import GameTime, SeededRNG
 
         # --- time ---

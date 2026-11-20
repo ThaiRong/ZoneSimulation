@@ -16,7 +16,7 @@ from zonesim.world.entity import EntityStatus
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from zonesim.simulation.engine import SimulationState
+    from zonesim.simulation.state import SimulationState
 
 
 def _check_human_groups(state: "SimulationState") -> list[str]:

@@ -35,7 +35,7 @@ from zonesim.world.stash import Stash
 from zonesim.persistence.schema import decode_value  # noqa: F401
 
 if TYPE_CHECKING:
-    from zonesim.simulation.engine import SimulationState
+    from zonesim.simulation.state import SimulationState
 
 
 def _encode(value: Any) -> Any:
@@ -393,7 +393,7 @@ def state_from_dict(data: dict[str, Any]) -> SimulationState:
     """
     import dataclasses
     from typing import get_type_hints, Any as typing_Any
-    from zonesim.simulation.engine import SimulationState
+    from zonesim.simulation.state import SimulationState
 
     # Получаем аннотации типов из SimulationState
     hints = get_type_hints(SimulationState, localns=dict(globals()))

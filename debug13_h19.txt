@@ -1,0 +1,18 @@
+
+=== Hour 18 ===
+NPC 13: status=EntityStatus.ACTIVE comfort=True group_id=6
+  sector=18 faction=Ѕрод€ги
+  is_comfort=True
+  temp_shelters in sector 18: 0
+  StormShelter in sector 18: 0
+  Guards in sector 18: 0
+  Invariant #13 errors: 0
+
+=== Hour 19 ===
+NPC 13: status=EntityStatus.ACTIVE comfort=True group_id=6
+  sector=18 faction=Ѕрод€ги
+  is_comfort=True
+  temp_shelters in sector 18: 0
+  StormShelter in sector 18: 0
+  Guards in sector 18: 0
+FAIL at iteration 12, hour=19: Hour=19, Day=0: »нвариант #13 (ч. 19): NPC 13 (Ѕрод€ги) спит с комфортом (group.comfort=True) в секторе 18 но shelter/guard/base/дежурный отсутствуют (is_comfort_sleep_possible=False) (І22.13)

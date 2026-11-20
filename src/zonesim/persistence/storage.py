@@ -19,7 +19,7 @@ from zonesim.persistence.schema import (
 from zonesim.persistence.serialization import state_from_dict, state_to_dict
 
 if TYPE_CHECKING:
-    from zonesim.simulation.engine import SimulationState
+    from zonesim.simulation.state import SimulationState
 
 # Текущая версия формата — инкрементируется при изменении структуры SimulationState
 # Fingerprint вычисляется автоматически из FIELD_TYPES в schema.py
