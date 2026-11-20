@@ -3,7 +3,7 @@
 Этап 3, Промпт 3.3 (корректировка): полная инвентаризация всех уникальных
 методов SimulationEngine для последующего извлечения фаз и сервисов (§20.2 ТЗ).
 
-**Файл:** `src/zonesim/simulation/engine.py` (132 строк, 132 методов)
+**Файл:** `src/zonesim/simulation/engine.py` (4307 строк, 132 метода)
 **Покрытие:** 100% уникальных методов (по одному разу каждый)
 
 ## Таблица методов
@@ -49,7 +49,7 @@
 | 37 | _free_emptied_shelters | 839 | world/shelter | Освобождение пустых укрытий | world/shelter.py | 0, 1, 7 |
 | 38 | _process_shelter_occupation | 855 | world/shelter | Занятие укрытий монстрами | world/shelter.py | 1 |
 | 39 | _create_shelter_occupied_knowledge | 906 | world/shelter | Знание: убежище занято монстрами | world/shelter.py | 1 |
-| 40 | _process_emission_shelter_assault | 927 | actions/rescue | Штурм людьми убежищ монстров | actions/signals.py | 1, 6 |
+| 40 | _process_emission_shelter_assault | 927 | world/shelter | Штурм людьми убежищ монстров | world/shelter.py | 1, 6 |
 | 41 | _expire_findings | 1047 | knowledge/expiry | Истечение сведений | knowledge/expiry.py | 0 |
 | 42 | _process_distress_signals | 1066 | actions/signals | Обработка сигналов бедствия | actions/signals.py | 1, 7 |
 | 43 | _active_distress_for | 1107 | actions/signals | Самый свежий сигнал для группы | actions/signals.py | 1, 4, 5, 7 |
@@ -78,7 +78,7 @@
 | 66 | _save_relation_snapshot | 1824 | relations/snapshot | Снимок отношений перед шагом | relations/snapshot.py | 1 |
 | 67 | _log_relation_change | 1832 | relations/journal | Запись изменения в журнал | relations/journal.py | 1 |
 | 68 | _check_and_journal_relations | 1845 | relations/journal | Проверка и запись изменений | relations/journal.py | 1 |
-| 69 | simulate_hour | 1859 | core/orchestrator | Главный почасовой цикл — 11 фаз | phases/orchestrator.py | 0-10 |
+| 69 | simulate_hour | 1859 | core/orchestrator | Главный почасовой цикл — 11 фаз | engine.py | 0-10 |
 | 70 | _phase0_check | 1943 | phase/0_check | Точка входа фазы 0: проверка состояния | phases/phase0_check.py | 0 |
 | 71 | _sync_human_groups | 1952 | world/groups | Убрать выбывших, удалить пустые группы, выбрать лидеров | world/groups.py | 0, 9 |
 | 72 | _phase1_scheduled | 1969 | phase/1_scheduled | Точка входа фазы 1: запланированные события | phases/phase1_scheduled.py | 1 |
@@ -147,13 +147,13 @@
 
 | Категория | Методов |
 |---|---|
-| world | 38 |
+| world | 39 |
 | economy | 16 |
 | combat | 15 |
 | anomalies | 12 |
 | phase | 11 |
-| actions | 9 |
 | needs | 9 |
+| actions | 8 |
 | core | 6 |
 | relations | 6 |
 | knowledge | 4 |

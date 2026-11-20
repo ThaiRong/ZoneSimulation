@@ -62,7 +62,7 @@ TARGET_MAP: dict[str, dict] = {
     "get_state_summary": {"target": "engine.py", "domain": "core/summary", "phases": "10"},
 
     # --- orchestration ---
-    "simulate_hour": {"target": "phases/orchestrator.py", "domain": "core/orchestrator", "phases": "0-10"},
+    "simulate_hour": {"target": "engine.py", "domain": "core/orchestrator", "phases": "0-10"},
     "trade_price": {"target": "economy/pricing.py", "domain": "economy/pricing", "phases": "2, 7"},
 
     # --- init helpers ---
@@ -86,7 +86,7 @@ TARGET_MAP: dict[str, dict] = {
     "_process_shelter_occupation": {"target": "world/shelter.py", "domain": "world/shelter", "phases": "1"},
     "_create_shelter_occupied_knowledge": {"target": "world/shelter.py", "domain": "world/shelter", "phases": "1"},
     "_stale_shelter_occupied_knowledge": {"target": "world/shelter.py", "domain": "world/shelter", "phases": "7"},
-    "_process_emission_shelter_assault": {"target": "actions/signals.py", "domain": "actions/rescue", "phases": "1, 6"},
+    "_process_emission_shelter_assault": {"target": "world/shelter.py", "domain": "world/shelter", "phases": "1, 6"},
     "_process_guard_rotation": {"target": "relations/guards.py", "domain": "relations/guards", "phases": "1"},
     "_spawn_guard": {"target": "relations/guards.py", "domain": "relations/guards", "phases": "1"},
     "_equip_guard": {"target": "relations/guards.py", "domain": "relations/guards", "phases": "1"},
@@ -268,7 +268,7 @@ def generate_md(methods: dict[str, int]) -> str:
     lines.append("Этап 3, Промпт 3.3 (корректировка): полная инвентаризация всех уникальных")
     lines.append("методов SimulationEngine для последующего извлечения фаз и сервисов (§20.2 ТЗ).")
     lines.append("")
-    lines.append(f"**Файл:** `src/zonesim/simulation/engine.py` ({len(methods)} строк, {len(methods)} методов)")
+    lines.append(f"**Файл:** `src/zonesim/simulation/engine.py` (4307 строк, 132 метода)")
     lines.append("**Покрытие:** 100% уникальных методов (по одному разу каждый)")
     lines.append("")
     lines.append("## Таблица методов")
