@@ -96,6 +96,7 @@ from zonesim.knowledge.fact import KnowledgeBase, KnowledgeType
 from zonesim.persistence import SaveManager
 from zonesim.simulation.invariants import InvariantViolation, assert_world_invariants
 from zonesim.simulation.state import SimulationState
+from zonesim.simulation.context import SimulationContext
 
 
 CAPTURE_KIT_REF = {
@@ -132,6 +133,7 @@ class SimulationEngine:
 
     def __init__(self, seed: int = 42, config: dict | None = None, save_directory=None):
         self.state = SimulationState(rng=SeededRNG(seed), config=config or {})
+        self.context = SimulationContext(self.state)
         self.save_manager = SaveManager(save_directory) if save_directory is not None else None
         self.catalog = ItemCatalog.load((self.state.config or {}).get("catalog_path"))
         self._home_cache: dict[str, int | None] = {}
@@ -149,6 +151,7 @@ class SimulationEngine:
     def from_state(cls, state: SimulationState, save_directory=None) -> SimulationEngine:
         engine = cls.__new__(cls)
         engine.state = state
+        engine.context = SimulationContext(state)
         engine.save_manager = SaveManager(save_directory) if save_directory is not None else None
         engine.catalog = ItemCatalog.load((state.config or {}).get("catalog_path"))
         engine._home_cache = {}
@@ -1862,6 +1865,14 @@ class SimulationEngine:
         day = self.state.time.day
         phase = self.state.time.current_phase
         is_night = self.state.time.is_night()
+
+        # Контекст текущего часа
+        self.context.hour = hour
+        self.context.day = day
+        self.context.phase = phase
+        self.context.is_night = is_night
+        self.context.events = []
+        self.context.phase_results = {}
 
         events: list[dict] = []
 
