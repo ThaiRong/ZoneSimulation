@@ -2217,10 +2217,14 @@ class SimulationEngine:
                     leader.faction, distress.get("faction", ""),
                 ) >= 20
 
-            # Устанавливаем group.comfort для инварианта #13
+            # Устанавливаем group.comfort для инварианта #13 — strict check без condition 6
+            # is_comfort_sleep_possible() включает condition 6 (awake_member),
+            # но это приводит к TOCTOU: когда NPC ACTIVE → condition 6=True,
+            # когда все спят → condition 6=False → нарушение #13.
+            # Используем тот же strict check как в invariant #13.
             all_npcs = {n.id: n for n in self.state.humans}
-            group.comfort = group.is_comfort_sleep_possible(
-                all_npcs,
+            group.comfort = self._has_strict_comfort(
+                group, all_npcs,
                 {n.id: n for n in self.state.stationary_humans},
                 self.state.shelters,
                 self.state.temp_shelters,
@@ -4063,6 +4067,56 @@ class SimulationEngine:
             )
         return True
 
+    def _has_strict_comfort(
+        self, group, all_npcs: dict[int, 'HumanNPC'],
+        stationary: dict[int, 'HumanNPC'],
+        shelters: dict[int, object], temp_shelters: dict[int, object],
+        sectors: dict[int, object], sector_id: int, faction: str | None,
+    ) -> bool:
+        """Strict comfort check для invariant #13 (без condition 6 awake_member).
+
+        Возвращает True только если есть РАБОТАЮЩАЯ защита:
+        (a) StormShelter в секторе ИЛИ active temp_shelter с participant_count>0;
+        (b) база фракции (is_faction_start=True) в секторе;
+        (c) stationary guard ACTIVE в секторе;
+        (d) guard_schedule: entry в members И член группы ACTIVE в секторе.
+        """
+        # (a) StormShelter в секторе
+        for shelter in shelters.values():
+            if (hasattr(shelter, 'sector_id') and shelter.sector_id == sector_id
+                    and type(shelter).__name__ == "StormShelter"):
+                return True
+
+        # (a) Active temp_shelter с participant_count>0 в секторе
+        for shelter in temp_shelters.values():
+            if (hasattr(shelter, 'sector_id') and shelter.sector_id == sector_id
+                    and hasattr(shelter, 'is_active') and shelter.is_active):
+                if hasattr(shelter, 'participant_count') and shelter.participant_count > 0:
+                    return True
+
+        # (b) База фракции в секторе
+        if faction:
+            for sid, sector in sectors.items():
+                if sid == sector_id and getattr(sector, "is_faction_start", False):
+                    ctrl = getattr(sector, "controller_faction", None)
+                    if ctrl is None or ctrl == faction:
+                        return True
+
+        # (c) Stationary guard ACTIVE в секторе
+        for n in stationary.values():
+            if (n.stationary_role == "guard" and n.status == EntityStatus.ACTIVE
+                    and n.sector_id == sector_id):
+                return True
+
+        # (d) Guard schedule: член группы ACTIVE в секторе
+        for entry in group.guard_schedule:
+            if entry.get("npc_id") in group.members:
+                for m in all_npcs.values():
+                    if m.id == entry["npc_id"] and m.status == EntityStatus.ACTIVE and m.sector_id == sector_id:
+                        return True
+
+        return False
+
     def _phase7_actions(self, hour: int, is_night: bool) -> None:
         """Фаза 7: сначала бои, затем остальные основные действия (§8)."""
         self._execute_battles(hour)
@@ -4110,6 +4164,26 @@ class SimulationEngine:
             if npc.id in self._combat_human_ids or npc.group_id in acted_groups:
                 continue
             if npc.status == EntityStatus.SLEEPING:
+                # Инвариант #13: будим SLEEPING если comfort=True но нет защиты
+                group = self.state.human_groups.get(npc.group_id)
+                if group and group.comfort:
+                    if not self._has_strict_comfort(
+                        group,
+                        {m.id: m for m in self.state.humans},
+                        {n.id: n for n in self.state.stationary_humans},
+                        self.state.shelters,
+                        self.state.temp_shelters,
+                        self.state.sectors,
+                        npc.sector_id,
+                        npc.faction,
+                    ):
+                        # Разбуживаем ВСЕХ SLEEPING NPC группы
+                        group.comfort = False
+                        for mid in group.members:
+                            for m in self.state.humans:
+                                if m.id == mid and m.status == EntityStatus.SLEEPING:
+                                    m.status = EntityStatus.ACTIVE
+                                    m.intention = REST
                 if not getattr(npc, "on_treatment", False):
                     self._sleep_tick(npc)
                 continue
@@ -4125,8 +4199,27 @@ class SimulationEngine:
                 continue  # истощение → потеря сознания
 
             if npc.intention == SLEEP:
-                npc.status = EntityStatus.SLEEPING
-                npc.intention = SLEEP  # инвариант #5: спящие имеют SLEEP
+                # Инвариант #13: SLEEP только при реальных условиях комфорта
+                # (проверка в Phase 7, т.к. shelter мог expire между Phase 4 и Phase 7)
+                group = self.state.human_groups.get(npc.group_id)
+                if group and group.comfort:
+                    if not self._has_strict_comfort(
+                        group,
+                        {m.id: m for m in self.state.humans},
+                        {n.id: n for n in self.state.stationary_humans},
+                        self.state.shelters,
+                        self.state.temp_shelters,
+                        self.state.sectors,
+                        npc.sector_id,
+                        npc.faction,
+                    ):
+                        # Нет комфорта — отменяем сон
+                        npc.intention = REST
+                        group.comfort = False
+
+                if npc.intention == SLEEP:
+                    npc.status = EntityStatus.SLEEPING
+                    npc.intention = SLEEP  # инвариант #5: спящие имеют SLEEP
             elif npc.intention == REST:
                 self._rest_tick(npc)
             elif npc.intention in (RESEARCH, ARTIFACT_SEARCH):

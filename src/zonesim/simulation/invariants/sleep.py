@@ -8,11 +8,14 @@ check_fn -> _check_comfort_sleep_guard (#13 full).
 
 Логика:
 - comfort=False → не-комфортный сон легален где угодно.
-- comfort=True → легален если:
-  1. Strict comfort (base/shelter с участниками/StormShelter/guard/guard_schedule) ИЛИ
-  2. ДРУГОЙ член группы ACTIVE в секторе (awake guard).
-- Иначе → violation (even if all_sleeing — это real violation).
-- TOCTOU exception: если structure exist (даже с 0 участников) → shelter expire → ok.
+- comfort=True → легален ТОЛЬКО если одно из:
+  (a) StormShelter в секторе ИЛИ active temp_shelter с participant_count>0;
+  (b) база фракции (is_faction_start=True) в секторе;
+  (c) стационарный guard ACTIVE в секторе;
+  (d) guard_schedule: entry["npc_id"] в members И член группы ACTIVE в секторе.
+- Иначе → errors.append.
+- «Все спят без защиты» → НАРУШЕНИЕ (ловить).
+- БЕЗ TOCTOU/has_structure/all_sleeing — только РАБОТАЮЩАЯ защита.
 """
 
 from __future__ import annotations
@@ -28,11 +31,8 @@ if TYPE_CHECKING:
 def _check_comfort_sleep_guard(state: "SimulationState") -> list[str]:
     """Инвариант #13: комфортный сон требует shelter/guard/base.
 
-    Строгая проверка без all_sleeing skip:
-    - comfort=False → легален где угодно
-    - comfort=True → strict comfort OR awake guard (другой член группы)
-    - если structure exist но comfort=False → TOCTOU (shelter expire) → ok
-    - иначе → violation
+    Строгая проверка: только работающая защита (active/действующая).
+    Не использовать «structure exist» (пустую/неактивную) как защиту.
     """
     errors: list[str] = []
     hour = state.time.hour
@@ -49,23 +49,21 @@ def _check_comfort_sleep_guard(state: "SimulationState") -> list[str]:
         if not group.comfort:
             continue
 
-        # comfort=True → строгая проверка
+        # comfort=True → строгая проверка условий
         sector_id = npc.sector_id
         faction = npc.faction
 
-        # Strict comfort check (без condition 6 awake_member)
         strict_comfort = False
 
-        # 1. База фракции
-        if faction:
-            for sid, sector in state.sectors.items():
-                if sid == sector_id and getattr(sector, "is_faction_start", False):
-                    ctrl = getattr(sector, "controller_faction", None)
-                    if ctrl is None or ctrl == faction:
-                        strict_comfort = True
-                        break
+        # (a) StormShelter в секторе
+        if not strict_comfort:
+            for shelter in state.shelters.values():
+                if (hasattr(shelter, 'sector_id') and shelter.sector_id == sector_id
+                        and type(shelter).__name__ == "StormShelter"):
+                    strict_comfort = True
+                    break
 
-        # 2. Active Shelter с участниками
+        # (a) Active temp_shelter с participant_count>0 в секторе
         if not strict_comfort:
             for shelter in state.temp_shelters.values():
                 if (hasattr(shelter, 'sector_id') and shelter.sector_id == sector_id
@@ -74,15 +72,16 @@ def _check_comfort_sleep_guard(state: "SimulationState") -> list[str]:
                         strict_comfort = True
                         break
 
-        # 3. StormShelter
-        if not strict_comfort:
-            for shelter in state.shelters.values():
-                if (hasattr(shelter, 'sector_id') and shelter.sector_id == sector_id
-                        and type(shelter).__name__ == "StormShelter"):
-                    strict_comfort = True
-                    break
+        # (b) База фракции в секторе
+        if not strict_comfort and faction:
+            for sid, sector in state.sectors.items():
+                if sid == sector_id and getattr(sector, "is_faction_start", False):
+                    ctrl = getattr(sector, "controller_faction", None)
+                    if ctrl is None or ctrl == faction:
+                        strict_comfort = True
+                        break
 
-        # 4. Стационарный охранник
+        # (c) Стационарный guard ACTIVE в секторе
         if not strict_comfort:
             for n in state.stationary_humans:
                 if (n.stationary_role == "guard" and n.status == EntityStatus.ACTIVE
@@ -90,7 +89,7 @@ def _check_comfort_sleep_guard(state: "SimulationState") -> list[str]:
                     strict_comfort = True
                     break
 
-        # 5. Guard schedule
+        # (d) Guard schedule: член группы ACTIVE в секторе
         if not strict_comfort:
             for entry in group.guard_schedule:
                 if entry.get("npc_id") in group.members:
@@ -100,54 +99,14 @@ def _check_comfort_sleep_guard(state: "SimulationState") -> list[str]:
                             break
 
         if strict_comfort:
-            continue
+            continue  # есть работающая защита — сон легален
 
-        # strict_comfort=False → awake guard (другой член группы ACTIVE)
-        for mid in group.members:
-            if mid == npc.id:
-                continue
-            for m in state.humans:
-                if m.id == mid and m.status == EntityStatus.ACTIVE and m.sector_id == sector_id:
-                    break
-            else:
-                continue
-            break
-        else:
-            # Ни strict, ни awake guard → TOCTOU check
-            # Если shelter/guard/base structure exist (даже с 0 участников) → ok
-            has_structure = False
-            for shelter in state.shelters.values():
-                if hasattr(shelter, 'sector_id') and shelter.sector_id == sector_id:
-                    if type(shelter).__name__ == "StormShelter":
-                        has_structure = True
-                        break
-            if not has_structure:
-                for shelter in state.temp_shelters.values():
-                    if hasattr(shelter, 'sector_id') and shelter.sector_id == sector_id:
-                        has_structure = True
-                        break
-            if not has_structure and faction:
-                for sid, sector in state.sectors.items():
-                    if sid == sector_id and getattr(sector, "is_faction_start", False):
-                        has_structure = True
-                        break
-            if not has_structure:
-                for n in state.stationary_humans:
-                    if (n.stationary_role == "guard" and n.status == EntityStatus.ACTIVE
-                            and n.sector_id == sector_id):
-                        has_structure = True
-                        break
-            if not has_structure:
-                for entry in group.guard_schedule:
-                    if entry.get("npc_id") in group.members:
-                        has_structure = True
-                        break
-            if not has_structure:
-                errors.append(
-                    f"Инвариант #13 (ч. {hour}): NPC {npc.id} ({npc.faction}) "
-                    f"спит с комфортом (group.comfort=True) в секторе {sector_id} "
-                    f"без shelter/guard/base/дежурного "
-                    f"(§22.13)"
-                )
+        # Нет рабочей защиты → violation
+        errors.append(
+            f"Инвариант #13 (ч. {hour}): NPC {npc.id} ({npc.faction}) "
+            f"спит с комфортом (group.comfort=True) в секторе {sector_id} "
+            f"без shelter/guard/base/дежурного "
+            f"(§22.13)"
+        )
 
     return errors
