@@ -23,6 +23,9 @@ class SimulationContext:
     state: SimulationState
     """Ссылка на текущее состояние симуляции."""
 
+    engine_ref: Any = None
+    """Ссылка на SimulationEngine для вызова вспомогательных методов из фаз."""
+
     hour: int = 0
     """Номер текущего часа (self.state.time.hour)."""
 

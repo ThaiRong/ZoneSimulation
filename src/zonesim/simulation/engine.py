@@ -97,6 +97,11 @@ from zonesim.persistence import SaveManager
 from zonesim.simulation.invariants import InvariantViolation, assert_world_invariants
 from zonesim.simulation.state import SimulationState
 from zonesim.simulation.context import SimulationContext
+from zonesim.simulation.phases import (
+    run_phase0_check,
+    run_phase1_scheduled,
+    run_phase2_environment,
+)
 
 
 CAPTURE_KIT_REF = {
@@ -134,6 +139,7 @@ class SimulationEngine:
     def __init__(self, seed: int = 42, config: dict | None = None, save_directory=None):
         self.state = SimulationState(rng=SeededRNG(seed), config=config or {})
         self.context = SimulationContext(self.state)
+        self.context.engine_ref = self
         self.save_manager = SaveManager(save_directory) if save_directory is not None else None
         self.catalog = ItemCatalog.load((self.state.config or {}).get("catalog_path"))
         self._home_cache: dict[str, int | None] = {}
@@ -152,6 +158,7 @@ class SimulationEngine:
         engine = cls.__new__(cls)
         engine.state = state
         engine.context = SimulationContext(state)
+        engine.context.engine_ref = engine
         engine.save_manager = SaveManager(save_directory) if save_directory is not None else None
         engine.catalog = ItemCatalog.load((state.config or {}).get("catalog_path"))
         engine._home_cache = {}
@@ -1882,13 +1889,13 @@ class SimulationEngine:
         self.state.intention_knowledge_used = {}
 
         # Фаза 0: Проверка состояния
-        self._phase0_check(hour)
+        run_phase0_check(self.context)
 
         # Фаза 1: Запланированные события
-        self._phase1_scheduled(hour, day)
+        run_phase1_scheduled(self.context)
 
         # Фаза 2: Окружающая среда и торговля
-        self._phase2_environment(hour)
+        run_phase2_environment(self.context)
 
         # Фаза 3: Обнаружение и распространение сведений
         self._phase3_knowledge(hour, is_night)
