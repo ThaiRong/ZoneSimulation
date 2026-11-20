@@ -518,6 +518,7 @@ class SimulationEngine:
                                     if n.status == EntityStatus.SLEEPING:
                                         n.status = EntityStatus.ACTIVE
                                         n.intention = REST
+                                        group.comfort = False  # сбросим comfort
                                     break
                 self.state.news_manager.create_event(
                     hour=hour, minute=0, sector_id=shelter.sector_id,
