@@ -13,10 +13,12 @@ from zonesim.simulation.context import SimulationContext
 def run_phase0_check(ctx: SimulationContext) -> None:
     """Фаза 0: Проверка состояния мира и состава групп."""
     engine = ctx.engine_ref
+    state = ctx.state
+    hour = state.time.hour
 
     engine._sync_human_groups()
     engine._sync_monster_groups()
-    engine._expire_findings(ctx.hour)
-    engine._update_shelter_participants(ctx.hour)
+    engine._expire_findings(hour)
+    engine._update_shelter_participants(hour)
     # Освобождаем укрытия, если монстры ушли (§13.7)
-    engine._free_emptied_shelters(ctx.hour)
+    engine._free_emptied_shelters(hour)

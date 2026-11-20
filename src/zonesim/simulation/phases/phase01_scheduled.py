@@ -16,7 +16,7 @@ def run_phase1_scheduled(ctx: SimulationContext) -> None:
     """Фаза 1: Запланированные события."""
     engine = ctx.engine_ref
     state = ctx.state
-    hour = ctx.hour
+    hour = state.time.hour
 
     # === Миграция людей и монстров ===
     border_ids = {s.id for s in state.sectors.values() if s.is_border}

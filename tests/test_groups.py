@@ -5,6 +5,7 @@ from collections import Counter
 from zonesim.ai import EXPLORE
 from zonesim.generation.worldgen import generate_world
 from zonesim.simulation.engine import SimulationEngine
+from zonesim.simulation.phases import run_phase4_intentions
 from zonesim.world.entity import EntityStatus
 
 
@@ -76,7 +77,7 @@ class TestHumanGroups:
         engine = SimulationEngine(seed=42)
         group = next(g for g in engine.state.human_groups.values() if g.member_count > 1)
 
-        engine._phase4_intentions(engine.state.time.hour)
+        run_phase4_intentions(engine.context)
 
         assert group.intention
         for member_id in group.members:

@@ -7,6 +7,7 @@ from zonesim.anomalies.core import Anomaly, AnomalyStatus, AnomalyType
 from zonesim.anomalies.emission import is_emission_active
 from zonesim.knowledge.fact import KnowledgeBase, KnowledgeType
 from zonesim.simulation.engine import SimulationEngine
+from zonesim.simulation.phases import run_phase4_intentions
 from zonesim.world.entity import EntityStatus
 from zonesim.world.sector import get_distance
 
@@ -164,7 +165,7 @@ class TestEmission:
         hour = engine.state.time.hour
         engine.state.next_emission_hour = hour + 1
         engine.state.emission_warning_hour = hour
-        engine._phase4_intentions(hour)
+        run_phase4_intentions(engine.context)
         assert group.intention == SHELTER
 
     def test_unsheltered_group_takes_damage_and_dies_next_hour(self):
@@ -281,7 +282,7 @@ class TestDistressSignals:
                  if f.payload.get("type") == "distress"]
         assert facts and facts[0].payload["group_id"] == victim_group.id
 
-        engine._phase4_intentions(engine.state.time.hour)
+        run_phase4_intentions(engine.context)
         assert helper_group.intention == HELP
         victim_health_before = victim.health
         engine._aid_distress_group(
