@@ -1947,15 +1947,6 @@ class SimulationEngine:
             "events": events,
         }
 
-    def _phase0_check(self, hour: int) -> None:
-        """Фаза 0: Проверка состояния мира и состава групп."""
-        self._sync_human_groups()
-        self._sync_monster_groups()
-        self._expire_findings(hour)
-        self._update_shelter_participants(hour)
-        # Освобождаем укрытия, если монстры ушли (§13.7)
-        self._free_emptied_shelters(hour)
-
     def _sync_human_groups(self) -> None:
         """Убирает выбывших и удаляет пустые группы, сохраняя инварианты §7.5."""
         npcs = {npc.id: npc for npc in self.state.humans}
@@ -1972,87 +1963,6 @@ class SimulationEngine:
             group.sector_id = npcs[group.members[0]].sector_id
             if group.leader_id not in group.members:
                 group.select_leader(npcs)
-
-    def _phase1_scheduled(self, hour: int, day: int) -> None:
-        """Фаза 1: Запланированные события."""
-        # Миграция людей и монстров
-        border_ids = {s.id for s in self.state.sectors.values() if s.is_border}
-        start_ids = {s.id for s in self.state.sectors.values() if s.is_faction_start}
-
-        new_entities = process_migration(
-            self.state.sectors,
-            self.state.humans,
-            self.state.monsters,
-            self.state.time,
-            self.state.migration_state,
-            self.state.rng,
-        )
-
-        for entity in new_entities:
-            # ID назначаются детерминированно счётчиками движка (без коллизий)
-            if isinstance(entity, Monster):
-                entity.id = self.state.next_monster_id
-                self.state.next_monster_id += 1
-                self.state.monsters.append(entity)
-            elif isinstance(entity, HumanNPC):
-                entity.id = self.state.next_human_id
-                self.state.next_human_id += 1
-                group = HumanGroup(
-                    id=self.state.next_group_id,
-                    members=[entity.id],
-                    sector_id=entity.sector_id,
-                    leader_id=entity.id,
-                )
-                self.state.next_group_id += 1
-                entity.group_id = group.id
-                self.state.human_groups[group.id] = group
-                self.state.humans.append(entity)
-                self._give_starting_equipment(entity)
-
-        # Монстры: пополнение численности
-        active_monsters = sum(1 for m in self.state.monsters if m.status == EntityStatus.ACTIVE)
-        new_monsters = self.state.monster_migration.check_and_spawn(
-            active_monster_count=active_monsters,
-            border_sectors=list(border_ids),
-            faction_start_ids=start_ids,
-            hour=hour,
-            rng=self.state.rng,
-        )
-        for m in new_monsters:
-            m.id = self.state.next_monster_id
-            self.state.next_monster_id += 1
-        self.state.monsters.extend(new_monsters)
-        if new_entities or new_monsters:
-            # мигранты сразу получают группу, как и люди
-            self._sync_monster_groups()
-        self._process_emission_schedule(hour)
-        # Выброс: урон применяется ДО движения групп (§8, инвариант #20)
-        # чтобы группы уже были укрыты или ранены перед фазой 5.
-        if self._emission_active(hour):
-            self._apply_emission_exposure(hour)
-        self._process_shelter_occupation(hour)
-        # После занятия/освобождения — финальная проверка согласованности (#23)
-        self._free_emptied_shelters(hour)
-        self._process_guard_rotation(hour)
-        self._process_conditional_trader_schedule(hour)
-        self._expire_conditional_trader_if_expired(hour)
-
-    def _phase2_environment(self, hour: int) -> None:
-        """Фаза 2: Окружающая среда и торговля. (§8)
-
-        — Формирование артефактов (§12.5)
-        — Обработка контрактов
-        """
-        # Формирование артефактов (§12.5, Фаза 2)
-        self._process_artifact_formations(hour)
-
-        # Добыча артефактов: убираем авто-подбор (§12.4) — артефакты
-        # извлекаются только через исследование (§12.3) или разрушение (§12.5).
-
-        # Обработка контрактов
-        expired = self.state.contracts.expire_inactive_contracts(hour)
-        for cid in expired:
-            pass  # просрочка контрактов
 
     def _phase3_knowledge(self, hour: int, is_night: bool) -> None:
         """Фаза 3: Наблюдение и распространение сведений.
