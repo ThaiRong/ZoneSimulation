@@ -130,6 +130,9 @@ class TestEngineCombat:
         npc, monster = self._isolate_encounter(engine)
         engine.state.sectors[npc.sector_id].neighbors = []
 
+        engine.context.hour = engine.state.time.hour
+        engine.context.day = engine.state.time.day
+        engine.context.is_night = engine.state.time.is_night()
         run_phase6_detections(engine.context)
         assert len(engine._pending_battles) == 1
         engine._phase7_actions(engine.state.time.hour, is_night=False)
@@ -146,6 +149,9 @@ class TestEngineCombat:
         engine = SimulationEngine(seed=42)
         npc, _monster = self._isolate_encounter(engine, at_base=True)
 
+        engine.context.hour = engine.state.time.hour
+        engine.context.day = engine.state.time.day
+        engine.context.is_night = engine.state.time.is_night()
         run_phase6_detections(engine.context)
 
         assert len(engine._pending_battles) == 1

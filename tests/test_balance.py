@@ -61,7 +61,9 @@ class TestAnomalyDetector:
         engine._moved_human_ids = {npc.id}
         npc.health = 1000
         npc.attentiveness = 50
-        hour = engine.state.time.hour
+        engine.context.hour = engine.state.time.hour
+        engine.context.day = engine.state.time.day
+        engine.context.is_night = False
         # без детектора: avoid = 50 + 0.7×(50−50) = 50; бросок 50 → попадание
         engine.state.rng.random = lambda: 0.5
         run_phase6_detections(engine.context)
@@ -89,7 +91,9 @@ class TestAnomalyDetector:
         engine._moved_human_ids = {npc.id}
         npc.health = 1000
         npc.attentiveness = 50
-        hour = engine.state.time.hour
+        engine.context.hour = engine.state.time.hour
+        engine.context.day = engine.state.time.day
+        engine.context.is_night = False
         # с детектором: avoid = 50 + 25 = 75; бросок 50 → избежал
         engine.state.rng.random = lambda: 0.5
         run_phase6_detections(engine.context)

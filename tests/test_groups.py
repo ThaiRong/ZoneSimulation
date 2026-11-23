@@ -94,6 +94,9 @@ class TestHumanGroups:
         group.intention = EXPLORE
         old_sector = group.sector_id
 
+        engine.context.hour = engine.state.time.hour
+        engine.context.day = engine.state.time.day
+        engine.context.is_night = False
         run_phase5_movement(engine.context)
 
         assert group.sector_id != old_sector
@@ -110,6 +113,9 @@ class TestHumanGroups:
         group.intention = EXPLORE
         old_sector = group.sector_id
 
+        engine.context.hour = engine.state.time.hour
+        engine.context.day = engine.state.time.day
+        engine.context.is_night = False
         run_phase5_movement(engine.context)
 
         assert group.sector_id == old_sector
