@@ -103,6 +103,8 @@ from zonesim.simulation.phases import (
     run_phase2_environment,
     run_phase3_knowledge,
     run_phase4_intentions,
+    run_phase5_movement,
+    run_phase6_detections,
 )
 
 
@@ -1906,10 +1908,10 @@ class SimulationEngine:
         run_phase4_intentions(self.context)
 
         # Фаза 5: Перемещение
-        self._phase5_movement(hour, is_night)
+        run_phase5_movement(self.context)
 
         # Фаза 6: Обнаружение и встречи
-        self._phase6_detections(hour)
+        run_phase6_detections(self.context)
 
         # Фаза 7: Основные действия
         self._phase7_actions(hour, is_night)
@@ -2104,79 +2106,6 @@ class SimulationEngine:
             if owner.equipped_armor_id == item.id:
                 owner.equipped_armor_id = None
         self.state.items.pop(item.id, None)
-
-    def _phase5_movement(self, hour: int, is_night: bool) -> None:
-        """Фаза 5: перемещение в пределах пунктов движения (§10.4).
-
-        Люди получают 1,0 пункта в час; обычное ребро стоит 1,0, тропа 0,5.
-        Во время выброса движение запрещено (§12.7, инвариант #20).
-        """
-        self._moved_human_ids: set[int] = set()
-
-        # Запрет движения во время выброса (§12.7, #20)
-        if self._emission_active(hour):
-            return
-
-        border_ids = {s.id for s in self.state.sectors.values() if s.is_border}
-
-        npcs = {npc.id: npc for npc in self.state.humans}
-        for group in self.state.human_groups.values():
-            leader = npcs.get(group.leader_id) if group.leader_id is not None else None
-            if leader is None:
-                continue
-            members = [npcs[mid] for mid in group.members if mid in npcs]
-            if not members or any(npc.status != EntityStatus.ACTIVE for npc in members):
-                continue  # группа не оставляет спящих и бессознательных членей
-            if self._emission_active(hour):
-                # Во время выброса разрешено ТОЛЬКО движение к Shelter
-                if group.intention == SHELTER:
-                    # Продолжаем обработку SHELTER ниже
-                    pass
-                else:
-                    continue  # остальные движения запрещены
-
-            avoid = self._known_anomaly_sectors(leader)
-            trails = self._trail_set
-            if group.intention == EXPLORE:
-                memory = self.state.visit_memory.setdefault(leader.id, {})
-                destination = choose_explore_target(
-                    self.state.sectors, group.sector_id, memory, hour,
-                    avoid, self.state.rng,
-                )
-                if destination is not None:
-                    cost = edge_cost(trails, group.sector_id, destination)
-                    if cost <= 1.0 + 1e-9:
-                        self._apply_human_move(group, members, [destination], npcs, hour)
-                continue
-
-            # Для RESEARCH — не избегать секторов с аномалиями (цель — к ним!)
-            research_target = group.target_sector_id if group.intention == RESEARCH else None
-            group_avoid = set() if group.intention == RESEARCH else avoid
-
-            target_ids: set[int] | None = None
-            if group.intention == EXIT:
-                target_ids = border_ids
-            elif group.intention == REST:
-                home = self._home_sector_id(leader.faction)
-                if home is not None and group.sector_id != home:
-                    target_ids = {home}
-            elif group.intention == HELP:
-                distress = self._active_distress_for(group, hour)
-                if distress is not None and group.sector_id != distress["sector_id"]:
-                    target_ids = {distress["sector_id"]}
-            elif group.intention == SHELTER:
-                target_ids = self._shelter_targets(group, hour)
-            elif group.intention == RESEARCH and group.target_sector_id is not None:
-                target_ids = {group.target_sector_id}
-            elif group.intention == ARTIFACT_SEARCH and group.target_sector_id is not None:
-                target_ids = {group.target_sector_id}
-            if not target_ids:
-                continue
-            path = self._walk(group.sector_id, target_ids, group_avoid, points=1.0)
-            if path:
-                self._apply_human_move(group, members, path, npcs, hour)
-
-        self._move_monster_groups(hour)
 
     def _walk(
         self,
@@ -2383,74 +2312,6 @@ class SimulationEngine:
                 monster.stamina = max(0, monster.stamina - 5 * len(path))
                 self._moved_monster_ids.add(monster.id)
             self._check_blocked_trails(group, members, crossed, hour, is_monster=True)
-
-    def _phase6_detections(self, hour: int) -> None:
-        """Фаза 6: Обнаружение и встречи.
-
-        Контакт с аномалиями сектора: проверка избегания по внимательности (§12.2),
-        при провале урон применяется к здоровью.
-        """
-        is_night = self.state.time.is_night()
-        detector_bonus = self._group_detector_bonus()
-
-        for npc in self.state.humans:
-            # Контакт проверяется при прохождении через сектор (§8, фаза 8)
-            if npc.id not in self._moved_human_ids:
-                continue
-            if npc.status not in (EntityStatus.ACTIVE, EntityStatus.SLEEPING):
-                continue
-
-            co_located = [
-                a for a in self.state.anomalies.values()
-                if a.sector_id == npc.sector_id and a.status == AnomalyStatus.ACTIVE
-            ]
-            if not co_located:
-                continue
-
-            # Одна проверка на вход в сектор — по одной (случайной) аномалии
-            anomaly = self.state.rng.choice(co_located)
-            kb = self.state.knowledge_bases.get(npc.id)
-            known = bool(kb and kb.get_facts(KnowledgeType.ANOMALY, subject_id=anomaly.id))
-            contact = check_anomaly_contact(
-                entity_sector=npc.sector_id,
-                anomaly=anomaly,
-                rng_func=self.state.rng.random,
-                attentiveness=npc.attentiveness,
-                known_bonus=(
-                    (20 if known else 0)
-                    + detector_bonus.get(npc.group_id, 0)  # детектор группы
-                ),
-                is_night=is_night,
-            )
-            if contact["result"] != "hit":
-                continue
-
-            start_health = npc.health
-            result = apply_anomaly_damage(
-                npc.health, npc.max_health, anomaly, self.state.rng.random(),
-            )
-            npc.health = result["new_health"]
-
-            outcome = "hit"
-            if npc.health <= 0:
-                outcome = self._resolve_zero_health(npc, start_health)
-
-            self.state.news_manager.create_event(
-                hour=hour,
-                minute=0,
-                sector_id=npc.sector_id,
-                event_type="anomaly_hit",
-                participants=[npc.id],
-                result=outcome,
-                importance=60 if outcome == "dead" else 30,
-                summary=f"NPC {npc.id} попал в аномалию {anomaly.id} ({outcome})",
-                details={"damage": result["damage"], "anomaly_id": anomaly.id},
-            )
-
-        self._check_monster_anomaly_contacts(hour, is_night)
-        self._schedule_encounters(is_night, hour)
-        # Штурм убежищ людьми в выброс (§12.7, условие B)
-        self._process_emission_shelter_assault(hour)
 
     def _check_monster_anomaly_contacts(self, hour: int, is_night: bool) -> None:
         for monster in self.state.monsters:
@@ -4031,3 +3892,16 @@ class SimulationEngine:
             "active_anomalies": active_anomalies,
             "total_events": self.state.news_manager.get_total_count(),
         }
+
+    # ── Обёртки обратной совместимости (Этап 3, Промпт 3.6) ──
+    # Эти методы удалены в simulation/phases/phase05_movement.py
+    # и simulation/phases/phase06_detections.py, но оставлены как алиасы
+    # для тестов, которые вызывают их напрямую.
+
+    def _phase5_movement(self, hour: int, is_night: bool) -> None:
+        """Алиас: делегирует run_phase5_movement (тело в simulation/phases/phase05_movement.py)."""
+        run_phase5_movement(self.context)
+
+    def _phase6_detections(self, hour: int) -> None:
+        """Алиас: делегирует run_phase6_detections (тело в simulation/phases/phase06_detections.py)."""
+        run_phase6_detections(self.context)

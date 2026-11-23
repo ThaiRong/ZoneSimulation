@@ -12,6 +12,8 @@ from zonesim.simulation.phases.phase01_scheduled import run_phase1_scheduled
 from zonesim.simulation.phases.phase02_environment import run_phase2_environment
 from zonesim.simulation.phases.phase03_knowledge import run_phase3_knowledge
 from zonesim.simulation.phases.phase04_intentions import run_phase4_intentions
+from zonesim.simulation.phases.phase05_movement import run_phase5_movement
+from zonesim.simulation.phases.phase06_detections import run_phase6_detections
 
 __all__ = [
     "run_phase0_check",
@@ -19,4 +21,6 @@ __all__ = [
     "run_phase2_environment",
     "run_phase3_knowledge",
     "run_phase4_intentions",
+    "run_phase5_movement",
+    "run_phase6_detections",
 ]
