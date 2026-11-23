@@ -3,7 +3,7 @@
 from zonesim.combat import CombatSystem
 from zonesim.combat.base import Combatant
 from zonesim.simulation.engine import SimulationEngine
-from zonesim.simulation.phases import run_phase6_detections
+from zonesim.simulation.phases import run_phase6_detections, run_phase7_actions
 from zonesim.world.entity import EntityStatus
 
 
@@ -132,10 +132,10 @@ class TestEngineCombat:
 
         engine.context.hour = engine.state.time.hour
         engine.context.day = engine.state.time.day
-        engine.context.is_night = engine.state.time.is_night()
+        engine.context.is_night = False
         run_phase6_detections(engine.context)
         assert len(engine._pending_battles) == 1
-        engine._phase7_actions(engine.state.time.hour, is_night=False)
+        run_phase7_actions(engine.context)
 
         battles = [e for e in engine.state.news_manager.events if e.event_type == "combat"]
         assert len(battles) == 1

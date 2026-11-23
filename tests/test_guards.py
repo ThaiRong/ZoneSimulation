@@ -3,6 +3,7 @@
 import pytest
 
 from zonesim.simulation.engine import SimulationEngine
+from zonesim.simulation.phases import run_phase7_actions
 from zonesim.world.entity import EntityStatus
 from zonesim.world.item import ItemType
 
@@ -154,7 +155,10 @@ class TestGuardReplenishment:
         engine._process_guard_rotation(hour=24)
         assert guard.status == EntityStatus.SLEEPING
         # час отдыха/сна не будит лечащегося охранника
-        engine._phase7_actions(engine.state.time.hour, is_night=False)
+        engine.context.hour = engine.state.time.hour
+        engine.context.day = engine.state.time.day
+        engine.context.is_night = False
+        run_phase7_actions(engine.context)
         assert guard.status == EntityStatus.SLEEPING
         assert guard.on_treatment
 

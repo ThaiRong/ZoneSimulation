@@ -105,6 +105,7 @@ from zonesim.simulation.phases import (
     run_phase4_intentions,
     run_phase5_movement,
     run_phase6_detections,
+    run_phase7_actions,
 )
 
 
@@ -1914,7 +1915,7 @@ class SimulationEngine:
         run_phase6_detections(self.context)
 
         # Фаза 7: Основные действия
-        self._phase7_actions(hour, is_night)
+        run_phase7_actions(self.context)
 
         # Фаза 8: Воздействие окружающей среды
         self._phase8_environment(hour)
@@ -3633,118 +3634,6 @@ class SimulationEngine:
                         return True
 
         return False
-
-    def _phase7_actions(self, hour: int, is_night: bool) -> None:
-        """Фаза 7: сначала бои, затем остальные основные действия (§8)."""
-        self._execute_battles(hour)
-        fed_monster_groups = self._process_monster_feeding(hour)
-        acted_groups = set()
-        for group in self.state.human_groups.values():
-            if self._process_corpse_action(group, hour) is not None:
-                acted_groups.add(group.id)
-        for group in self.state.human_groups.values():
-            if group.id in acted_groups or group.intention not in (DESTROY, CAPTURE):
-                continue
-            if group.intention == DESTROY:
-                done = self._process_destroy_anomaly(group, hour, is_night)
-            else:
-                done = self._process_capture_monster(group, hour)
-            if done:
-                acted_groups.add(group.id)
-
-        resting_groups = [
-            group for group in self.state.human_groups.values()
-            if group.intention == REST
-        ]
-        self._process_rest_exchanges(hour, resting_groups)
-        self._process_rest_trade(hour, resting_groups)
-
-        # Создание убежищ (§7.10)
-        for group in self.state.human_groups.values():
-            if group.intention != CREATE_SHELTER:
-                continue
-            if self._process_create_shelter(group, hour):
-                acted_groups.add(group.id)
-                group.intention = REST  # после создания — отдых в убежище
-        for group in self.state.human_groups.values():
-            if group.id in acted_groups or group.intention != HELP:
-                continue
-            distress = self._active_distress_for(group, hour)
-            members = self._active_members(group)
-            if distress is None or not members:
-                continue
-            if group.sector_id == distress["sector_id"]:
-                self._aid_distress_group(group, members, distress, hour)
-                acted_groups.add(group.id)
-        # _apply_emission_exposure вызывается в фазе 1 — ДО движения групп
-        for npc in self.state.humans:
-            if npc.id in self._combat_human_ids or npc.group_id in acted_groups:
-                continue
-            if npc.status == EntityStatus.SLEEPING:
-                # Инвариант #13: будим SLEEPING если comfort=True но нет защиты
-                group = self.state.human_groups.get(npc.group_id)
-                if group and group.comfort:
-                    if not self._has_strict_comfort(
-                        group,
-                        {m.id: m for m in self.state.humans},
-                        {n.id: n for n in self.state.stationary_humans},
-                        self.state.shelters,
-                        self.state.temp_shelters,
-                        self.state.sectors,
-                        npc.sector_id,
-                        npc.faction,
-                    ):
-                        # Разбуживаем ВСЕХ SLEEPING NPC группы
-                        group.comfort = False
-                        for mid in group.members:
-                            for m in self.state.humans:
-                                if m.id == mid and m.status == EntityStatus.SLEEPING:
-                                    m.status = EntityStatus.ACTIVE
-                                    m.intention = REST
-                if not getattr(npc, "on_treatment", False):
-                    self._sleep_tick(npc)
-                continue
-            if npc.status == EntityStatus.UNCONSCIOUS:
-                self._unconscious_tick(npc, hour)
-                continue
-            if npc.status != EntityStatus.ACTIVE:
-                continue
-
-            # Базовый расход выносливости за час бодрствования (§14.1)
-            update_stamina(npc, STAMINA_COST_AWAKE, "awake", self.state.time)
-            if npc.status != EntityStatus.ACTIVE:
-                continue  # истощение → потеря сознания
-
-            if npc.intention == SLEEP:
-                # Инвариант #13: SLEEP только при реальных условиях комфорта
-                # (проверка в Phase 7, т.к. shelter мог expire между Phase 4 и Phase 7)
-                group = self.state.human_groups.get(npc.group_id)
-                if group and group.comfort:
-                    if not self._has_strict_comfort(
-                        group,
-                        {m.id: m for m in self.state.humans},
-                        {n.id: n for n in self.state.stationary_humans},
-                        self.state.shelters,
-                        self.state.temp_shelters,
-                        self.state.sectors,
-                        npc.sector_id,
-                        npc.faction,
-                    ):
-                        # Нет комфорта — отменяем сон
-                        npc.intention = REST
-                        group.comfort = False
-
-                if npc.intention == SLEEP:
-                    npc.status = EntityStatus.SLEEPING
-                    npc.intention = SLEEP  # инвариант #5: спящие имеют SLEEP
-            elif npc.intention == REST:
-                self._rest_tick(npc)
-            elif npc.intention in (RESEARCH, ARTIFACT_SEARCH):
-                self._research_tick(npc, hour)
-            elif npc.intention == EXIT:
-                self._exit_tick(npc, hour)
-
-        self._process_monster_rest(fed_monster_groups, is_night)
 
     def _phase8_environment(self, hour: int) -> None:
         """Фаза 8: Воздействие окружающей среды."""

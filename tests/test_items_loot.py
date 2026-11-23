@@ -5,6 +5,7 @@ from zonesim.combat.base import Combatant
 from zonesim.combat.loot import Corpse, LootManager
 from zonesim.persistence.serialization import state_to_dict
 from zonesim.simulation.engine import SimulationEngine
+from zonesim.simulation.phases import run_phase7_actions
 from zonesim.world.entity import EntityStatus
 from zonesim.world.item import Item, ItemType
 
@@ -151,7 +152,10 @@ def test_harvesting_monster_parts_takes_hour_and_preserves_condition():
     stamina_before = {npc.id: npc.stamina for npc in members}
     inventory_before = len(leader.inventory)
 
-    engine._phase7_actions(engine.state.time.hour, is_night=False)
+    engine.context.hour = engine.state.time.hour
+    engine.context.day = engine.state.time.day
+    engine.context.is_night = False
+    run_phase7_actions(engine.context)
 
     parts = [
         engine.state.items[item_id] for item_id in leader.inventory

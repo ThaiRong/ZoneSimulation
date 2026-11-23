@@ -3,8 +3,9 @@
 Этап 3, Промпт 3.3 (корректировка): полная инвентаризация всех уникальных
 методов SimulationEngine для последующего извлечения фаз и сервисов (§20.2 ТЗ).
 
-**Файл:** `src/zonesim/simulation/engine.py` (4307 строк, 132 метода)
+**Файл:** `src/zonesim/simulation/engine.py` (3783 строки, 124 метода)
 **Покрытие:** 100% уникальных методов (по одному разу каждый)
+**Этап 3, Промпт 3.7C:** обновление после извлечения фаз 0–7 в `simulation/phases/phaseNN_*.py`.
 
 ## Таблица методов
 
@@ -79,8 +80,7 @@
 | 67 | _log_relation_change | 1832 | relations/journal | Запись изменения в журнал | relations/journal.py | 1 |
 | 68 | _check_and_journal_relations | 1845 | relations/journal | Проверка и запись изменений | relations/journal.py | 1 |
 | 69 | simulate_hour | 1859 | core/orchestrator | Главный почасовой цикл — 11 фаз | engine.py | 0-10 |
-| 70 | _phase0_check | 1943 | phase/0_check | Точка входа фазы 0: проверка состояния | phases/phase0_check.py | 0 |
-| 71 | _sync_human_groups | 1952 | world/groups | Убрать выбывших, удалить пустые группы, выбрать лидеров | world/groups.py | 0, 9 |
+| 70 | _sync_human_groups | 1952 | world/groups | Убрать выбывших, удалить пустые группы, выбрать лидеров | world/groups.py | 0, 9 |
 | 72 | _phase1_scheduled | 1969 | phase/1_scheduled | Точка входа фазы 1: запланированные события | phases/phase1_scheduled.py | 1 |
 | 73 | _phase2_environment | 2033 | phase/2_environment | Точка входа фазы 2: окружающая среда и торговля | phases/phase2_environment.py | 2 |
 | 74 | _phase3_knowledge | 2050 | phase/3_knowledge | Точка входа фазы 3: обнаружение и сведения | phases/phase3_knowledge.py | 3 |
@@ -130,18 +130,17 @@
 | 118 | _damage_carried_valuables | 3672 | combat/loot | Порча ценностей при бою | combat/loot.py | 7 |
 | 119 | _create_corpse | 3692 | combat/loot | Создание трупа | combat/loot.py | 7 |
 | 120 | _process_corpse_action | 3716 | combat/loot | Действия с трупами | combat/loot.py | 7 |
-| 121 | _process_monster_feeding | 3758 | monsters/feeding | Кормление монстров | monsters/feeding.py | 7 |
-| 122 | _process_monster_rest | 3783 | monsters/rest | Отдых монстров после еды | monsters/rest.py | 7 |
-| 123 | _process_destroy_anomaly | 3824 | actions/destroy | Уничтожение аномалии | actions/destroy.py | 7 |
-| 124 | _process_capture_monster | 3914 | actions/capture | Захват монстра | actions/capture.py | 7 |
-| 125 | _has_strict_comfort | 3999 | needs/comfort | Strict comfort для invariant | needs/comfort.py | 4, 7 |
-| 126 | _phase7_actions | 4049 | phase/7_actions | Точка входа фазы 7: основные действия | phases/phase7_actions.py | 7 |
-| 127 | _phase8_environment | 4161 | phase/8_environment | Точка входа фазы 8: воздействие среды | phases/phase8_environment.py | 8 |
-| 128 | _process_artifact_formations | 4191 | anomalies/artifact | Образование артефактов | anomalies/artifact.py | 2 |
-| 129 | _phase9_consequences | 4215 | phase/9_consequences | Точка входа фазы 9: последствия | phases/phase9_consequences.py | 9 |
-| 130 | _process_daily_export | 4227 | economy/export | Ежедневный экспорт артефактов | economy/export.py | 9 |
-| 131 | _phase10_report | 4275 | phase/10_report | Автосохранение + отчёт | phases/phase10_report.py | 10 |
-| 132 | get_state_summary | 4289 | core/summary | Сводка состояния для UI/журнала | engine.py | 10 |
+| 121 | _process_monster_feeding | 3569 | monsters/feeding | Кормление монстров | monsters/feeding.py | 7 |
+| 122 | _process_monster_rest | 3594 | monsters/rest | Отдых монстров после еды | monsters/rest.py | 7 |
+| 123 | _process_destroy_anomaly | 3413 | actions/destroy | Уничтожение аномалии | actions/destroy.py | 7 |
+| 124 | _process_capture_monster | 3503 | actions/capture | Захват монстра | actions/capture.py | 7 |
+| 125 | _has_strict_comfort | 3588 | needs/comfort | Strict comfort для invariant | needs/comfort.py | 4, 7 |
+| 126 | _phase8_environment | 3638 | phase/8_environment | Точка входа фазы 8: воздействие среды | phases/phase8_environment.py | 8 |
+| 127 | _process_artifact_formations | 3668 | anomalies/artifact | Образование артефактов | anomalies/artifact.py | 2 |
+| 128 | _phase9_consequences | 3692 | phase/9_consequences | Точка входа фазы 9: последствия | phases/phase9_consequences.py | 9 |
+| 129 | _process_daily_export | 3704 | economy/export | Ежедневный экспорт артефактов | economy/export.py | 9 |
+| 130 | _phase10_report | 3752 | phase/10_report | Автосохранение + отчёт | phases/phase10_report.py | 10 |
+| 131 | get_state_summary | 3766 | core/summary | Сводка состояния для UI/журнала | engine.py | 10 |
 
 ## Сводная статистика по категориям
 
@@ -151,7 +150,7 @@
 | economy | 16 |
 | combat | 15 |
 | anomalies | 12 |
-| phase | 11 |
+| phase | 3 |
 | needs | 9 |
 | actions | 8 |
 | core | 6 |
@@ -160,7 +159,7 @@
 | monsters | 4 |
 | worldgen | 1 |
 | ai | 1 |
-| **ИТОГО** | **132** |
+| **ИТОГО** | **124** |
 
 ## Целевая структура модулей (соответствие ТЗ §20.2)
 
