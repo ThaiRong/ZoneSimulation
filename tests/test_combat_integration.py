@@ -3,6 +3,7 @@
 from zonesim.combat import CombatSystem
 from zonesim.combat.base import Combatant
 from zonesim.simulation.engine import SimulationEngine
+from zonesim.simulation.phases import run_phase6_detections
 from zonesim.world.entity import EntityStatus
 
 
@@ -129,7 +130,7 @@ class TestEngineCombat:
         npc, monster = self._isolate_encounter(engine)
         engine.state.sectors[npc.sector_id].neighbors = []
 
-        engine._phase6_detections(engine.state.time.hour)
+        run_phase6_detections(engine.context)
         assert len(engine._pending_battles) == 1
         engine._phase7_actions(engine.state.time.hour, is_night=False)
 
@@ -145,7 +146,7 @@ class TestEngineCombat:
         engine = SimulationEngine(seed=42)
         npc, _monster = self._isolate_encounter(engine, at_base=True)
 
-        engine._phase6_detections(engine.state.time.hour)
+        run_phase6_detections(engine.context)
 
         assert len(engine._pending_battles) == 1
         defenders = engine._pending_battles[0]["defenders"]

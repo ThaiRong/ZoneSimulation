@@ -5,7 +5,7 @@ from collections import Counter
 from zonesim.ai import EXPLORE
 from zonesim.generation.worldgen import generate_world
 from zonesim.simulation.engine import SimulationEngine
-from zonesim.simulation.phases import run_phase4_intentions
+from zonesim.simulation.phases import run_phase4_intentions, run_phase5_movement
 from zonesim.world.entity import EntityStatus
 
 
@@ -94,7 +94,7 @@ class TestHumanGroups:
         group.intention = EXPLORE
         old_sector = group.sector_id
 
-        engine._phase5_movement(engine.state.time.hour, is_night=False)
+        run_phase5_movement(engine.context)
 
         assert group.sector_id != old_sector
         assert {npc.sector_id for npc in members} == {group.sector_id}
@@ -110,7 +110,7 @@ class TestHumanGroups:
         group.intention = EXPLORE
         old_sector = group.sector_id
 
-        engine._phase5_movement(engine.state.time.hour, is_night=False)
+        run_phase5_movement(engine.context)
 
         assert group.sector_id == old_sector
         assert {npc.sector_id for npc in members} == {old_sector}

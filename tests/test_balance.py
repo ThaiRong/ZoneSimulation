@@ -7,6 +7,7 @@ from zonesim.anomalies.core import Anomaly, AnomalyStatus, AnomalyType
 from zonesim.combat import CombatSystem
 from zonesim.combat.base import Combatant
 from zonesim.simulation.engine import SimulationEngine
+from zonesim.simulation.phases import run_phase6_detections
 from zonesim.world.entity import EntityStatus, Monster, MonsterSpecies
 from zonesim.world.item import ItemType, give_item
 
@@ -63,7 +64,7 @@ class TestAnomalyDetector:
         hour = engine.state.time.hour
         # без детектора: avoid = 50 + 0.7×(50−50) = 50; бросок 50 → попадание
         engine.state.rng.random = lambda: 0.5
-        engine._phase6_detections(hour)
+        run_phase6_detections(engine.context)
         assert npc.health < 1000
 
     def test_detector_group_member_avoids(self):
@@ -91,7 +92,7 @@ class TestAnomalyDetector:
         hour = engine.state.time.hour
         # с детектором: avoid = 50 + 25 = 75; бросок 50 → избежал
         engine.state.rng.random = lambda: 0.5
-        engine._phase6_detections(hour)
+        run_phase6_detections(engine.context)
         assert npc.health == 1000
 
 

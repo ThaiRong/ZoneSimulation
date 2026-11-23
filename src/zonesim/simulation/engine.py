@@ -3892,16 +3892,3 @@ class SimulationEngine:
             "active_anomalies": active_anomalies,
             "total_events": self.state.news_manager.get_total_count(),
         }
-
-    # ── Обёртки обратной совместимости (Этап 3, Промпт 3.6) ──
-    # Эти методы удалены в simulation/phases/phase05_movement.py
-    # и simulation/phases/phase06_detections.py, но оставлены как алиасы
-    # для тестов, которые вызывают их напрямую.
-
-    def _phase5_movement(self, hour: int, is_night: bool) -> None:
-        """Алиас: делегирует run_phase5_movement (тело в simulation/phases/phase05_movement.py)."""
-        run_phase5_movement(self.context)
-
-    def _phase6_detections(self, hour: int) -> None:
-        """Алиас: делегирует run_phase6_detections (тело в simulation/phases/phase06_detections.py)."""
-        run_phase6_detections(self.context)
