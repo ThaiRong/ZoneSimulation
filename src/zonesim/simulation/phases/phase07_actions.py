@@ -17,6 +17,7 @@ from zonesim.ai import (
     REST,
     SLEEP,
 )
+from zonesim.needs.comfort import has_strict_comfort
 from zonesim.needs.sleep import (
     STAMINA_COST_AWAKE,
     update_stamina,
@@ -80,7 +81,7 @@ def run_phase7_actions(ctx: SimulationContext) -> None:
             # Инвариант #13: будим SLEEPING если comfort=True но нет защиты
             group = state.human_groups.get(npc.group_id)
             if group and group.comfort:
-                if not engine._has_strict_comfort(
+                if not has_strict_comfort(
                     group,
                     {m.id: m for m in state.humans},
                     {n.id: n for n in state.stationary_humans},
@@ -116,7 +117,7 @@ def run_phase7_actions(ctx: SimulationContext) -> None:
             # (проверка в Phase 7, т.к. shelter мог expire между Phase 4 и Phase 7)
             group = state.human_groups.get(npc.group_id)
             if group and group.comfort:
-                if not engine._has_strict_comfort(
+                if not has_strict_comfort(
                     group,
                     {m.id: m for m in state.humans},
                     {n.id: n for n in state.stationary_humans},

@@ -15,8 +15,10 @@ from zonesim.ai import (
 )
 from zonesim.anomalies.core import AnomalyStatus
 from zonesim.knowledge.fact import KnowledgeType
+from zonesim.needs.comfort import has_strict_comfort
 from zonesim.simulation.context import SimulationContext
 from zonesim.world.entity import EntityStatus
+from zonesim.world.faction import distance_to_border, home_sector_id
 
 
 def run_phase4_intentions(ctx: SimulationContext) -> None:
@@ -62,7 +64,8 @@ def run_phase4_intentions(ctx: SimulationContext) -> None:
 
         here = [f for f in facts if f.payload.get("sector_id") == group.sector_id]
         researchable = [f for f in here if not f.payload.get("researched")]
-        home = engine._home_sector_id(leader.faction)
+        home = home_sector_id(state.sectors, leader.faction, engine._home_cache)
+        bd = distance_to_border(state.sectors, engine._border_dist)
         all_npcs = {n.id: n for n in state.humans + state.stationary_humans}
         hours_awake = max(
             hour - getattr(member, "awake_since_hour", hour) for member in members
@@ -82,7 +85,7 @@ def run_phase4_intentions(ctx: SimulationContext) -> None:
 
         # Устанавливаем group.comfort для инварианта #13
         all_npcs = {n.id: n for n in state.humans}
-        group.comfort = engine._has_strict_comfort(
+        group.comfort = has_strict_comfort(
             group, all_npcs,
             {n.id: n for n in state.stationary_humans},
             state.shelters,
@@ -101,7 +104,7 @@ def run_phase4_intentions(ctx: SimulationContext) -> None:
             stamina_share=sum(npc.stamina_share for npc in members) / len(members),
             at_home=(home is not None and group.sector_id == home),
             home_sector_id=home,
-            distance_to_border=engine._distance_to_border(group.sector_id),
+            distance_to_border=bd.get(group.sector_id) if bd else None,
             has_known_anomaly=any(
                 state.anomalies[f.subject_id].status == AnomalyStatus.ACTIVE
                 for f in researchable if f.subject_id in state.anomalies

@@ -5,6 +5,7 @@ from zonesim.combat.base import Combatant
 from zonesim.simulation.engine import SimulationEngine
 from zonesim.simulation.phases import run_phase6_detections, run_phase7_actions
 from zonesim.world.entity import EntityStatus
+from zonesim.world.faction import home_sector_id
 
 
 class TestCombatLoop:
@@ -87,7 +88,7 @@ class TestEngineCombat:
         group = next(g for g in engine.state.human_groups.values() if g.member_count == 1)
         humans = {npc.id: npc for npc in engine.state.humans}
         npc = humans[group.members[0]]
-        home = engine._home_sector_id(npc.faction)
+        home = home_sector_id(engine.state.sectors, npc.faction, engine._home_cache)
         sector_id = home if at_base else next(
             sid for sid, sector in engine.state.sectors.items()
             if not sector.is_faction_start and sector.neighbors

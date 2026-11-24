@@ -21,6 +21,7 @@ from zonesim.ai import (
 from zonesim.needs.sleep import STAMINA_COST_MOVEMENT, update_stamina
 from zonesim.simulation.context import SimulationContext
 from zonesim.world.entity import EntityStatus
+from zonesim.world.faction import home_sector_id
 
 
 def run_phase5_movement(ctx: SimulationContext) -> None:
@@ -76,7 +77,7 @@ def run_phase5_movement(ctx: SimulationContext) -> None:
         if group.intention == EXIT:
             target_ids = border_ids
         elif group.intention == REST:
-            home = engine._home_sector_id(leader.faction)
+            home = home_sector_id(state.sectors, leader.faction, engine._home_cache)
             if home is not None and group.sector_id != home:
                 target_ids = {home}
         elif group.intention == HELP:

@@ -6,6 +6,7 @@ from zonesim.simulation.engine import SimulationEngine
 from zonesim.simulation.phases import run_phase7_actions
 from zonesim.world.entity import EntityStatus
 from zonesim.world.item import ItemType
+from zonesim.combat.power import squad_power
 
 
 def _guards(engine):
@@ -292,8 +293,8 @@ class TestMonsterAttackDecision:
         """Конечная сила людей растёт от лучшего оружия."""
         engine = SimulationEngine(seed=42)
         npc = engine.state.humans[0]
-        strong = engine._squad_power([npc])
+        strong = squad_power([npc], engine.state.items)
         weapon = engine.state.items[npc.equipped_weapon_id]
         weapon.properties["base_damage"] = 5  # разоружить
-        weak = engine._squad_power([npc])
+        weak = squad_power([npc], engine.state.items)
         assert strong > weak * 2

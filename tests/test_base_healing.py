@@ -5,6 +5,7 @@ import pytest
 from zonesim.ai import EXIT, REST, SLEEP, IntentionContext, evaluate_actions
 from zonesim.simulation.engine import SimulationEngine
 from zonesim.world.entity import EntityStatus
+from zonesim.world.faction import home_sector_id
 
 from tests.test_actions_integration import _solo_group
 
@@ -21,7 +22,7 @@ def _ctx(**overrides):
 
 class TestBaseHealing:
     def _at_home(self, engine, npc, group):
-        home = engine._home_sector_id(npc.faction)
+        home = home_sector_id(engine.state.sectors, npc.faction, engine._home_cache)
         group.sector_id = home
         npc.sector_id = home
         return home

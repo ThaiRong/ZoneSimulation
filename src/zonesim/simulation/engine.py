@@ -58,6 +58,9 @@ from zonesim.world.shelter import StormShelter, Shelter
 from zonesim.monsters.behavior import choose_group_intention, select_weakest_target, species_value
 from zonesim.monsters.feed import FeedManager
 from zonesim.monsters.hunt import should_pursue
+from zonesim.world.faction import group_faction, home_sector_id, distance_to_border
+from zonesim.world.sectors import sector_humans
+from zonesim.combat.power import squad_power, monster_group_power
 
 from zonesim.economy.contracts import ContractManager
 from zonesim.economy.trade import CaptureManager, ImportExportManager, ExportRecord
@@ -1648,8 +1651,8 @@ class SimulationEngine:
         for sector_id, groups in by_sector.items():
             for index, first in enumerate(groups):
                 for second in groups[index + 1:]:
-                    first_faction = self._group_faction(first)
-                    second_faction = self._group_faction(second)
+                    first_faction = group_faction(first, self.state)
+                    second_faction = group_faction(second, self.state)
                     if first_faction is None or second_faction is None:
                         continue
                     relation = self.state.faction_relations.get(first_faction, second_faction)
@@ -1671,11 +1674,6 @@ class SimulationEngine:
                         )
                         self.state.faction_relations.change(first_faction, second_faction, delta)
                         self._log_relation_change(hour, first_faction, second_faction, delta, evt.id)
-
-    def _group_faction(self, group: HumanGroup) -> str | None:
-        npcs = {npc.id: npc for npc in self.state.humans}
-        leader = npcs.get(group.leader_id)
-        return leader.faction if leader is not None else None
 
     def _exchange_knowledge(self, group_a: HumanGroup, group_b: HumanGroup, hour: int) -> None:
         """Обмен сведениями между лидерами отдыхающих групп. (§17)"""
@@ -2535,16 +2533,6 @@ class SimulationEngine:
             "feed_corpse_id": feed_corpse_id,
         })
 
-    def _monster_group_power(self, members: list[Monster]) -> float:
-        total = 0.0
-        for monster in members:
-            health = 0.35 + 0.65 * monster.health_share
-            stamina = 0.5 + 0.5 * monster.stamina_share
-            total += monster.species_params.get("species_power", 0.33) * (
-                0.5 + monster.attack / 100
-            ) * health * stamina
-        return total * min(1.15, 1 + 0.03 * (len(members) - 1))
-
     def _resolve_feeding_competition(self, engaged_monsters: set[int], hour: int) -> None:
         claims: dict[int, list[tuple[MonsterGroup, list[Monster]]]] = {}
         for group in self.state.monster_groups.values():
@@ -2564,12 +2552,12 @@ class SimulationEngine:
                 claims.setdefault(corpse.id, []).append((group, members))
 
         for corpse_id, competitors in claims.items():
-            competitors.sort(key=lambda item: self._monster_group_power(item[1]), reverse=True)
+            competitors.sort(key=lambda item: monster_group_power(item[1]), reverse=True)
             strongest = competitors[0]
             if len(competitors) > 1:
                 challenger = competitors[1]
-                strong_power = self._monster_group_power(strongest[1])
-                weak_power = self._monster_group_power(challenger[1])
+                strong_power = monster_group_power(strongest[1])
+                weak_power = monster_group_power(challenger[1])
                 difference = abs(strong_power - weak_power) / max(strong_power, weak_power, 0.001)
                 rested = all(
                     hour - getattr(group, "last_combat_hour", -100) >= COMBAT_COOLDOWN_HOURS
@@ -2595,29 +2583,6 @@ class SimulationEngine:
             if npc.sector_id == sector_id and npc.stationary_role == "guard"
             and npc.status == EntityStatus.ACTIVE
         ]
-
-    def _squad_power(self, members: list) -> float:
-        """Конечная боевая сила отряда: характеристики, снаряжение,
-        состояние (§11.2)."""
-        total = 0.0
-        for member in members:
-            if isinstance(member, Monster):
-                sp = SPECIES_POWER_VALUE.get(species_value(member), 0.33)
-                bp = sp * (0.5 + member.attack / 100.0)
-            else:
-                weapon = self.state.items.get(member.equipped_weapon_id)
-                damage = (
-                    weapon.properties.get("base_damage", member.weapon_damage)
-                    if weapon else member.weapon_damage
-                )
-                weapon_factor = max(damage / 20.0, 0.25)
-                condition_factor = max(0.25, (weapon.condition if weapon else 50) / 100.0)
-                bp = 1.0 * (0.5 + member.attack / 100.0) * weapon_factor * condition_factor
-            h = 0.35 + 0.65 * member.health_share
-            s = 0.5 + 0.5 * member.stamina_share
-            total += bp * h * s
-        return total
-
     def _monsters_attack(self, monsters: list[Monster], prey: list, is_night: bool) -> bool:
         predator = monsters[0]
         species = species_value(predator)
@@ -2633,12 +2598,12 @@ class SimulationEngine:
         if not prey_is_monster and health_share > 0.6 and len(monsters) < len(prey):
             return False  # здоровая группа людей численно сильнее — не атаковать
         # решение по конечной силе отряда, а не только по здоровью и численности
-        prey_power = self._squad_power(prey)
+        prey_power = squad_power(prey, self.state.items)
         if not prey_is_monster:
             sector = self.state.sectors.get(prey[0].sector_id)
             if sector is not None and sector.is_faction_start:
                 prey_power *= 1.0 + BASE_FORTIFICATION_BONUS  # укрепление базы
-        predator_power = self._squad_power(monsters)
+        predator_power = squad_power(monsters, self.state.items)
         if predator_power <= 0:
             return False
         if prey_power > predator_power * MONSTER_ATTACK_POWER_LIMIT:
@@ -2667,51 +2632,18 @@ class SimulationEngine:
 
     # --- Вспомогательные методы намерений ---
 
-    def _home_sector_id(self, faction: str) -> int | None:
-        """Домашняя база фракции (§6.2)."""
-        if faction not in self._home_cache:
-            self._home_cache[faction] = next(
-                (s.id for s in self.state.sectors.values()
-                 if s.is_faction_start and s.controller_faction == faction),
-                None,
-            )
-        return self._home_cache[faction]
-
-    def _distance_to_border(self, sector_id: int) -> int | None:
-        """Расстояние в рёбрах до ближайшего граничного сектора (§6.2)."""
-        if self._border_dist is None:
-            dist: dict[int, int] = {}
-            queue = [sid for sid, s in self.state.sectors.items() if s.is_border]
-            for sid in queue:
-                dist[sid] = 0
-            while queue:
-                current = queue.pop(0)
-                for nid in self.state.sectors[current].neighbors:
-                    if nid not in dist:
-                        dist[nid] = dist[current] + 1
-                        queue.append(nid)
-            self._border_dist = dist
-        return self._border_dist.get(sector_id)
-
     def _known_anomaly_sectors(self, npc: HumanNPC) -> set[int]:
         kb = self.state.knowledge_bases.get(npc.id)
         if not kb:
             return set()
         return known_anomaly_sectors(kb.get_facts(KnowledgeType.ANOMALY))
 
-    def _sector_humans(self, sector_id: int) -> dict[int, HumanNPC]:
-        return {
-            npc.id: npc
-            for npc in self.state.humans + self.state.stationary_humans
-            if npc.sector_id == sector_id
-        }
-
     def _sleep_tick(self, npc: HumanNPC) -> None:
         """Сон: восстановление выносливости по §14.1 (комфорт 4 ч / иначе 6 ч)."""
         group = HumanGroup(id=-(npc.id + 1), members=[npc.id], sector_id=npc.sector_id)
         human_sleep_recover(
             group,
-            self._sector_humans(npc.sector_id),
+            sector_humans(self.state.humans, self.state.stationary_humans, npc.sector_id),
             self.state.time,
             self.state.rng,
             stationary={n.id: n for n in self.state.stationary_humans},
@@ -2767,7 +2699,7 @@ class SimulationEngine:
         # Истощение: минимум час, затем пробуждение с 10% выносливости (§14.2)
         group = HumanGroup(id=-(npc.id + 1), members=[npc.id], sector_id=npc.sector_id)
         human_sleep_recover(
-            group, self._sector_humans(npc.sector_id), self.state.time, self.state.rng,
+            group, sector_humans(self.state.humans, self.state.stationary_humans, npc.sector_id), self.state.time, self.state.rng,
         )
 
     def _rest_tick(self, npc: HumanNPC) -> None:
@@ -2791,7 +2723,7 @@ class SimulationEngine:
     def _base_heal_tick(self, npc: HumanNPC) -> None:
         """Лечение на базе своей группировки: курс 2 часа до полного
         здоровья, оплата — половина цены аптечки за курс."""
-        home = self._home_sector_id(npc.faction)
+        home = home_sector_id(self.state.sectors, npc.faction, self._home_cache)
         if home is None or npc.sector_id != home or npc.health >= npc.max_health:
             return
         hour = self.state.time.hour
@@ -3587,56 +3519,6 @@ class SimulationEngine:
                 },
             )
         return True
-
-    def _has_strict_comfort(
-        self, group, all_npcs: dict[int, 'HumanNPC'],
-        stationary: dict[int, 'HumanNPC'],
-        shelters: dict[int, object], temp_shelters: dict[int, object],
-        sectors: dict[int, object], sector_id: int, faction: str | None,
-    ) -> bool:
-        """Strict comfort check для invariant #13 (без condition 6 awake_member).
-
-        Возвращает True только если есть РАБОТАЮЩАЯ защита:
-        (a) StormShelter в секторе ИЛИ active temp_shelter с participant_count>0;
-        (b) база фракции (is_faction_start=True) в секторе;
-        (c) stationary guard ACTIVE в секторе;
-        (d) guard_schedule: entry в members И член группы ACTIVE в секторе.
-        """
-        # (a) StormShelter в секторе
-        for shelter in shelters.values():
-            if (hasattr(shelter, 'sector_id') and shelter.sector_id == sector_id
-                    and type(shelter).__name__ == "StormShelter"):
-                return True
-
-        # (a) Active temp_shelter с participant_count>0 в секторе
-        for shelter in temp_shelters.values():
-            if (hasattr(shelter, 'sector_id') and shelter.sector_id == sector_id
-                    and hasattr(shelter, 'is_active') and shelter.is_active):
-                if hasattr(shelter, 'participant_count') and shelter.participant_count > 0:
-                    return True
-
-        # (b) База фракции в секторе
-        if faction:
-            for sid, sector in sectors.items():
-                if sid == sector_id and getattr(sector, "is_faction_start", False):
-                    ctrl = getattr(sector, "controller_faction", None)
-                    if ctrl is None or ctrl == faction:
-                        return True
-
-        # (c) Stationary guard ACTIVE в секторе
-        for n in stationary.values():
-            if (n.stationary_role == "guard" and n.status == EntityStatus.ACTIVE
-                    and n.sector_id == sector_id):
-                return True
-
-        # (d) Guard schedule: член группы ACTIVE в секторе
-        for entry in group.guard_schedule:
-            if entry.get("npc_id") in group.members:
-                for m in all_npcs.values():
-                    if m.id == entry["npc_id"] and m.status == EntityStatus.ACTIVE and m.sector_id == sector_id:
-                        return True
-
-        return False
 
     def _process_artifact_formations(self, hour: int) -> None:
         """Формирование артефактов — Фаза 2: Окружающая среда. (§12.5)"""
