@@ -5,7 +5,7 @@ from collections import Counter
 from zonesim.ai import EXPLORE
 from zonesim.generation.worldgen import generate_world
 from zonesim.simulation.engine import SimulationEngine
-from zonesim.simulation.phases import run_phase4_intentions, run_phase5_movement
+from zonesim.simulation.phases import run_phase4_intentions, run_phase5_movement, run_phase9_consequences
 from zonesim.world.entity import EntityStatus
 
 
@@ -128,7 +128,10 @@ class TestHumanGroups:
         npc = next(h for h in engine.state.humans if h.id == member_id)
         npc.status = EntityStatus.DEAD
 
-        engine._phase9_consequences(engine.state.time.hour)
+        engine.context.hour = engine.state.time.hour
+        engine.context.day = engine.state.time.day
+        engine.context.is_night = engine.state.time.is_night()
+        run_phase9_consequences(engine.context)
 
         assert member_id not in group.members
         assert npc.group_id is None

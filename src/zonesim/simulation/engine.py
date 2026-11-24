@@ -106,6 +106,9 @@ from zonesim.simulation.phases import (
     run_phase5_movement,
     run_phase6_detections,
     run_phase7_actions,
+    run_phase8_environment,
+    run_phase9_consequences,
+    run_phase10_report,
 )
 
 
@@ -1918,10 +1921,10 @@ class SimulationEngine:
         run_phase7_actions(self.context)
 
         # Фаза 8: Воздействие окружающей среды
-        self._phase8_environment(hour)
+        run_phase8_environment(self.context)
 
         # Фаза 9: Последствия
-        self._phase9_consequences(hour)
+        run_phase9_consequences(self.context)
 
         # Перед проверкой инвариантов — финальная согласованность укрытий (#23)
         self._free_emptied_shelters(hour)
@@ -1935,7 +1938,7 @@ class SimulationEngine:
 
         # Фаза 10: сначала фиксируется следующий час, затем выполняется автосохранение
         self.state.time.advance()
-        self._phase10_report(hour)
+        run_phase10_report(self.context)
 
         # Заполнить events событиями часа из news_manager
         events = [
@@ -3635,36 +3638,6 @@ class SimulationEngine:
 
         return False
 
-    def _phase8_environment(self, hour: int) -> None:
-        """Фаза 8: Воздействие окружающей среды."""
-        # Перемещение аномалий каждые 48 часов
-        if hour % 48 == 0:
-            start_ids = {s.id for s in self.state.sectors.values() if s.is_faction_start}
-            for anomaly in self.state.anomalies.values():
-                if anomaly.status == AnomalyStatus.ACTIVE:
-                    rng_val = self.state.rng.random()
-                    migration = check_anomaly_migration(
-                        anomaly, hour,
-                        sector_ids=self._anomaly_move_candidates(anomaly),
-                        faction_start_ids=start_ids,
-                        rng_value=rng_val,
-                    )
-                    if migration["moved"]:
-                        self._roll_trail_blockage(anomaly)
-                        self.state.news_manager.create_event(
-                            hour=hour,
-                            minute=0,
-                            sector_id=migration["to_sector"],
-                            event_type="anomaly_move",
-                            participants=[],
-                            result="moved",
-                            importance=20,
-                            summary=f"Аномалия {anomaly.id} переместилась",
-                            details=migration,
-                        )
-
-        # Формирование артефактов вынесено в _phase2_environment (§12.7, Фаза 2)
-
     def _process_artifact_formations(self, hour: int) -> None:
         """Формирование артефактов — Фаза 2: Окружающая среда. (§12.5)"""
         # Формирование артефактов; во время выброса — с ускорением (§12.7)
@@ -3688,18 +3661,6 @@ class SimulationEngine:
                         summary=f"Артефакт {artifact_result['rarity']} сформировался",
                         details=artifact_result,
                     )
-
-    def _phase9_consequences(self, hour: int) -> None:
-        """Фаза 9: последствия и актуализация состава групп. (§8)
-
-        — Синхронизация групп
-        — Экспорт артефактов и ресурсов (§16.4)
-        """
-        self._sync_human_groups()
-
-        # Экспорт артефактов и ресурсов (ежедневно)
-        if self.state.time.hour % 24 == 7:
-            self._process_daily_export(hour)
 
     def _process_daily_export(self, hour: int) -> None:
         """Ежедневный экспорт артефактов и ресурсов (§16.4).
@@ -3748,20 +3709,6 @@ class SimulationEngine:
                     "total_value": total_value,
                 },
             )
-
-    def _phase10_report(self, hour: int) -> None:
-        """Фаза 10: автосохранение после завершённого часа."""
-        if self.save_manager is None:
-            return
-        settings = self.state.config.get("persistence", {})
-        if not settings.get("autosave_enabled", True):
-            return
-        interval = settings.get("autosave_interval", 6)
-        slot_count = settings.get("autosave_slots", 3)
-        if interval <= 0 or slot_count <= 0 or self.state.time.hour % interval != 0:
-            return
-        slot_index = (self.state.time.hour // interval - 1) % slot_count
-        self.save(f"autosave_{slot_index}")
 
     def get_state_summary(self) -> dict[str, Any]:
         """Получает сводку текущего состояния."""
