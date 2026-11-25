@@ -40,6 +40,10 @@ def run_phase4_intentions(ctx: SimulationContext) -> None:
             snap[npc.id] = [f.to_dict() for f in kb.facts]
     state.knowledge_snapshot_at_intention = snap
 
+    # Предварительное вычисление расстояний до границы (BFS один раз, кэшируется в engine)
+    if engine._border_dist is None:
+        engine._border_dist = distance_to_border(state.sectors, None)
+
     for group in state.human_groups.values():
         group.select_leader(npcs)
         leader = npcs.get(group.leader_id) if group.leader_id is not None else None
@@ -65,7 +69,6 @@ def run_phase4_intentions(ctx: SimulationContext) -> None:
         here = [f for f in facts if f.payload.get("sector_id") == group.sector_id]
         researchable = [f for f in here if not f.payload.get("researched")]
         home = home_sector_id(state.sectors, leader.faction, engine._home_cache)
-        bd = distance_to_border(state.sectors, engine._border_dist)
         all_npcs = {n.id: n for n in state.humans + state.stationary_humans}
         hours_awake = max(
             hour - getattr(member, "awake_since_hour", hour) for member in members
@@ -104,7 +107,7 @@ def run_phase4_intentions(ctx: SimulationContext) -> None:
             stamina_share=sum(npc.stamina_share for npc in members) / len(members),
             at_home=(home is not None and group.sector_id == home),
             home_sector_id=home,
-            distance_to_border=bd.get(group.sector_id) if bd else None,
+            distance_to_border=engine._border_dist.get(group.sector_id) if engine._border_dist else None,
             has_known_anomaly=any(
                 state.anomalies[f.subject_id].status == AnomalyStatus.ACTIVE
                 for f in researchable if f.subject_id in state.anomalies
