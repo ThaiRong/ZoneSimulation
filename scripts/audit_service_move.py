@@ -6,10 +6,8 @@
 - --structural: структурные проверки (удалён/есть/нет импорта/размер/хэши)
 - --both: оба режима
 
-Запуск:
-    python scripts/audit_service_move.py --equivalent
-    python scripts/audit_service_move.py --structural
-    python scripts/audit_service_move.py --both
+Ожидание отклонений: expected_mismatches — точный список.
+Любое лишнее/неожиданное расхождение → FAIL.
 """
 from __future__ import annotations
 
@@ -20,7 +18,7 @@ import os
 import re
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -29,26 +27,36 @@ B1_PRE_COMMIT = "f04dade"
 
 
 @dataclass
+class MismatchEntry:
+    operator_index: int
+    expected_trans: str
+    expected_new: str
+
+
+@dataclass
 class MethodPair:
     old_name: str
     new_name: str
     target_module: str
     rules: list
-    known_diff: str = ""
+    expected_mismatches: list[MismatchEntry] = field(default_factory=list)
+    mismatch_note: str = ""
 
 
 BATCH_B1 = [
     MethodPair(
         "_has_strict_comfort", "has_strict_comfort", "needs/comfort.py",
         rules=[],
-        known_diff="",
+        expected_mismatches=[],
+        mismatch_note="",
     ),
     MethodPair(
         "_group_faction", "group_faction", "world/faction.py",
         rules=[
             (r"\bself\.state\.humans\b", "state.humans"),
         ],
-        known_diff="",
+        expected_mismatches=[],
+        mismatch_note="",
     ),
     MethodPair(
         "_home_sector_id", "home_sector_id", "world/faction.py",
@@ -56,11 +64,22 @@ BATCH_B1 = [
             (r"\bself\.state\.sectors\b", "sectors"),
             (r"\bself\._home_cache\b", "home_cache"),
         ],
-        known_diff=(
-            "home_sector_id: новая функция использует паттерн "
-            "'if hc is not None: return hc[f] ... hc[f]=result' вместо "
-            "'if f not in hc: hc[f]=next(...); return hc[f]'. "
-            "Логика идентична при hc is not None. Новая версия поддерживает hc=None."
+        expected_mismatches=[
+            MismatchEntry(1, "if faction not in home_cache:", "if home_cache is not None and faction in home_cache:"),
+            MismatchEntry(2, "home_cache[faction] = next", "return home_cache[faction]"),
+            MismatchEntry(3, "sectors.values()", "result = next"),
+            MismatchEntry(4, "is_faction_start", "(s.id for s in sectors"),
+            MismatchEntry(5, "None,", "is_faction_start"),
+            MismatchEntry(6, ")", "None,"),
+            MismatchEntry(7, "return home_cache[faction]", ")"),
+            MismatchEntry(8, "<MISSING>", "if home_cache is not None:"),
+            MismatchEntry(9, "<MISSING>", "home_cache[faction] = result"),
+            MismatchEntry(10, "<MISSING>", "return result"),
+        ],
+        mismatch_note=(
+            "home_sector_id: переструктурирован код — если home_cache is not None "
+            "возвращает из кэша, иначе вычисляет next(...) и записывает. "
+            "Старый: if f not in hc: hc[f]=next(...); return hc[f]."
         ),
     ),
     MethodPair(
@@ -69,12 +88,27 @@ BATCH_B1 = [
             (r"\bself\.state\.sectors\b", "sectors"),
             (r"\bself\._border_dist\b", "border_dist"),
         ],
-        known_diff=(
+        expected_mismatches=[
+            MismatchEntry(1, "if border_dist is None:", "if border_dist is not None:"),
+            MismatchEntry(2, "dist: dict[int, int]", "return border_dist"),
+            MismatchEntry(3, "queue = [sid for sid, s in sectors", "dist: dict[int, int]"),
+            MismatchEntry(4, "for sid in queue:", "queue = [sid for sid"),
+            MismatchEntry(5, "dist[sid] = 0", "for sid in queue:"),
+            MismatchEntry(6, "while queue:", "dist[sid] = 0"),
+            MismatchEntry(7, "current = queue.pop(0)", "while queue:"),
+            MismatchEntry(8, "for nid in sectors[current].neighbors", "current = queue.pop(0)"),
+            MismatchEntry(9, "if nid not in dist:", "for nid in sectors"),
+            MismatchEntry(10, "dist[nid] = dist[current] + 1", "if nid not in dist:"),
+            MismatchEntry(11, "queue.append(nid)", "dist[nid] = dist[current]"),
+            MismatchEntry(12, "border_dist = dist", "queue.append(nid)"),
+            MismatchEntry(13, "return border_dist.get(sector_id)", "return dist"),
+        ],
+        mismatch_note=(
             "distance_to_border: контракт изменён. Старый возвращал "
             "self._border_dist.get(sector_id) -> int|None. "
             "Новый возвращает dict[int,int] (полный BFS-словарь). "
-            "Вызывающая (phase04) компенсирует через .get(). "
-            "Кэш восстановлен в п.1 (write-back при None)."
+            "Вызывающая компенсирует через .get(). "
+            "Кэш восстановлен в фазе 4 (write-back при None)."
         ),
     ),
     MethodPair(
@@ -83,10 +117,13 @@ BATCH_B1 = [
             (r"\bself\.state\.humans\b", "state.humans"),
             (r"\bself\.state\.stationary_humans\b", "state.stationary_humans"),
         ],
-        known_diff=(
-            "sector_humans: новая сигнатура (humans, stationary_humans, sector_id) "
+        expected_mismatches=[
+            MismatchEntry(3, "state.humans", "humans"),
+        ],
+        mismatch_note=(
+            "sector_humans: сигнатура (humans, stationary_humans, sector_id) "
             "вместо (state.humans, state.stationary_humans, sector_id). "
-            "Параметры переименованы для чистоты — state убран."
+            "Параметры переименованы — state убран."
         ),
     ),
     MethodPair(
@@ -94,16 +131,19 @@ BATCH_B1 = [
         rules=[
             (r"\bself\.state\.items\b", "items"),
         ],
-        known_diff=(
-            "squad_power: константа SPECIES_POWER_VALUE переименована в "
-            "_SPECIES_POWER_VALUE (module-level private const в power.py "
-            "вместо class-level в engine.py). Логика идентична."
+        expected_mismatches=[
+            MismatchEntry(4, "SPECIES_POWER_VALUE", "_SPECIES_POWER_VALUE"),
+        ],
+        mismatch_note=(
+            "squad_power: константа SPECIES_POWER_VALUE -> _SPECIES_POWER_VALUE "
+            "(module-level private const в power.py вместо class-level в engine.py)."
         ),
     ),
     MethodPair(
         "_monster_group_power", "monster_group_power", "combat/power.py",
         rules=[],
-        known_diff="",
+        expected_mismatches=[],
+        mismatch_note="",
     ),
 ]
 
@@ -181,6 +221,12 @@ def find_rng_refs(text):
     return re.findall(r"state\.rng\.(random|choice|randint)\b", text)
 
 
+def mismatches_match(actual_idx, actual_trans, actual_new, expected):
+    return (actual_idx == expected.operator_index
+            and expected.expected_trans in actual_trans
+            and expected.expected_new in actual_new)
+
+
 def audit_equivalent():
     print("=" * 70)
     print("AUDIT EQUIVALENCE: B1 service methods")
@@ -227,33 +273,67 @@ def audit_equivalent():
         print("  TRANS (norm): " + str(len(trans_norm)) + " ops")
         print("  NEW (norm): " + str(len(new_norm)) + " ops")
 
-        # Сравнение
-        mismatches = []
+        # Фактические mismatches
+        actual_mismatches = []
         max_len = max(len(trans_norm), len(new_norm))
         for i in range(max_len):
             tl = trans_norm[i] if i < len(trans_norm) else "<MISSING>"
             nl = new_norm[i] if i < len(new_norm) else "<MISSING>"
             if tl != nl:
-                mismatches.append("  [" + str(i + 1) + "] TRANS=" + tl[:80] + " | NEW=" + nl[:80])
+                actual_mismatches.append((i + 1, tl, nl))
 
-        if mismatches:
+        # Ожидаемые mismatches
+        expected_mismatches = pair.expected_mismatches
+
+        # Сопряжение
+        expected_matched = set()
+        actual_matched = set()
+        unexpected = []
+        missing_expected = []
+
+        for ai, (a_idx, a_trans, a_new) in enumerate(actual_mismatches):
+            matched = False
+            for ei, exp in enumerate(expected_mismatches):
+                if ei in expected_matched:
+                    continue
+                if mismatches_match(a_idx, a_trans, a_new, exp):
+                    expected_matched.add(ei)
+                    actual_matched.add(ai)
+                    matched = True
+                    break
+            if not matched:
+                unexpected.append((a_idx, a_trans, a_new))
+
+        for ei, exp in enumerate(expected_mismatches):
+            if ei not in expected_matched:
+                missing_expected.append(exp)
+
+        if unexpected or missing_expected:
             print("")
-            print("  MISMATCHES: " + str(len(mismatches)))
-            for m in mismatches[:20]:
-                print("    " + m)
-            if len(mismatches) > 20:
-                print("    ... and " + str(len(mismatches) - 20) + " more")
-
-            # Проверка known_diff
-            if pair.known_diff:
+            print("  UNEXPECTED MISMATCHES:")
+            for ui, (u_idx, u_trans, u_new) in enumerate(unexpected):
+                print("    [" + str(ui + 1) + "] idx=" + str(u_idx) +
+                      " TRANS=" + u_trans[:80] + " | NEW=" + u_new[:80])
+            if missing_expected:
+                print("  MISSING EXPECTED:")
+                for me in missing_expected:
+                    print("    idx=" + str(me.operator_index) +
+                          " expect TRANS='" + me.expected_trans + "'" +
+                          " expect NEW='" + me.expected_new + "'")
+            if pair.mismatch_note:
                 print("")
-                print("  KNOWN DIFF: " + pair.known_diff[:200])
-                # Любые mismatches при наличии known_diff — принимаем
-                print("  STATUS: Known diff - ACCEPTED (all mismatches documented)")
-            else:
-                print("  STATUS: UNEXPECTED MISMATCH - FAIL")
-                all_ok = False
-                total_failures += 1
+                print("  NOTE: " + pair.mismatch_note[:200])
+            print("")
+            print("  STATUS: FAIL (unexpected or missing mismatches)")
+            all_ok = False
+            total_failures += 1
+        elif actual_mismatches:
+            print("")
+            print("  MISMATCHES: " + str(len(actual_mismatches)) + " (all expected)")
+            for m_idx, (m_idx_num, m_trans, m_new) in enumerate(actual_mismatches):
+                print("    [" + str(m_idx + 1) + "] idx=" + str(m_idx_num) +
+                      " TRANS=" + m_trans[:60] + " | NEW=" + m_new[:60])
+            print("  STATUS: OK (documented mismatch)")
         else:
             print("  STATUS: OK (0 mismatches)")
 
@@ -276,7 +356,7 @@ def audit_equivalent():
     if all_ok:
         print("EQUIVALENCE AUDIT PASSED")
     else:
-        print("EQUIVALENCE AUDIT: some failures (check above)")
+        print("EQUIVALENCE AUDIT FAILED - review above")
     print("=" * 70)
 
     return 0 if all_ok else 1
@@ -293,7 +373,6 @@ def audit_structural():
 
     engine_code = (SRC / "simulation" / "engine.py").read_text(encoding="utf-8")
 
-    # 1. Удалены
     for pair in BATCH_B1:
         checks += 1
         count = len(re.findall(r'\bdef ' + pair.old_name + r'\b', engine_code))
@@ -303,7 +382,6 @@ def audit_structural():
             all_ok = False
             failures += 1
 
-    # 2. Есть в модулях
     for pair in BATCH_B1:
         checks += 1
         mod_path = SRC / pair.target_module
@@ -320,7 +398,6 @@ def audit_structural():
             all_ok = False
             failures += 1
 
-    # 3. Нет импорта engine
     for pair in BATCH_B1:
         checks += 1
         mod_path = SRC / pair.target_module
@@ -334,7 +411,6 @@ def audit_structural():
             all_ok = False
             failures += 1
 
-    # 4. Размер
     checks += 1
     lines = len(engine_code.splitlines())
     status = "OK (" + str(lines) + ")" if lines < 3730 else "FAIL (" + str(lines) + ")"
@@ -343,14 +419,13 @@ def audit_structural():
         all_ok = False
         failures += 1
 
-    # 5. Baseline
     baseline_dir = REPO_ROOT / "tests" / "_baseline"
-    expected = {
+    expected_hashes = {
         "engine_state_seed42.json": "febae09ef46cc7ce",
         "engine_state_seed7.json": "681f47ddc8103918",
         "engine_state_seed123.json": "aec39f13625cae13",
     }
-    for fname, prefix in expected.items():
+    for fname, prefix in expected_hashes.items():
         checks += 1
         fpath = baseline_dir / fname
         if not fpath.exists():
@@ -365,7 +440,6 @@ def audit_structural():
             all_ok = False
             failures += 1
 
-    # 6. Нет старых вызовов
     checks += 1
     old_patterns = [
         r"engine\._has_strict_comfort", r"engine\._group_faction",
@@ -405,7 +479,6 @@ def audit_structural():
     else:
         print("  Нет старых вызовов: OK")
 
-    # 7. Кэш
     checks += 1
     phase4 = (SRC / "simulation" / "phases" / "phase04_intentions.py").read_text(encoding="utf-8")
     if "engine._border_dist" in phase4:
