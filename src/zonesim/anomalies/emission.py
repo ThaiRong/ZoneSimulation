@@ -39,3 +39,33 @@ def is_emission_active(start_hour: int, end_hour: int, hour: int) -> bool:
 def is_emission_known(warning_hour: int, hour: int) -> bool:
     """Сведения о выбросе уже разосланы (предупреждение не устаревает)."""
     return warning_hour >= 0 and hour >= warning_hour
+
+
+def emission_safe_sectors(state) -> set[int]:
+    """Постоянные секторы, защищающие от выброса (§12.7, #20).
+
+    Включает:
+    - Сектора StormShelter (стационарные убежища)
+    - Стартовые сектора фракций (базы)
+    - Сектора активных стационарных торговцев
+    Временные убежища (temp_shelters) НЕ защищают (§12.7).
+    """
+    from zonesim.world.entity import EntityStatus
+    return {
+        s.sector_id for s in state.shelters.values()
+    } | {
+        s.id for s in state.sectors.values() if s.is_faction_start
+    } | {
+        npc.sector_id for npc in state.stationary_humans
+        if npc.stationary_role == "trader" and npc.status == EntityStatus.ACTIVE
+    }
+
+
+def is_group_emission_sheltered(state, group) -> bool:
+    """Проверяет, укрота ли группа от выброса (§12.7, #20).
+
+    Использует group.sector_id (синхронизирован с членами группы)
+    и единое множество безопасных секторов.
+    """
+    safe = emission_safe_sectors(state)
+    return group.sector_id in safe

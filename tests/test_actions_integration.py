@@ -2,6 +2,8 @@
 
 import pytest
 
+from zonesim.actions.capture import group_can_capture
+from zonesim.actions.destroy import group_can_destroy
 from zonesim.ai import CAPTURE, DESTROY, IntentionContext, evaluate_actions
 from zonesim.anomalies.artifact import Artifact
 from zonesim.anomalies.core import Anomaly, AnomalyStatus, AnomalyType
@@ -10,7 +12,7 @@ from zonesim.persistence.serialization import state_to_dict
 from zonesim.simulation.engine import SimulationEngine
 from zonesim.world.entity import EntityStatus, Monster, MonsterSpecies
 from zonesim.world.group import HumanGroup
-from zonesim.world.item import ItemType, give_item
+from zonesim.world.item import ItemType, create_item, give_item
 
 
 def _ctx(**overrides):
@@ -87,16 +89,16 @@ class TestDestroyPrerequisites:
         npc, group = _solo_group(engine)
         sector_id = group.sector_id
         anomaly = _add_anomaly(engine, sector_id, AnomalyType.VISIBLE)
-        assert not engine._group_can_destroy(group, [npc])
+        assert not group_can_destroy(engine.state, group, [npc])
         kit = _give_kit(engine, npc, "anomaly.kit.subtle")
-        assert not engine._group_can_destroy(group, [npc])  # несовпадение типа
+        assert not group_can_destroy(engine.state, group, [npc])  # несовпадение типа
         kit.properties["target_anomaly_type"] = "visible"
-        assert engine._group_can_destroy(group, [npc])
+        assert group_can_destroy(engine.state, group, [npc])
         kit.condition = 0
-        assert not engine._group_can_destroy(group, [npc])
+        assert not group_can_destroy(engine.state, group, [npc])
         kit.condition = 100
         anomaly.status = AnomalyStatus.DESTROYED
-        assert not engine._group_can_destroy(group, [npc])
+        assert not group_can_destroy(engine.state, group, [npc])
 
 
 class TestDestroyAction:
@@ -166,13 +168,13 @@ class TestCapturePrerequisites:
     def test_can_capture_requires_wounded_target_and_kit(self):
         engine = SimulationEngine(seed=42)
         npc, group, monster = self._setup(engine, monster_health=80)
-        assert not engine._group_can_capture(group, [npc])  # цель не ранена
+        assert not group_can_capture(engine.state, group, [npc])  # цель не ранена
         monster.health = 25
-        assert not engine._group_can_capture(group, [npc])  # нет комплекта
+        assert not group_can_capture(engine.state, group, [npc])  # нет комплекта
         kit = _give_kit(engine, npc, "capture.kit.scavenger")
-        assert not engine._group_can_capture(group, [npc])  # несовпадение вида
+        assert not group_can_capture(engine.state, group, [npc])  # несовпадение вида
         kit.properties["target_species"] = "large_migrator"
-        assert engine._group_can_capture(group, [npc])
+        assert group_can_capture(engine.state, group, [npc])
         # активное сопротивление другого монстра рядом
         other = Monster(
             id=900002,
@@ -183,7 +185,7 @@ class TestCapturePrerequisites:
         )
         engine.state.monsters.append(other)
         engine._sync_monster_groups()
-        assert not engine._group_can_capture(group, [npc])
+        assert not group_can_capture(engine.state, group, [npc])
 
     def test_capture_success_removes_monster_from_population(self):
         engine = SimulationEngine(seed=42)
@@ -292,7 +294,7 @@ class TestTrading:
         )
         group.sector_id = trader.sector_id
         npc.sector_id = trader.sector_id
-        artifact = engine._create_item(ItemType.ARTIFACT, "Артефакт", 500.0, npc.id)
+        artifact = create_item(engine.state, ItemType.ARTIFACT, "Артефакт", 500.0, owner_id=npc.id)
         npc.money = 0.0
 
         engine._process_rest_trade(engine.state.time.hour, [group])

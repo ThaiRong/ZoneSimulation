@@ -22,6 +22,7 @@ from zonesim.needs.sleep import STAMINA_COST_MOVEMENT, update_stamina
 from zonesim.simulation.context import SimulationContext
 from zonesim.world.entity import EntityStatus
 from zonesim.world.faction import home_sector_id
+from zonesim.world.shelter import shelter_targets
 
 
 def run_phase5_movement(ctx: SimulationContext) -> None:
@@ -85,7 +86,7 @@ def run_phase5_movement(ctx: SimulationContext) -> None:
             if distress is not None and group.sector_id != distress["sector_id"]:
                 target_ids = {distress["sector_id"]}
         elif group.intention == SHELTER:
-            target_ids = engine._shelter_targets(group, hour)
+            target_ids = shelter_targets(engine.state, group, hour)
         elif group.intention == RESEARCH and group.target_sector_id is not None:
             target_ids = {group.target_sector_id}
         elif group.intention == ARTIFACT_SEARCH and group.target_sector_id is not None:

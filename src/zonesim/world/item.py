@@ -70,3 +70,65 @@ def take_item_from_corpse(item: Item, corpse, owner_id: int, inventory: list[int
         raise ValueError(f"Предмет {item.id} не находится на трупе {corpse.id}")
     corpse.items.remove(item.id)
     give_item(item, owner_id, inventory)
+
+
+def consume_item(state, item: Item, members: list[HumanNPC]) -> None:
+    """Удаляет израсходованный предмет из инвентаря и реестра."""
+    owner = next((npc for npc in members if item.id in npc.inventory), None)
+    if owner is not None:
+        owner.inventory.remove(item.id)
+        if owner.equipped_weapon_id == item.id:
+            owner.equipped_weapon_id = None
+        if owner.equipped_armor_id == item.id:
+            owner.equipped_armor_id = None
+    state.items.pop(item.id, None)
+
+
+def create_item(state, item_type: ItemType, name: str, base_value: float,
+                owner_id: int | None = None, quantity: int = 1,
+                properties: dict | None = None) -> Item:
+    """Создаёт уникальный предмет и добавляет в реестр."""
+    item = Item(
+        id=state.next_item_id,
+        type=item_type,
+        name=name,
+        base_value=base_value,
+        quantity=quantity,
+        properties=properties or {},
+    )
+    state.next_item_id += 1
+    state.items[item.id] = item
+    if owner_id is not None:
+        owner = next(
+            npc for npc in state.humans + state.stationary_humans
+            if npc.id == owner_id
+        )
+        give_item(item, owner_id, owner.inventory)
+    return item
+
+
+def sync_npc_from_items(state, npc: HumanNPC) -> None:
+    """Синхронизирует характеристики NPC с экипированными предметами."""
+    from zonesim.combat.loot import EquipmentManager
+
+    weapon = state.items.get(npc.equipped_weapon_id)
+    armor = state.items.get(npc.equipped_armor_id)
+    npc.weapon_condition = weapon.condition if weapon else 0
+    npc.weapon_damage = (
+        weapon.properties.get("base_damage", weapon.properties.get("damage", 20))
+        if weapon else 5
+    )
+    npc.armor_condition = armor.condition if armor else 0
+    npc.armor_value = (
+        armor.properties.get("armor_factor", armor.properties.get("armor", 1.0))
+        * EquipmentManager.get_armor_effectiveness(armor.condition)
+        if armor else 1.0
+    )
+    npc.ammo = sum(
+        item.quantity for item_id in npc.inventory
+        if (item := state.items[item_id]).type is ItemType.AMMO
+    )
+    npc.medicines = sum(
+        item.quantity for item_id in npc.inventory
+        if (item := state.items[item_id]).type is ItemType.MEDICINE
+    )

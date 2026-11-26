@@ -8,6 +8,7 @@ from zonesim.simulation.engine import SimulationEngine
 from zonesim.world.entity import EntityStatus
 from zonesim.world.group import HumanGroup
 from zonesim.world.item import ItemType
+from zonesim.world.item import create_item
 
 from tests.test_actions_integration import _solo_group
 
@@ -109,7 +110,7 @@ class TestRestTrade:
         trader = _trader_sector(engine)
         group.sector_id = trader.sector_id
         npc.sector_id = trader.sector_id
-        artifact = engine._create_item(ItemType.ARTIFACT, "Артефакт", 500.0, npc.id)
+        artifact = create_item(engine.state, ItemType.ARTIFACT, "Артефакт", 500.0, owner_id=npc.id)
         npc.money = 0.0
         # убираем аптечку, чтобы сработала закупка
         for item_id in list(npc.inventory):
@@ -181,7 +182,7 @@ class TestRestExchange:
     def test_barter_valuables_between_resting_groups(self):
         engine = SimulationEngine(seed=42)
         npc_a, group_a, npc_b, group_b = self._two_groups(engine, relation=60)
-        artifact = engine._create_item(ItemType.ARTIFACT, "Артефакт", 500.0, npc_a.id)
+        artifact = create_item(engine.state, ItemType.ARTIFACT, "Артефакт", 500.0, owner_id=npc_a.id)
         npc_a.money = 0
         npc_b.money = 1000
 
@@ -196,7 +197,7 @@ class TestRestExchange:
     def test_no_barter_below_trade_threshold(self):
         engine = SimulationEngine(seed=42)
         npc_a, group_a, npc_b, group_b = self._two_groups(engine, relation=30)
-        artifact = engine._create_item(ItemType.ARTIFACT, "Артефакт", 500.0, npc_a.id)
+        artifact = create_item(engine.state, ItemType.ARTIFACT, "Артефакт", 500.0, owner_id=npc_a.id)
         npc_b.money = 1000
 
         engine._process_rest_exchanges(engine.state.time.hour, [group_a, group_b])

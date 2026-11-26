@@ -147,6 +147,191 @@ BATCH_B1 = [
     ),
 ]
 
+# ============================================================
+# BATCH B2: Level 1 extraction (3.9-B2)
+# ============================================================
+B2_PRE_COMMIT = "5b48afb"
+
+BATCH_B2 = [
+    MethodPair(
+        "_emergency_medkit", "emergency_medkit", "combat/medkit.py",
+        rules=[
+            (r"\bself\.state\.items\b", "state.items"),
+            (r"\bself\._use_medkit_charge\b", "use_medkit_charge"),
+        ],
+        expected_mismatches=[],
+        mismatch_note="",
+    ),
+    MethodPair(
+        "_rest_heal", "rest_heal", "needs/healing.py",
+        rules=[
+            (r"\bself\.state\.items\b", "state.items"),
+            (r"\bself\._use_medkit_charge\b", "use_medkit_charge"),
+            (r"\bself\._sync_npc_from_items\b", "sync_npc_from_items"),
+        ],
+        expected_mismatches=[],
+        mismatch_note="",
+    ),
+    MethodPair(
+        "_use_medkit_charge", "use_medkit_charge", "combat/medkit.py",
+        rules=[
+            (r"\bself\._consume_item\b", "consume_item"),
+        ],
+        expected_mismatches=[],
+        mismatch_note="",
+    ),
+    MethodPair(
+        "_sell_loot", "sell_loot", "economy/trader.py",
+        rules=[
+            (r"\bself\.state\.items\b", "state.items"),
+            (r"\bself\._consume_item\b", "consume_item"),
+            (r"\bself\.SELL_PRICE_SHARE\b", "sell_price_share"),
+        ],
+        expected_mismatches=[],
+        mismatch_note="",
+    ),
+    MethodPair(
+        "_give_artifact", "give_artifact", "needs/artifact.py",
+        rules=[
+            (r"\bself\.state\.artifacts\b", "state.artifacts"),
+            (r"\bself\.state\.items\b", "state.items"),
+            (r"\bself\.state\.news_manager\b", "state.news_manager"),
+            (r"\bself\._create_item\b", "create_item"),
+        ],
+        expected_mismatches=[],
+        mismatch_note="",
+    ),
+    MethodPair(
+        "_set_unconscious_or_dead", "set_unconscious_or_dead", "combat/results.py",
+        rules=[
+            (r"\bself\._resolve_zero_health\b", "resolve_zero_health"),
+            (r"\bself\.state\.news_manager\b", "state.news_manager"),
+        ],
+        expected_mismatches=[],
+        mismatch_note="",
+    ),
+    MethodPair(
+        "_group_can_capture", "group_can_capture", "actions/capture.py",
+        rules=[
+            (r"\bself\._capture_target\b", "capture_target"),
+            (r"\bself\._group_kit\b", "group_kit"),
+        ],
+        expected_mismatches=[],
+        mismatch_note="",
+    ),
+    MethodPair(
+        "_group_can_destroy", "group_can_destroy", "actions/destroy.py",
+        rules=[
+            (r"\bself\.state\.anomalies\b", "state.anomalies"),
+            (r"\bself\._group_kit\b", "group_kit"),
+        ],
+        expected_mismatches=[],
+        mismatch_note="",
+    ),
+    MethodPair(
+        "_process_create_shelter", "process_create_shelter", "world/shelter.py",
+        rules=[
+            (r"\bself\._active_members\b", "active_members"),
+            (r"\bself\._group_leader\b", "group_leader"),
+            (r"\bself\.state\.items\b", "state.items"),
+            (r"\bself\.state\.next_shelter_id\b", "state.next_shelter_id"),
+            (r"\bself\.state\.news_manager\b", "state.news_manager"),
+        ],
+        expected_mismatches=[],
+        mismatch_note="",
+    ),
+    MethodPair(
+        "_check_and_journal_relations", "check_and_journal_relations", "relations/journal.py",
+        rules=[
+            (r"\bself\.state\.faction_relations\b", "state.faction_relations"),
+            (r"\bself\.state\.prev_relation_snapshot\b", "state.prev_relation_snapshot"),
+            (r"\bself\._log_relation_change\b", "log_relation_change"),
+        ],
+        expected_mismatches=[],
+        mismatch_note="",
+    ),
+    MethodPair(
+        "_roll_trail_blockages", "roll_trail_blockages", "world/trails.py",
+        rules=[
+            (r"\bself\.state\.anomalies\b", "state.anomalies"),
+            (r"\bself\._roll_trail_blockage\b", "roll_trail_blockage"),
+        ],
+        expected_mismatches=[],
+        mismatch_note="",
+    ),
+    MethodPair(
+        "_group_in_shelter", "group_in_shelter", "world/shelter.py",
+        rules=[
+            (r"\bself\._shelter_sector_ids\b", "shelter_sector_ids"),
+        ],
+        expected_mismatches=[],
+        mismatch_note="",
+    ),
+    MethodPair(
+        "_shelter_targets", "shelter_targets", "world/shelter.py",
+        rules=[
+            (r"\bself\.state\.shelters\b", "state.shelters"),
+            (r"\bself\._shelter_sector_ids\b", "shelter_sector_ids"),
+        ],
+        expected_mismatches=[],
+        mismatch_note="",
+    ),
+    MethodPair(
+        "_is_group_emission_sheltered", "is_group_emission_sheltered", "anomalies/emission.py",
+        rules=[
+            (r"\bself\._emission_safe_sectors\b", "emission_safe_sectors"),
+        ],
+        expected_mismatches=[],
+        mismatch_note="",
+    ),
+    MethodPair(
+        "_create_item", "create_item", "world/item.py",
+        rules=[
+            (r"\bself\.state\.next_item_id\b", "state.next_item_id"),
+            (r"\bself\.state\.items\b", "state.items"),
+            (r"\bself\.state\.humans\b", "state.humans"),
+            (r"\bself\.state\.stationary_humans\b", "state.stationary_humans"),
+            (r"\bgive_item\b", "give_item"),
+        ],
+        expected_mismatches=[],
+        mismatch_note="",
+    ),
+    MethodPair(
+        "_roll_trail_blockage", "roll_trail_blockage", "world/trails.py",
+        rules=[
+            (r"\bself\.state\.rng\b", "state.rng"),
+            (r"\bself\.state\.anomalies\b", "state.anomalies"),
+            (r"\bself\.state\.sectors\b", "state.sectors"),
+            (r"\bself\._trail_set\b", "trail_set"),
+        ],
+        expected_mismatches=[
+            MismatchEntry(1, "self._trail_set", "trail_set(state)"),
+        ],
+        mismatch_note="_roll_trail_blockage: self._trail_set → trail_set(state) (property → function)",
+    ),
+    MethodPair(
+        "_shelter_sector_ids", "shelter_sector_ids", "world/shelter.py",
+        rules=[
+            (r"\bself\.state\.temp_shelters\b", "state.temp_shelters"),
+            (r"\bself\.state\.shelters\b", "state.shelters"),
+            (r"\bself\.state\.sectors\b", "state.sectors"),
+            (r"\bself\.state\.stationary_humans\b", "state.stationary_humans"),
+            (r"\bself\.state\.conditional_trader_id\b", "state.conditional_trader_id"),
+            (r"\bself\.state\.time\b", "state.time"),
+        ],
+        expected_mismatches=[],
+        mismatch_note="",
+    ),
+    MethodPair(
+        "_sync_npc_from_items", "sync_npc_from_items", "world/item.py",
+        rules=[
+            (r"\bself\.state\.items\b", "state.items"),
+        ],
+        expected_mismatches=[],
+        mismatch_note="",
+    ),
+]
+
 
 def git_show(path, commit):
     result = subprocess.run(
@@ -362,6 +547,195 @@ def audit_equivalent():
     return 0 if all_ok else 1
 
 
+def audit_b2_equivalent():
+    print("=" * 70)
+    print("AUDIT EQUIVALENCE: B2 service methods (3.9-B2)")
+    print("Pre-batch commit: " + B2_PRE_COMMIT)
+    print("=" * 70)
+
+    all_ok = True
+    total_pairs = 0
+    total_failures = 0
+
+    for pair in BATCH_B2:
+        total_pairs += 1
+        sep = "-" * 60
+        print("")
+        print(sep)
+        print("PAIR: " + pair.old_name + " -> " + pair.new_name +
+              " (" + pair.target_module + ")")
+
+        old_code = git_show("src/zonesim/simulation/engine.py", B2_PRE_COMMIT)
+        old_body = extract_body(old_code, pair.old_name)
+        if old_body is None:
+            print("  ERROR: " + pair.old_name + " not found in git")
+            all_ok = False
+            total_failures += 1
+            continue
+        print("  OLD body: " + str(len(old_body.splitlines())) + " lines")
+
+        new_body = extract_new_func_body(pair.target_module, pair.new_name)
+        if new_body is None:
+            print("  ERROR: " + pair.new_name + " not in " + pair.target_module)
+            all_ok = False
+            total_failures += 1
+            continue
+        print("  NEW body: " + str(len(new_body.splitlines())) + " lines")
+
+        transformed = apply_rules(old_body, pair.rules)
+        print("  TRANSFORMED: " + str(len(transformed.splitlines())) + " lines")
+
+        old_norm = normalize(old_body)
+        new_norm = normalize(new_body)
+        trans_norm = normalize(transformed)
+
+        print("  OLD (norm): " + str(len(old_norm)) + " ops")
+        print("  TRANS (norm): " + str(len(trans_norm)) + " ops")
+        print("  NEW (norm): " + str(len(new_norm)) + " ops")
+
+        actual_mismatches = []
+        max_len = max(len(trans_norm), len(new_norm))
+        for i in range(max_len):
+            tl = trans_norm[i] if i < len(trans_norm) else "<MISSING>"
+            nl = new_norm[i] if i < len(new_norm) else "<MISSING>"
+            if tl != nl:
+                actual_mismatches.append((i + 1, tl, nl))
+
+        expected_mismatches = pair.expected_mismatches
+
+        expected_matched = set()
+        actual_matched = set()
+        unexpected = []
+        missing_expected = []
+
+        for ai, (a_idx, a_trans, a_new) in enumerate(actual_mismatches):
+            matched = False
+            for ei, exp in enumerate(expected_mismatches):
+                if ei in expected_matched:
+                    continue
+                if mismatches_match(a_idx, a_trans, a_new, exp):
+                    expected_matched.add(ei)
+                    actual_matched.add(ai)
+                    matched = True
+                    break
+            if not matched:
+                unexpected.append((a_idx, a_trans, a_new))
+
+        for ei, exp in enumerate(expected_mismatches):
+            if ei not in expected_matched:
+                missing_expected.append(exp)
+
+        if unexpected or missing_expected:
+            print("")
+            print("  UNEXPECTED MISMATCHES:")
+            for ui, (u_idx, u_trans, u_new) in enumerate(unexpected):
+                print("    [" + str(ui + 1) + "] idx=" + str(u_idx) +
+                      " TRANS=" + u_trans[:80] + " | NEW=" + u_new[:80])
+            if missing_expected:
+                print("  MISSING EXPECTED:")
+                for me in missing_expected:
+                    print("    idx=" + str(me.operator_index) +
+                          " expect TRANS='" + me.expected_trans + "'" +
+                          " expect NEW='" + me.expected_new + "'")
+            if pair.mismatch_note:
+                print("")
+                print("  NOTE: " + pair.mismatch_note[:200])
+            print("")
+            print("  STATUS: FAIL")
+            all_ok = False
+            total_failures += 1
+        elif actual_mismatches:
+            print("  MISMATCHES: " + str(len(actual_mismatches)) + " (all expected)")
+            print("  STATUS: OK (documented mismatch)")
+        else:
+            print("  STATUS: OK (0 mismatches)")
+
+        # RNG
+        r_old = find_rng_refs(old_body)
+        r_new = find_rng_refs(new_body)
+        r_trans = find_rng_refs(transformed)
+        if r_old == r_new == r_trans:
+            print("  RNG: OK")
+        else:
+            print("  RNG: DIFF old=" + str(r_old) + " trans=" + str(r_trans) +
+                  " new=" + str(r_new))
+            all_ok = False
+            total_failures += 1
+
+    print("")
+    print("=" * 70)
+    print("RESULT: " + str(total_pairs) + " pairs, " + str(total_failures) +
+          " failures")
+    if all_ok:
+        print("EQUIVALENCE AUDIT B2 PASSED")
+    else:
+        print("EQUIVALENCE AUDIT B2 FAILED")
+    print("=" * 70)
+
+    return 0 if all_ok else 1
+
+
+def audit_b2_structural():
+    print("=" * 70)
+    print("AUDIT STRUCTURAL: B2 service methods")
+    print("=" * 70)
+
+    all_ok = True
+    checks = 0
+    failures = 0
+
+    engine_code = (SRC / "simulation" / "engine.py").read_text(encoding="utf-8")
+
+    for pair in BATCH_B2:
+        checks += 1
+        count = len(re.findall(r'\bdef ' + pair.old_name + r'\b', engine_code))
+        status = "OK" if count == 0 else "FAIL (" + str(count) + ")"
+        print("  " + pair.old_name + ": " + status)
+        if count != 0:
+            all_ok = False
+            failures += 1
+
+    for pair in BATCH_B2:
+        checks += 1
+        mod_path = SRC / pair.target_module
+        if not mod_path.exists():
+            print("  " + pair.target_module + ": NOT FOUND")
+            all_ok = False
+            failures += 1
+            continue
+        code = mod_path.read_text(encoding="utf-8")
+        found = re.search(r'\bdef ' + pair.new_name + r'\b', code) is not None
+        status = "OK" if found else "NOT FOUND"
+        print("  " + pair.target_module + "::" + pair.new_name + ": " + status)
+        if not found:
+            all_ok = False
+            failures += 1
+
+    for pair in BATCH_B2:
+        checks += 1
+        mod_path = SRC / pair.target_module
+        if not mod_path.exists():
+            continue
+        code = mod_path.read_text(encoding="utf-8")
+        has_engine = "simulation.engine" in code
+        status = "FAIL" if has_engine else "OK"
+        print("  " + pair.target_module + ": no engine import " + status)
+        if has_engine:
+            all_ok = False
+            failures += 1
+
+    print("")
+    print("=" * 70)
+    print("STRUCTURAL: " + str(checks) + " checks, " + str(failures) + " failures")
+    if all_ok:
+        print("STRUCTURAL AUDIT B2 PASSED")
+    else:
+        print("STRUCTURAL AUDIT B2 FAILED")
+    print("=" * 70)
+
+    return 0 if all_ok else 1
+
+
 def audit_structural():
     print("=" * 70)
     print("AUDIT STRUCTURAL: B1 service methods")
@@ -501,12 +875,24 @@ def audit_structural():
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Аудит B1 сервисных методов")
+    parser = argparse.ArgumentParser(description="Аудит B1/B2 сервисных методов")
+    parser.add_argument("--batch", choices=["B1", "B2"], default="B1")
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--equivalent", action="store_true")
     group.add_argument("--structural", action="store_true")
     group.add_argument("--both", action="store_true")
     args = parser.parse_args()
+
+    if args.batch == "B2":
+        if args.both:
+            r1 = audit_b2_equivalent()
+            r2 = audit_b2_structural()
+            return r1 or r2
+        if args.equivalent:
+            return audit_b2_equivalent()
+        if args.structural:
+            return audit_b2_structural()
+        return audit_b2_structural()
 
     if args.both:
         r1 = audit_equivalent()

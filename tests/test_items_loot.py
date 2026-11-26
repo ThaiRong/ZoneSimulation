@@ -8,6 +8,7 @@ from zonesim.simulation.engine import SimulationEngine
 from zonesim.simulation.phases import run_phase7_actions
 from zonesim.world.entity import EntityStatus
 from zonesim.world.item import Item, ItemType
+from zonesim.world.item import create_item
 
 
 def _place_on_corpse(engine, corpse, item):
@@ -67,7 +68,7 @@ def test_death_moves_all_property_to_corpse_without_duplicates():
     engine = SimulationEngine(seed=12)
     npc = engine.state.humans[0]
     original_items = set(npc.inventory)
-    engine._create_item(ItemType.ARTIFACT, "Артефакт", 300.0, npc.id)
+    create_item(engine.state, ItemType.ARTIFACT, "Артефакт", 300.0, owner_id=npc.id)
     original_items.update(npc.inventory)
 
     corpse = engine._create_corpse(npc, hour=9)

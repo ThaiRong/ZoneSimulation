@@ -11,6 +11,7 @@ from zonesim.simulation.engine import SimulationEngine
 from zonesim.world.entity import EntityStatus, Monster, MonsterSpecies
 from zonesim.world.group import HumanGroup, MonsterGroup
 from zonesim.world.item import ItemType
+from zonesim.world.item import create_item
 from zonesim.world.sector import get_shortest_path
 
 SPECIES_PARAMS_KEY = {
@@ -92,7 +93,7 @@ def _add_corpse(engine, sector_id, with_items=False):
     engine.state.next_corpse_id += 1
     if with_items:
         for _ in range(2):
-            item = engine._create_item(ItemType.ARTIFACT, "Артефакт", 100.0)
+            item = create_item(engine.state, ItemType.ARTIFACT, "Артефакт", 100.0, owner_id=None)
             corpse.items.append(item.id)
     engine.state.corpses.append(corpse)
     return corpse

@@ -9,6 +9,7 @@ from __future__ import annotations
 from zonesim.anomalies.core import AnomalyStatus
 from zonesim.anomalies.migration import check_anomaly_migration
 from zonesim.simulation.context import SimulationContext
+from zonesim.world.trails import roll_trail_blockage
 
 
 def run_phase8_environment(ctx: SimulationContext) -> None:
@@ -30,7 +31,7 @@ def run_phase8_environment(ctx: SimulationContext) -> None:
                     rng_value=rng_val,
                 )
                 if migration["moved"]:
-                    engine._roll_trail_blockage(anomaly)
+                    roll_trail_blockage(engine.state, anomaly)
                     state.news_manager.create_event(
                         hour=hour,
                         minute=0,

@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from zonesim.actions.capture import group_can_capture
+from zonesim.actions.destroy import group_can_destroy
 from zonesim.ai import (
     ARTIFACT_SEARCH,
     RESEARCH,
@@ -116,8 +118,8 @@ def run_phase4_intentions(ctx: SimulationContext) -> None:
                 (f.payload.get("concealment", 50) for f in researchable), default=0
             ),
             known_has_artifact=any(f.payload.get("has_artifact") for f in researchable),
-            can_destroy=engine._group_can_destroy(group, members),
-            can_capture=engine._group_can_capture(group, members),
+            can_destroy=group_can_destroy(engine.state, group, members),
+            can_capture=group_can_capture(engine.state, group, members),
             can_rest=group.is_comfort_sleep_possible(
                 all_npcs,
                 {n.id: n for n in state.stationary_humans},

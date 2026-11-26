@@ -24,6 +24,7 @@ from zonesim.needs.sleep import (
 )
 from zonesim.simulation.context import SimulationContext
 from zonesim.world.entity import EntityStatus
+from zonesim.world.shelter import process_create_shelter
 
 
 def run_phase7_actions(ctx: SimulationContext) -> None:
@@ -60,7 +61,7 @@ def run_phase7_actions(ctx: SimulationContext) -> None:
     for group in state.human_groups.values():
         if group.intention != CREATE_SHELTER:
             continue
-        if engine._process_create_shelter(group, hour):
+        if process_create_shelter(engine.state, group, hour):
             acted_groups.add(group.id)
             group.intention = REST  # после создания — отдых в убежище
     for group in state.human_groups.values():

@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+from zonesim.world.item import ItemType, consume_item
+
+if TYPE_CHECKING:
+    from zonesim.simulation.state import SimulationState
+    from zonesim.world.entity import HumanNPC
 
 
 class TraderType(str, Enum):
@@ -82,7 +88,6 @@ class Trader:
         if not self.is_conditional:
             return self.status == TraderStatus.ACTIVE
 
-        from zonesim.core.time import GameTime
         return (self.status == TraderStatus.ACTIVE and
                 self.known_appearance_sector >= 0 and
                 0 <= self._current_hour - self.appearance_hour < self.known_appearance_duration)
@@ -122,3 +127,26 @@ class Trader:
             "stock_levels": self.stock_levels.copy(),
             "is_conditional": self.is_conditional,
         }
+
+
+SELL_PRICE_SHARE = 0.6  # класс константа SimulationEngine.SELL_PRICE_SHARE
+
+
+def sell_loot(state, leader: HumanNPC, trader: HumanNPC, sell_price_share: float = SELL_PRICE_SHARE) -> float:
+    """Скупка ценностей у лидера группы. (§16.3)"""
+    sellable = (
+        ItemType.ARTIFACT, ItemType.MONSTER_PART,
+        ItemType.ANOMALY_PART, ItemType.LIVE_MONSTER,
+    )
+    total = 0.0
+    for item_id in list(leader.inventory):
+        item = state.items.get(item_id)
+        if item is None or item.type not in sellable:
+            continue
+        price = round(item.base_value * sell_price_share, 1)
+        leader.money += price
+        total += price
+        consume_item(state, item, [leader])
+    if total > 0:
+        trader.money = getattr(trader, "money", 0.0) - total
+    return total

@@ -62,6 +62,24 @@ from zonesim.world.faction import group_faction, home_sector_id, distance_to_bor
 from zonesim.world.sectors import sector_humans
 from zonesim.combat.power import squad_power, monster_group_power
 
+from zonesim.combat.medkit import use_medkit_charge, emergency_medkit
+from zonesim.combat.results import resolve_zero_health, set_unconscious_or_dead
+
+from zonesim.needs.healing import rest_heal
+from zonesim.needs.artifact import give_artifact
+
+from zonesim.economy.trader import sell_loot, SELL_PRICE_SHARE
+from zonesim.world.groups import group_kit, active_members, group_leader
+from zonesim.world.shelter import (
+    shelter_sector_ids, group_in_shelter, shelter_targets, process_create_shelter,
+)
+from zonesim.world.trails import (
+    trail_set, roll_trail_blockage, roll_trail_blockages,
+)
+from zonesim.world.item import create_item, consume_item, sync_npc_from_items
+from zonesim.relations.journal import check_and_journal_relations
+from zonesim.anomalies.emission import emission_safe_sectors, is_group_emission_sheltered
+
 from zonesim.economy.contracts import ContractManager
 from zonesim.economy.trade import CaptureManager, ImportExportManager, ExportRecord
 from zonesim.economy.pricing import calculate_sell_price, get_type_multiplier, calculate_stock_multiplier
@@ -222,7 +240,7 @@ class SimulationEngine:
         self._init_trader_stock()
         self._init_trails()
         self._init_shelters()
-        self._roll_trail_blockages()
+        roll_trail_blockages(self.state)
         self.state.next_emission_hour = schedule_next_emission(self.state.rng)
         self._sync_monster_groups()
 
@@ -325,23 +343,6 @@ class SimulationEngine:
     def _trail_set(self) -> set[tuple[int, int]]:
         return {edge_key(pair[0], pair[1]) for pair in self.state.trails}
 
-    def _roll_trail_blockage(self, anomaly) -> None:
-        """Аномалия может перекрыть тропу у своего сектора. (§10.5)"""
-        anomaly.blocks_trail = None
-        if self.state.rng.random() >= EMISSION_TRAIL_BLOCK_CHANCE:
-            return
-        incident = [
-            edge for edge in self._trail_set
-            if anomaly.sector_id in edge
-            and not any(self.state.sectors[s].is_faction_start for s in edge)
-        ]
-        if incident:
-            anomaly.blocks_trail = list(self.state.rng.choice(sorted(incident)))
-
-    def _roll_trail_blockages(self) -> None:
-        for anomaly in self.state.anomalies.values():
-            self._roll_trail_blockage(anomaly)
-
     def _init_shelters(self) -> None:
         """Стационарные укрытия: 8 шт, не более одного в секторе,
         любой сектор в двух рёбрах от укрытия. (§7.16)"""
@@ -406,9 +407,6 @@ class SimulationEngine:
             return self.state.conditional_trader_sector
         return None
 
-    def _group_in_shelter(self, group: HumanGroup) -> bool:
-        return group.sector_id in self._shelter_sector_ids()
-
     def _update_shelter_participants(self, hour: int) -> None:
         """Обновляет участников Shelter и удаляет пустые группы."""
         npcs = {npc.id: npc for npc in self.state.humans}
@@ -439,7 +437,7 @@ class SimulationEngine:
             # Проверяем экспирацию
             if shelter.expire(hour):
                 # Эвакуируем участников из разрушенного убежища (§12.7, #20)
-                shelter_ids = self._shelter_sector_ids()
+                shelter_ids = shelter_sector_ids(self.state)
                 for group_id, npc_ids in list(shelter.participants.items()):
                     group = self.state.human_groups.get(group_id)
                     if group is None or not npc_ids:
@@ -468,28 +466,6 @@ class SimulationEngine:
                 )
                 del self.state.temp_shelters[shelter_id]
 
-    def _shelter_sector_ids(self) -> set[int]:
-        """Сектора, дающие защиту: временные убежища, стационарные, базы, торговцы. (§12.7)"""
-        # Временные убежища — любые активные (не только с participant_count > 0)
-        ids = {s.sector_id for s in self.state.temp_shelters.values() if s.is_active}
-        ids |= {s.sector_id for s in self.state.shelters.values()}
-        ids |= {s.id for s in self.state.sectors.values() if s.is_faction_start}
-        ids |= {
-            npc.sector_id for npc in self.state.stationary_humans
-            if npc.stationary_role == "trader" and npc.status == EntityStatus.ACTIVE
-        }
-        # Временная база ситуативного торговца — только REST (не SLEEP)
-        if (
-            self.state.conditional_trader_id is not None
-            and self.state.conditional_trader_sector >= 0
-            and self.state.conditional_trader_start_hour >= 0
-            and self.state.conditional_trader_end_hour >= 0
-        ):
-            current_hour = self.state.time.hour
-            if self.state.conditional_trader_start_hour <= current_hour < self.state.conditional_trader_end_hour:
-                ids.add(self.state.conditional_trader_sector)
-        return ids
-
     def _emission_active(self, hour: int) -> bool:
         return is_emission_active(
             self.state.emission_start_hour, self.state.emission_end_hour, hour,
@@ -497,16 +473,6 @@ class SimulationEngine:
 
     def _emission_known(self, hour: int) -> bool:
         return is_emission_known(self.state.emission_warning_hour, hour)
-
-    def _shelter_targets(self, group: HumanGroup, hour: int) -> set[int]:
-        """Доступные укрытия: занятые монстрами не считаются. (§12.7, §13.7)"""
-        occupied = {
-            shelter.sector_id
-            for shelter in self.state.shelters.values()
-            if shelter.is_occupied and shelter.occupied_until > hour
-        }
-        targets = self._shelter_sector_ids() - occupied
-        return targets or self._shelter_sector_ids()
 
     def _schedule_conditional_trader(self, hour: int) -> None:
         """Запланировать следующий появление ситуативного торговца. (§16.6)"""
@@ -734,7 +700,7 @@ class SimulationEngine:
             if migration["moved"]:
                 anomaly.sector_id = migration["to_sector"]
                 anomaly.move_timer = 0
-                self._roll_trail_blockage(anomaly)
+                roll_trail_blockage(self.state,  anomaly)
                 self.state.news_manager.create_event(
                     hour=hour, minute=0, sector_id=migration["to_sector"],
                     event_type="anomaly_move", participants=[], result="moved",
@@ -766,14 +732,6 @@ class SimulationEngine:
             if npc.stationary_role == "trader" and npc.status == EntityStatus.ACTIVE
         }
 
-    def _is_group_emission_sheltered(self, group: HumanGroup) -> bool:
-        """Проверяет, укрота ли группа от выброса (§12.7, #20).
-
-        Использует group.sector_id (синхронизирован с членами группы)
-        и единое множество безопасных секторов.
-        """
-        return group.sector_id in self._emission_safe_sectors()
-
     def _mark_group_emission_exposed(self, group: HumanGroup, hour: int) -> None:
         """Записывает группу в emission_exposed и применяет урон (§12.7).
 
@@ -783,18 +741,18 @@ class SimulationEngine:
         first_hour = self.state.emission_exposed.get(group.id)
         if first_hour is None:
             self.state.emission_exposed[group.id] = hour
-            members = self._active_members(group)
+            members = active_members(self.state,  group)
             if not members:
                 return
             for npc in members:
                 if npc.health_share < 0.5:
-                    self._emergency_medkit(npc, members)
+                    emergency_medkit(self.state,  npc, members)
                 start = npc.health
                 npc.health = max(0, npc.health - int(npc.max_health * EMISSION_EXPOSURE_DAMAGE))
                 npc.stamina = max(1, npc.stamina - 5)  # гарантированная лёгкая травма
                 npc.attentiveness = max(1, npc.attentiveness - 3)
                 if npc.health <= 0:
-                    self._set_unconscious_or_dead(npc, start, hour, cause="emission")
+                    set_unconscious_or_dead(self.state,  npc, start, hour, cause="emission")
             self.state.news_manager.create_event(
                 hour=hour, minute=30, sector_id=group.sector_id,
                 event_type="emission", participants=[m.id for m in members],
@@ -803,7 +761,7 @@ class SimulationEngine:
                 details={"group_id": group.id},
             )
         elif hour - first_hour >= EMISSION_EXPOSURE_KILL_HOUR - 1:
-            members = self._active_members(group)
+            members = active_members(self.state,  group)
             for npc in members:
                 npc.health = 0
                 npc.status = EntityStatus.DEAD
@@ -825,34 +783,15 @@ class SimulationEngine:
         Группы вне shelter — получают урон.
         """
         for group in self.state.human_groups.values():
-            members = self._active_members(group)
+            members = active_members(self.state,  group)
             if not members:
                 self.state.emission_exposed.pop(group.id, None)
                 continue
             # Используем единый helper — group.sector_id (синхронизирован с членами)
-            if self._is_group_emission_sheltered(group):
+            if is_group_emission_sheltered(self.state,  group):
                 self.state.emission_exposed.pop(group.id, None)
                 continue
             self._mark_group_emission_exposed(group, hour)
-
-    def _emergency_medkit(self, npc: HumanNPC, members: list[HumanNPC]) -> None:
-        """Экстренное применение на ходу: половина эффекта, без часа действия. (§14.3)"""
-        for other in members:
-            for item_id in other.inventory:
-                item = self.state.items.get(item_id)
-                if (
-                    item is not None
-                    and item.type is ItemType.MEDICINE
-                    and item.properties.get("charges", 0) > 0
-                ):
-                    npc.health = min(
-                        npc.max_health,
-                        npc.health + item.properties.get("heal_amount", 30) // 2,
-                    )
-                    self._use_medkit_charge(item, members)
-                    return
-
-    # --- Занятие укрытий монстрами (§13.7) ---
 
     def _free_emptied_shelters(self, hour: int) -> None:
         """Освобождает укрытия, если монстры ушли из сектора (§13.7, #23)."""
@@ -1085,7 +1024,7 @@ class SimulationEngine:
         from zonesim.world.sector import get_distance
 
         for group in self.state.human_groups.values():
-            members = self._active_members(group)
+            members = active_members(self.state,  group)
             if not members:
                 continue
             if hour - getattr(group, "last_distress_hour", -100) < 24:
@@ -1152,7 +1091,7 @@ class SimulationEngine:
         target_group = self.state.human_groups.get(distress["group_id"])
         if target_group is None:
             return
-        victims = [m for m in self._active_members(target_group) if m.health_share < 0.95]
+        victims = [m for m in active_members(self.state,  target_group) if m.health_share < 0.95]
         if not victims:
             return
         patient = min(victims, key=lambda npc: npc.health_share)
@@ -1169,7 +1108,7 @@ class SimulationEngine:
             patient.max_health,
             patient.health + medkits[0].properties.get("heal_amount", 30),
         )
-        self._use_medkit_charge(medkits[0], members)
+        use_medkit_charge(self.state,  medkits[0], members)
         self.state.news_manager.create_event(
             hour=hour, minute=50, sector_id=group.sector_id,
             event_type="distress_aid",
@@ -1213,7 +1152,7 @@ class SimulationEngine:
             self._spawn_catalog_item(weapon_entry["ammo_type"], npc.id, quantity=60)
         for _ in range(3):
             self._spawn_catalog_item("gear.medkit.sanitar2", npc.id)
-        self._sync_npc_from_items(npc)
+        sync_npc_from_items(self.state, npc)
 
     # --- Ротация охраны: раненый уходит лечиться, пост занимает резервист ---
     # Расхождение ТЗ/код: ТЗ указывает 2, в коде DEFAULT_GUARDS_PER_BASE = 4
@@ -1385,6 +1324,10 @@ class SimulationEngine:
 
     # Скупочная цена ценностей (доля базовой стоимости)
     SELL_PRICE_SHARE = 0.6
+    # Обмен в час отдыха: пороги отношений фракций
+    REST_EXCHANGE_RELATION = 20   # обмен информацией
+    REST_TRADE_RELATION = 40      # меновая торговля ценностями
+    REST_TRADE_PRICE_SHARE = 0.8  # цена меновой сделки от базовой стоимости
     # Семейства комплектов для проактивной закупки: (тип, самая дешёвая модель)
     PROACTIVE_KITS = (
         (ItemType.DETECTOR, "gear.detector.radar1"),
@@ -1444,7 +1387,7 @@ class SimulationEngine:
                 if spent + price <= leader_money:
                     spent += price
                     plan.append((kit_ref, 1))
-        leader = self._group_leader(group, members)
+        leader = group_leader(group, members)
         weapon = self.state.items.get(leader.equipped_weapon_id)
         ammo_ref = weapon.properties.get("ammo_type") if weapon else None
         if ammo_ref:
@@ -1475,68 +1418,6 @@ class SimulationEngine:
                     plan.append((default_ref, 1))
         return plan
 
-    def _sell_loot(self, leader: HumanNPC, trader: HumanNPC) -> float:
-        """Скупка ценностей у лидера группы. (§16.3)"""
-        sellable = (
-            ItemType.ARTIFACT, ItemType.MONSTER_PART,
-            ItemType.ANOMALY_PART, ItemType.LIVE_MONSTER,
-        )
-        total = 0.0
-        for item_id in list(leader.inventory):
-            item = self.state.items.get(item_id)
-            if item is None or item.type not in sellable:
-                continue
-            price = round(item.base_value * self.SELL_PRICE_SHARE, 1)
-            leader.money += price
-            total += price
-            self._consume_item(item, [leader])
-        if total > 0:
-            trader.money = getattr(trader, "money", 0.0) - total
-        return total
-
-    # Обмен в час отдыха: пороги отношений фракций
-    REST_EXCHANGE_RELATION = 20   # обмен информацией
-    REST_TRADE_RELATION = 40      # меновая торговля ценностями
-    REST_TRADE_PRICE_SHARE = 0.8  # цена меновой сделки от базовой стоимости
-
-    def _use_medkit_charge(self, medkit: Item, members: list[HumanNPC]) -> None:
-        """Расходует один заряд аптечки; пустую аптечку удаляет."""
-        charges = medkit.properties.get("charges", medkit.quantity)
-        if charges > 1:
-            medkit.properties["charges"] = charges - 1
-        else:
-            self._consume_item(medkit, members)
-
-    def _rest_heal(self, group: HumanGroup, members: list[HumanNPC]) -> None:
-        """Лечение в час отдыха: заряд на каждого раненого члена группы. (§14.3)"""
-        medkits = [
-            self.state.items[item_id]
-            for npc in members for item_id in npc.inventory
-            if item_id in self.state.items
-            and self.state.items[item_id].type is ItemType.MEDICINE
-            and self.state.items[item_id].properties.get("charges", 0) > 0
-        ]
-        if not medkits:
-            return
-        wounded = sorted(
-            (npc for npc in members if npc.health_share < 0.95),
-            key=lambda npc: npc.health_share,
-        )
-        for patient in wounded:
-            kit = next(
-                (
-                    entry for entry in medkits
-                    if entry.properties.get("charges", 0) > 0
-                ),
-                None,
-            )
-            if kit is None:
-                break
-            heal = kit.properties.get("heal_amount", 30)
-            patient.health = min(patient.max_health, patient.health + heal)
-            self._use_medkit_charge(kit, members)
-            self._sync_npc_from_items(patient)
-
     def _group_can_create_shelter(self, group: HumanGroup, members: list[HumanNPC]) -> bool:
         """Проверяет наличие набора для убежища (§7.10).
 
@@ -1558,51 +1439,6 @@ class SimulationEngine:
 
         return True
 
-    def _process_create_shelter(self, group: HumanGroup, hour: int) -> bool:
-        """Создаёт временное убежище (§7.10)."""
-        members = self._active_members(group)
-        if not members:
-            return False
-
-        # Проверка: хотя бы один NPC имеет набор — не расходуется
-        leader = self._group_leader(group, members)
-        has_kit = any(
-            self.state.items.get(item_id) and self.state.items[item_id].type is ItemType.SHELTER_KIT
-            for npc in members
-            for item_id in npc.inventory
-        )
-        if not has_kit:
-            return False
-
-        # Создать Shelter — материал не тратится
-        shelter_id = self.state.next_shelter_id
-        self.state.next_shelter_id += 1
-        shelter = Shelter(
-            id=shelter_id,
-            sector_id=group.sector_id,
-            owner_group_id=group.id,
-            owner_faction=members[0].faction if members else "",
-            created_hour=hour,
-            last_used_hour=hour,
-            quality=50,
-        )
-        shelter.add_group(group.id, [m.id for m in members if m.status == EntityStatus.ACTIVE])
-        self.state.temp_shelters[shelter_id] = shelter
-
-        # Кулдаун на уровне группы
-        group.last_shelter_hour = hour
-
-        self.state.news_manager.create_event(
-            hour=hour, minute=0, sector_id=group.sector_id,
-            event_type="shelter_created",
-            participants=[m.id for m in members[:1]],
-            result="created",
-            importance=30,
-            summary=f"Группа {group.id} создала временное убежище в секторе {group.sector_id}",
-            details={"shelter_id": shelter_id, "sector_id": group.sector_id},
-        )
-        return True
-
     def _process_rest_trade(self, hour: int, resting_groups: list[HumanGroup]) -> None:
         """Торговля как час отдыха у торговца: сначала продажа, потом закупка. (§16)"""
         traders = [
@@ -1610,10 +1446,10 @@ class SimulationEngine:
             if npc.stationary_role == "trader" and npc.status == EntityStatus.ACTIVE
         ]
         for group in resting_groups:
-            members = self._active_members(group)
+            members = active_members(self.state,  group)
             if not members or any(npc.id in self._combat_human_ids for npc in members):
                 continue
-            self._rest_heal(group, members)
+            rest_heal(self.state,  group, members)
             if not traders:
                 continue
             trader = next(
@@ -1621,11 +1457,11 @@ class SimulationEngine:
             )
             if trader is None:
                 continue
-            leader = self._group_leader(group, members)
+            leader = group_leader(group, members)
             stock = self.state.trader_stock.setdefault(trader.id, {})
             # сначала продажа добычи — освобождает деньги для закупки
             initial_money = leader.money
-            self._sell_loot(leader, trader)
+            sell_loot(self.state,  leader, trader)
             # buyer money = initial + proceeds from sell
             buyer_money = leader.money
             for item_ref, quantity in self._purchase_plan(group, members, stock, buyer_money):
@@ -1641,7 +1477,7 @@ class SimulationEngine:
                 self.state.next_item_id += 1
                 self.state.items[item.id] = item
                 give_item(item, leader.id, leader.inventory)
-                self._sync_npc_from_items(leader)
+                sync_npc_from_items(self.state, leader)
 
     def _process_rest_exchanges(self, hour: int, resting_groups: list[HumanGroup]) -> None:
         """Обмен информацией и ценностями между отдыхающими группами. (§14.3)"""
@@ -1734,33 +1570,6 @@ class SimulationEngine:
             details={"item_id": item.id, "price": price},
         )
 
-    def _create_item(
-        self,
-        item_type: ItemType,
-        name: str,
-        base_value: float,
-        owner_id: int | None = None,
-        quantity: int = 1,
-        properties: dict | None = None,
-    ) -> Item:
-        item = Item(
-            id=self.state.next_item_id,
-            type=item_type,
-            name=name,
-            base_value=base_value,
-            quantity=quantity,
-            properties=properties or {},
-        )
-        self.state.next_item_id += 1
-        self.state.items[item.id] = item
-        if owner_id is not None:
-            owner = next(
-                npc for npc in self.state.humans + self.state.stationary_humans
-                if npc.id == owner_id
-            )
-            give_item(item, owner_id, owner.inventory)
-        return item
-
     def _give_starting_equipment(self, npc: HumanNPC) -> None:
         if npc.inventory:
             return
@@ -1778,7 +1587,7 @@ class SimulationEngine:
             self._spawn_catalog_item(ammo_ref, npc.id, quantity=12)
         self._spawn_catalog_item("gear.medkit.sanitar2", npc.id)
         self._spawn_catalog_item("shelter.kit.basic", npc.id)  # нерасходный набор для убежища (§7.10)
-        self._sync_npc_from_items(npc)
+        sync_npc_from_items(self.state, npc)
 
     def _spawn_catalog_item(self, item_ref: str, owner_id: int, quantity: int = 1) -> Item:
         item = self.catalog.create_item(self.state.next_item_id, item_ref, quantity=quantity)
@@ -1790,29 +1599,6 @@ class SimulationEngine:
         )
         give_item(item, owner_id, owner.inventory)
         return item
-
-    def _sync_npc_from_items(self, npc: HumanNPC) -> None:
-        weapon = self.state.items.get(npc.equipped_weapon_id)
-        armor = self.state.items.get(npc.equipped_armor_id)
-        npc.weapon_condition = weapon.condition if weapon else 0
-        npc.weapon_damage = (
-            weapon.properties.get("base_damage", weapon.properties.get("damage", 20))
-            if weapon else 5
-        )
-        npc.armor_condition = armor.condition if armor else 0
-        npc.armor_value = (
-            armor.properties.get("armor_factor", armor.properties.get("armor", 1.0))
-            * EquipmentManager.get_armor_effectiveness(armor.condition)
-            if armor else 1.0
-        )
-        npc.ammo = sum(
-            item.quantity for item_id in npc.inventory
-            if (item := self.state.items[item_id]).type is ItemType.AMMO
-        )
-        npc.medicines = sum(
-            item.quantity for item_id in npc.inventory
-            if (item := self.state.items[item_id]).type is ItemType.MEDICINE
-        )
 
     def _sync_items_from_npc(self, npc: HumanNPC) -> None:
         weapon = self.state.items.get(npc.equipped_weapon_id)
@@ -1854,20 +1640,6 @@ class SimulationEngine:
             "delta": delta,
             "event_id": event_id,
         })
-
-    def _check_and_journal_relations(self, hour: int) -> None:
-        """
-        Сравнивает текущие отношения со снимком и логирует изменения.
-        Должен вызываться ПОСЛЕ фаз, которые могут менять отношения.
-        """
-        fr = self.state.faction_relations
-        snap = self.state.prev_relation_snapshot
-        for (a, b), current_val in fr._relations.items():
-            prev_val = snap.get((a, b), current_val)
-            if current_val != prev_val:
-                delta = current_val - prev_val
-                # event_id = None означает изменение БЕЗ события — нарушение
-                self._log_relation_change(hour, a, b, delta, event_id=None)
 
     def simulate_hour(self) -> dict[str, Any]:
         """
@@ -2009,17 +1781,6 @@ class SimulationEngine:
             group.target_sector_id = target.sector_id if target is not None else None
             group.target_memory_hour = max(monster.target_memory_hour for monster in members)
 
-    def _group_kit(self, members, item_type: ItemType, predicate=None):
-        """Первый подходящий исправный комплект в инвентарях членов группы."""
-        for npc in members:
-            for item_id in npc.inventory:
-                item = self.state.items.get(item_id)
-                if item is None or item.type is not item_type or item.condition <= 0:
-                    continue
-                if predicate is None or predicate(item):
-                    return npc, item
-        return None, None
-
     def _capture_target(self, group: HumanGroup) -> Monster | None:
         """Ослабленный монстр в секторе группы. (§16.8: здоровье ≤ 35%)"""
         candidates = [
@@ -2039,32 +1800,6 @@ class SimulationEngine:
         if resisting:
             return None
         return min(candidates, key=lambda monster: monster.health_share)
-
-    def _group_can_capture(self, group: HumanGroup, members) -> bool:
-        target = self._capture_target(group)
-        if target is None:
-            return False
-        _, kit = self._group_kit(
-            members, ItemType.CAPTURE_KIT,
-            lambda item: item.properties.get("target_species") == species_value(target),
-        )
-        return kit is not None
-
-    def _group_can_destroy(self, group: HumanGroup, members) -> bool:
-        anomaly = next(
-            (
-                a for a in self.state.anomalies.values()
-                if a.sector_id == group.sector_id and a.status == AnomalyStatus.ACTIVE
-            ),
-            None,
-        )
-        if anomaly is None:
-            return False
-        _, kit = self._group_kit(
-            members, ItemType.DESTROY_KIT,
-            lambda item: item.properties.get("target_anomaly_type") == anomaly.anomaly_type.value,
-        )
-        return kit is not None
 
     def _group_detector_bonus(self) -> dict[int, int]:
         """Бонус детекторов аномалий по группам (лучший исправный детектор)."""
@@ -2232,7 +1967,7 @@ class SimulationEngine:
                     victim.status = EntityStatus.DEAD
                     self._create_corpse(victim, hour)
             elif victim.health <= 0:
-                self._set_unconscious_or_dead(victim, start, hour, cause="anomaly")
+                set_unconscious_or_dead(self.state,  victim, start, hour, cause="anomaly")
             self.state.news_manager.create_event(
                 hour=hour, minute=10, sector_id=victim.sector_id,
                 event_type="trail_block_hit",
@@ -2683,8 +2418,8 @@ class SimulationEngine:
                     int(npc.max_health * 0.15) + heal,
                 )
                 npc.status = EntityStatus.ACTIVE  # тяжёлое состояние, но в строю
-                self._use_medkit_charge(medkit, [owner] if owner else [])
-                self._sync_npc_from_items(owner)
+                use_medkit_charge(self.state,  medkit, [owner] if owner else [])
+                sync_npc_from_items(self.state, owner)
                 return
             # Без медицинской помощи бессознательный с здоровьем 0 становится трупом (§11.10)
             if hour - getattr(npc, "unconscious_start_hour", hour) >= 1:
@@ -2770,7 +2505,7 @@ class SimulationEngine:
                 "has_artifact": True,  # артефакт обнаружен при исследовании
             }, hour)
             # Сформировавшийся артефакт извлекается (§12.3)
-            self._give_artifact(npc, target, hour)
+            give_artifact(self.state, npc, target, hour)
         elif result == "safe_path_found":
             kb.add_manual(npc.id, KnowledgeType.SAFE_PATH, target.id, {
                 "sector_id": npc.sector_id, "active": True,
@@ -2779,12 +2514,12 @@ class SimulationEngine:
             kb.add_manual(npc.id, KnowledgeType.ANOMALY, target.id, {
                 "sector_id": npc.sector_id, "has_artifact": True,
             }, hour)
-            self._give_artifact(npc, target, hour)
+            give_artifact(self.state, npc, target, hour)
         elif result == "damage_taken":
             start = npc.health
             npc.health = max(0, npc.health - outcome.get("damage", 0))
             if npc.health <= 0:
-                self._set_unconscious_or_dead(npc, start, hour, cause="research")
+                set_unconscious_or_dead(self.state,  npc, start, hour, cause="research")
 
         if result != "no_new_info":
             self.state.news_manager.create_event(
@@ -2793,24 +2528,6 @@ class SimulationEngine:
                 importance=25, summary=f"NPC {npc.id} исследует аномалию {target.id}: {result}",
                 details={"anomaly_id": target.id, "outcome": result},
             )
-
-    def _give_artifact(self, npc: HumanNPC, anomaly, hour: int) -> None:
-        for art in self.state.artifacts.artifacts:
-            if art.anomaly_id == anomaly.id and not art.discovered:
-                art.discovered = True
-                npc.artifacts.append(art.id)
-                self._create_item(
-                    ItemType.ARTIFACT, f"Артефакт ({art.rarity})", art.value, npc.id,
-                    properties={"artifact_id": art.id},
-                )
-                self.state.news_manager.create_event(
-                    hour=hour, minute=45, sector_id=npc.sector_id,
-                    event_type="artifact_found", participants=[npc.id], result="picked_up",
-                    importance=30,
-                    summary=f"NPC {npc.id} извлёк артефакт из аномалии {anomaly.id}",
-                    details={"artifact_id": art.id, "rarity": art.rarity, "value": art.value},
-                )
-                return
 
     def _process_artifact_sales(self, hour: int) -> None:
         """Продажа артефактов торговцу по формулам §16.3.
@@ -2894,23 +2611,11 @@ class SimulationEngine:
                 details={"result": result},
             )
 
-    def _set_unconscious_or_dead(self, npc: HumanNPC, start_health: int,
-                                 hour: int, cause: str) -> None:
-        outcome = self._resolve_zero_health(npc, start_health)
-        self.state.news_manager.create_event(
-            hour=hour, minute=0, sector_id=npc.sector_id,
-            event_type="npc_death" if outcome == "dead" else "npc_unconscious",
-            participants=[npc.id], result=outcome,
-            importance=60 if outcome == "dead" else 40,
-            summary=f"NPC {npc.id}: {outcome} ({cause})",
-            details={"cause": cause},
-        )
-
     def _execute_battles(self, hour: int) -> None:
         for battle in self._pending_battles:
             for entity in battle["attackers"] + battle["defenders"]:
                 if isinstance(entity, HumanNPC):
-                    self._sync_npc_from_items(entity)
+                    sync_npc_from_items(self.state, entity)
             attackers = [
                 CombatFactory.from_monster(entity) if battle["attacker_is_monster"]
                 else CombatFactory.from_human(entity)
@@ -2949,7 +2654,7 @@ class SimulationEngine:
                 # базы и стационарные укрытия — опорные пункты при обороне (§7.16)
                 defender_has_shelter=(
                     not battle["defender_is_monster"]
-                    and battle["sector_id"] in self._shelter_sector_ids()
+                    and battle["sector_id"] in shelter_sector_ids(self.state)
                 ),
                 defender_bonus=(
                     BASE_FORTIFICATION_BONUS
@@ -3024,7 +2729,7 @@ class SimulationEngine:
                 if (
                     group.id in self.state.human_groups
                     and self._emission_active(hour)
-                    and not self._is_group_emission_sheltered(group)
+                    and not is_group_emission_sheltered(self.state,  group)
                 ):
                     self._mark_group_emission_exposed(group, hour)
             monster_group_key = (
@@ -3349,7 +3054,7 @@ class SimulationEngine:
         self, group: HumanGroup, hour: int, is_night: bool,
     ) -> bool:
         """Разрушение аномалии комплектом — основное действие часа (§12.4)."""
-        members = self._active_members(group)
+        members = active_members(self.state,  group)
         if not members or any(npc.id in self._combat_human_ids for npc in members):
             return False
         anomaly = next(
@@ -3361,13 +3066,13 @@ class SimulationEngine:
         )
         if anomaly is None:
             return False
-        _, kit = self._group_kit(
+        _, kit = group_kit(self.state, 
             members, ItemType.DESTROY_KIT,
             lambda item: item.properties.get("target_anomaly_type") == anomaly.anomaly_type.value,
         )
         if kit is None:
             return False
-        leader = self._group_leader(group, members)
+        leader = group_leader(group, members)
         attentiveness = round(sum(npc.attentiveness for npc in members) / len(members))
         result = attempt_destroy_anomaly(
             anomaly,
@@ -3379,7 +3084,7 @@ class SimulationEngine:
         )
         kit.condition = result["kit_new_condition"]
         if kit.condition <= 0:
-            self._consume_item(kit, members)
+            consume_item(self.state, kit, members)
         for member in members:
             update_stamina(member, STAMINA_COST_RESEARCH, "destroy", self.state.time)
 
@@ -3399,12 +3104,12 @@ class SimulationEngine:
             )
             victim.health = damage_result.get("new_health", victim.health)
             if victim.health <= 0:
-                self._set_unconscious_or_dead(victim, start, hour, cause="anomaly")
+                set_unconscious_or_dead(self.state,  victim, start, hour, cause="anomaly")
 
         if result["destroyed"]:
             parts = get_anomaly_parts_after_destruction(anomaly)
             for _ in range(parts["quantity"]):
-                self._create_item(
+                create_item(self.state, 
                     ItemType.ANOMALY_PART, "Часть аномалии", 40.0, leader.id,
                     properties={
                         "anomaly_type": anomaly.anomaly_type.value,
@@ -3412,7 +3117,7 @@ class SimulationEngine:
                     },
                 )
             # уже сформировавшийся артефакт может быть извлечён (§12.4)
-            self._give_artifact(leader, anomaly, hour)
+            give_artifact(self.state, leader, anomaly, hour)
             self.state.news_manager.create_event(
                 hour=hour, minute=40, sector_id=group.sector_id,
                 event_type="anomaly_destroyed",
@@ -3437,19 +3142,19 @@ class SimulationEngine:
 
     def _process_capture_monster(self, group: HumanGroup, hour: int) -> bool:
         """Захват живого монстра — основное действие часа (§16.8)."""
-        members = self._active_members(group)
+        members = active_members(self.state,  group)
         if not members or any(npc.id in self._combat_human_ids for npc in members):
             return False
         target = self._capture_target(group)
         if target is None:
             return False
-        _, kit = self._group_kit(
+        _, kit = group_kit(self.state, 
             members, ItemType.CAPTURE_KIT,
             lambda item: item.properties.get("target_species") == species_value(target),
         )
         if kit is None:
             return False
-        leader = self._group_leader(group, members)
+        leader = group_leader(group, members)
         chance = CaptureManager.calculate_capture_chance(
             health_share=target.health_share,
             attacker_att=max(npc.attentiveness for npc in members),
@@ -3461,7 +3166,7 @@ class SimulationEngine:
         species = species_value(target)
         if success:
             rank = kit.properties.get("danger_rank", 1)
-            self._create_item(
+            create_item(self.state, 
                 ItemType.LIVE_MONSTER, f"Живой монстр ({species})",
                 200.0 + 300.0 * rank, leader.id,
                 properties={"species": species, "source_monster_id": target.id},
@@ -3487,13 +3192,13 @@ class SimulationEngine:
             wear = self.state.rng.randint(*CaptureManager.get_kit_damage_on_failure())
             kit.condition = max(0, kit.condition - wear)
             if kit.condition <= 0:
-                self._consume_item(kit, members)
+                consume_item(self.state, kit, members)
             if self.state.rng.random() < 0.5:
                 victim = self.state.rng.choice(members)
                 start = victim.health
                 victim.health = max(0, victim.health - max(5, round(target.attack * 0.5)))
                 if victim.health <= 0:
-                    self._set_unconscious_or_dead(victim, start, hour, cause="capture")
+                    set_unconscious_or_dead(self.state,  victim, start, hour, cause="capture")
                 outcome = "counterattack"
             else:
                 # монстр уходит: уходит вся его группа, чтобы не разделять состав

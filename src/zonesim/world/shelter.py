@@ -6,7 +6,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+from zonesim.world.entity import EntityStatus
+
+if TYPE_CHECKING:
+    from zonesim.simulation.state import SimulationState
+    from zonesim.world.group import HumanGroup
 
 
 @dataclass
@@ -138,3 +144,91 @@ class StormShelter:
     @property
     def is_occupied(self) -> bool:
         return self.occupied_by is not None
+
+
+def shelter_sector_ids(state) -> set[int]:
+    """Сектора, дающие защиту: временные убежища, стационарные, базы, торговцы. (§12.7)"""
+    # Временные убежища — любые активные (не только с participant_count > 0)
+    ids = {s.sector_id for s in state.temp_shelters.values() if s.is_active}
+    ids |= {s.sector_id for s in state.shelters.values()}
+    ids |= {s.id for s in state.sectors.values() if s.is_faction_start}
+    ids |= {
+        npc.sector_id for npc in state.stationary_humans
+        if npc.stationary_role == "trader" and npc.status == EntityStatus.ACTIVE
+    }
+    # Временная база ситуативного торговца — только REST (не SLEEP)
+    if (
+        state.conditional_trader_id is not None
+        and state.conditional_trader_sector >= 0
+        and state.conditional_trader_start_hour >= 0
+        and state.conditional_trader_end_hour >= 0
+    ):
+        current_hour = state.time.hour
+        if state.conditional_trader_start_hour <= current_hour < state.conditional_trader_end_hour:
+            ids.add(state.conditional_trader_sector)
+    return ids
+
+
+def group_in_shelter(state, group: HumanGroup) -> bool:
+    """Проверяет, находится ли группа в укрытии."""
+    return group.sector_id in shelter_sector_ids(state)
+
+
+def shelter_targets(state, group: HumanGroup, hour: int) -> set[int]:
+    """Доступные укрытия: занятые монстрами не считаются. (§12.7, §13.7)"""
+    occupied = {
+        shelter.sector_id
+        for shelter in state.shelters.values()
+        if shelter.is_occupied and shelter.occupied_until > hour
+    }
+    targets = shelter_sector_ids(state) - occupied
+    return targets or shelter_sector_ids(state)
+
+
+def process_create_shelter(state, group: HumanGroup, hour: int) -> bool:
+    """Создаёт временное убежище (§7.10)."""
+    from zonesim.world.groups import active_members, group_leader
+    from zonesim.world.item import ItemType
+
+    members = active_members(state, group)
+    if not members:
+        return False
+
+    # Проверка: хотя бы один NPC имеет набор — не расходуется
+    leader = group_leader(group, members)
+    has_kit = any(
+        state.items.get(item_id) and state.items[item_id].type is ItemType.SHELTER_KIT
+        for npc in members
+        for item_id in npc.inventory
+    )
+    if not has_kit:
+        return False
+
+    # Создать Shelter — материал не тратится
+    shelter_id = state.next_shelter_id
+    state.next_shelter_id += 1
+    shelter = Shelter(
+        id=shelter_id,
+        sector_id=group.sector_id,
+        owner_group_id=group.id,
+        owner_faction=members[0].faction if members else "",
+        created_hour=hour,
+        last_used_hour=hour,
+        quality=50,
+    )
+    shelter.add_group(group.id, [m.id for m in members if m.status == EntityStatus.ACTIVE])
+    state.temp_shelters[shelter_id] = shelter
+
+    # Кулдаун на уровне группы
+    group.last_shelter_hour = hour
+
+    state.news_manager.create_event(
+        hour=hour, minute=0, sector_id=group.sector_id,
+        event_type="shelter_created",
+        participants=[m.id for m in members[:1]],
+        result="created",
+        importance=30,
+        summary=f"Группа {group.id} создала временное убежище в секторе {group.sector_id}",
+        details={"shelter_id": shelter_id, "sector_id": group.sector_id},
+    )
+    return True

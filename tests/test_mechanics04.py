@@ -9,6 +9,7 @@ from zonesim.knowledge.fact import KnowledgeBase, KnowledgeType
 from zonesim.simulation.engine import SimulationEngine
 from zonesim.simulation.phases import run_phase4_intentions
 from zonesim.world.entity import EntityStatus
+from zonesim.world.item import create_item
 from zonesim.world.sector import get_distance
 
 from tests.test_actions_integration import _solo_group
@@ -236,9 +237,11 @@ class TestFindings:
         engine = SimulationEngine(seed=42)
         corpse = engine._create_corpse(engine.state.humans[0], hour=0)
         corpse.status = "available"
-        item = engine._create_item(
+        item = create_item(
+            engine.state,
             __import__("zonesim.world.item", fromlist=["ItemType"]).ItemType.ARTIFACT,
             "Артефакт", 100.0,
+            owner_id=None,
         )
         corpse.items.append(item.id)
         engine._expire_findings(24)
