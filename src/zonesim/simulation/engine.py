@@ -1774,7 +1774,7 @@ class SimulationEngine:
         points: float,
     ) -> list[int]:
         """Проходит маршрут, пока хватает пунктов движения. Возвращает пройденные сектора."""
-        trails = self.state.trails
+        trails = trail_set(self.state)
         path: list[int] = []
         current = start
         while points > 1e-9:
@@ -1905,7 +1905,7 @@ class SimulationEngine:
         from zonesim.world.sector import get_distance
 
         self._moved_monster_ids = set()
-        trails = self.state.trails
+        trails = trail_set(self.state)
         for group in self.state.monster_groups.values():
             all_members = self._monster_group_members(group, active_only=False)
             members = [monster for monster in all_members if monster.status == EntityStatus.ACTIVE]

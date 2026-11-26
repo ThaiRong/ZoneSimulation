@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(import *)",
+      "Bash(from *)",
+      "Bash(engine_path *)",
+      "Bash('src/zonesim/simulation/engine.py')",
+      "Bash(code *)",
+      "Bash(method_names *)",
+      "Bash('_roll_trail_blockages', *)",
+      "Bash('_is_group_emission_sheltered', *)",
+      "Bash('_use_medkit_charge', *)",
+      "Bash('_check_and_journal_relations', *)",
+      "Bash('_give_artifact', *)",
+      "Bash('_roll_trail_blockage', *)",
+      "Bash(])",
+      "Bash(lines *)",
+      "Bash(true)",
+      "Bash(deleted *)",
+      "Bash(method_positions *)",
+      "Bash(lines)",
+      "Bash(start *)",
+      "Bash(end *)",
+      "Bash(l *)",
+      "Bash(dir *)",
+      "Bash(git show *)",
+      "Bash(rm *)",
+      "Bash(findstr *)",
+      "Bash(powershell *)",
+      "Bash(select-object *)",
+      "Bash(mkdir *)",
+      "Bash(move *)"
+    ]
+  },
+  "$version": 3
+}
