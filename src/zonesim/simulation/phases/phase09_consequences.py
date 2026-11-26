@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from zonesim.simulation.context import SimulationContext
+from zonesim.world.groups import sync_human_groups
 
 
 def run_phase9_consequences(ctx: SimulationContext) -> None:
@@ -19,7 +20,7 @@ def run_phase9_consequences(ctx: SimulationContext) -> None:
     state = ctx.state
     hour = ctx.hour
 
-    engine._sync_human_groups()
+    sync_human_groups(state)
 
     # Экспорт артефактов и ресурсов (ежедневно)
     if state.time.hour % 24 == 7:

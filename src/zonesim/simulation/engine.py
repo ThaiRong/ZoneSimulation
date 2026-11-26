@@ -65,17 +65,24 @@ from zonesim.combat.power import squad_power, monster_group_power
 
 from zonesim.combat.medkit import use_medkit_charge, emergency_medkit
 from zonesim.combat.results import resolve_zero_health, set_unconscious_or_dead
+from zonesim.combat.guards import base_guards
 
 from zonesim.needs.healing import rest_heal
 from zonesim.needs.artifact import give_artifact
 
 from zonesim.economy.trader import sell_loot, SELL_PRICE_SHARE
 from zonesim.world.groups import group_kit, active_members, group_leader
+from zonesim.world.groups import monster_group_members, sync_human_groups, sync_monster_groups
 from zonesim.world.shelter import (
     shelter_sector_ids, group_in_shelter, shelter_targets, process_create_shelter,
+    free_emptied_shelters, update_shelter_participants,
 )
+from zonesim.actions.movement import walk
+from zonesim.knowledge import group_detector_bonus
+from zonesim.knowledge.expiry import expire_findings
 from zonesim.world.trails import (
     trail_set, roll_trail_blockage, roll_trail_blockages,
+    blocked_trail_map, group_has_passage,
 )
 from zonesim.world.item import create_item, consume_item, sync_npc_from_items
 from zonesim.relations.journal import check_and_journal_relations, log_relation_change
@@ -243,60 +250,7 @@ class SimulationEngine:
         self._init_shelters()
         roll_trail_blockages(self.state)
         self.state.next_emission_hour = schedule_next_emission(self.state.rng)
-        self._sync_monster_groups()
-
-    def _sync_monster_groups(self) -> None:
-        monsters = {monster.id: monster for monster in self.state.monsters}
-        gone = (EntityStatus.DEAD, EntityStatus.EXILED)
-        for group_id, group in list(self.state.monster_groups.items()):
-            group.members = [
-                member_id for member_id in group.members
-                if member_id in monsters and monsters[member_id].status not in gone
-            ]
-            if not group.members:
-                del self.state.monster_groups[group_id]
-                continue
-            members = [monsters[member_id] for member_id in group.members]
-            group.sector_id = members[0].sector_id
-            group.species = species_value(members[0])
-            if group.home_sector_id is None:
-                group.home_sector_id = members[0].home_sector_id
-
-        for monster in self.state.monsters:
-            if monster.status in gone:
-                monster.group_id = None
-                continue
-            if monster.group_id in self.state.monster_groups:
-                continue
-            monster.group_id = None
-            species = species_value(monster)
-            max_size = monster.species_params.get("normal_group_size", (1, 1))[1]
-            group = next(
-                (
-                    candidate for candidate in self.state.monster_groups.values()
-                    if candidate.species == species and candidate.sector_id == monster.sector_id
-                    and candidate.member_count < max_size
-                ),
-                None,
-            )
-            if group is None:
-                group = MonsterGroup(
-                    id=self.state.next_monster_group_id,
-                    sector_id=monster.sector_id,
-                    species=species,
-                    home_sector_id=monster.home_sector_id,
-                )
-                self.state.next_monster_group_id += 1
-                self.state.monster_groups[group.id] = group
-            group.members.append(monster.id)
-            monster.group_id = group.id
-
-    def _monster_group_members(self, group: MonsterGroup, active_only: bool = True) -> list[Monster]:
-        monsters = {monster.id: monster for monster in self.state.monsters}
-        members = [monsters[member_id] for member_id in group.members if member_id in monsters]
-        if active_only:
-            members = [monster for monster in members if monster.status == EntityStatus.ACTIVE]
-        return members
+        sync_monster_groups(self.state)
 
     # Наценка торговцев поверх каталога
     TRADE_MARKUP = 1.2
@@ -403,65 +357,6 @@ class SimulationEngine:
         if self._conditional_trader_is_active():
             return self.state.conditional_trader_sector
         return None
-
-    def _update_shelter_participants(self, hour: int) -> None:
-        """Обновляет участников Shelter и удаляет пустые группы."""
-        npcs = {npc.id: npc for npc in self.state.humans}
-        
-        for shelter_id, shelter in list(self.state.temp_shelters.items()):
-            if not shelter.is_active:
-                continue
-            
-            # Обновляем участников
-            for group_id, npc_ids in list(shelter.participants.items()):
-                group = self.state.human_groups.get(group_id)
-                if group is None:
-                    shelter.remove_group(group_id)
-                    continue
-                
-                # Проверяем что группа жива и в том же секторе
-                active_members = [
-                    mid for mid in group.members
-                    if mid in npcs and npcs[mid].sector_id == shelter.sector_id
-                    and npcs[mid].status not in (EntityStatus.DEAD, EntityStatus.EXILED)
-                ]
-                
-                if not active_members:
-                    shelter.remove_group(group_id)
-                else:
-                    shelter.participants[group_id] = active_members
-            
-            # Проверяем экспирацию
-            if shelter.expire(hour):
-                # Эвакуируем участников из разрушенного убежища (§12.7, #20)
-                shelter_ids = shelter_sector_ids(self.state)
-                for group_id, npc_ids in list(shelter.participants.items()):
-                    group = self.state.human_groups.get(group_id)
-                    if group is None or not npc_ids:
-                        continue
-                    # Перемещаем к ближайшему Shelter
-                    path = self._walk(group.sector_id, shelter_ids, set(), points=1.0)
-                    if path and len(path) >= 2:
-                        for npc_id in npc_ids:
-                            npc = self.state.humans.__iter__()
-                            for n in self.state.humans:
-                                if n.id == npc_id:
-                                    n.sector_id = path[1]
-                                    group.sector_id = path[1]
-                                    # Разбуживаем спящих участников (#13 invariant)
-                                    if n.status == EntityStatus.SLEEPING:
-                                        n.status = EntityStatus.ACTIVE
-                                        n.intention = REST
-                                        group.comfort = False  # сбросим comfort
-                                    break
-                self.state.news_manager.create_event(
-                    hour=hour, minute=0, sector_id=shelter.sector_id,
-                    event_type="shelter_expired", participants=[], result="expired",
-                    importance=5,
-                    summary=f"Убежище {shelter_id} в секторе {shelter.sector_id} разрушено",
-                    details={"shelter_id": shelter_id},
-                )
-                del self.state.temp_shelters[shelter_id]
 
     def _emission_active(self, hour: int) -> bool:
         return is_emission_active(
@@ -769,22 +664,6 @@ class SimulationEngine:
                 continue
             self._mark_group_emission_exposed(group, hour)
 
-    def _free_emptied_shelters(self, hour: int) -> None:
-        """Освобождает укрытия, если монстры ушли из сектора (§13.7, #23)."""
-        for shelter in self.state.shelters.values():
-            if not shelter.is_occupied or shelter.occupied_by is None:
-                continue
-            group = self.state.monster_groups.get(shelter.occupied_by)
-            if group is None or group.sector_id != shelter.sector_id:
-                shelter.occupied_by = None
-                self.state.news_manager.create_event(
-                    hour=hour, minute=0, sector_id=shelter.sector_id,
-                    event_type="shelter", participants=[], result="freed_emptied",
-                    importance=15,
-                    summary=f"Укрытие {shelter.id} освобождено (монстры ушли)",
-                    details={"shelter_id": shelter.id},
-                )
-
     def _process_shelter_occupation(self, hour: int) -> None:
         # истечение занятия проверяется каждый час
         for shelter in self.state.shelters.values():
@@ -801,7 +680,7 @@ class SimulationEngine:
             return
         candidates = [
             group for group in self.state.monster_groups.values()
-            if any(m.status == EntityStatus.ACTIVE for m in self._monster_group_members(group))
+            if any(m.status == EntityStatus.ACTIVE for m in monster_group_members(self.state, group))
         ]
         if not candidates:
             return
@@ -815,7 +694,7 @@ class SimulationEngine:
             if self.state.rng.random() >= EMISSION_MONSTER_SHELTER_CHANCE:
                 continue
             group = self.state.rng.choice(free_groups)
-            members = self._monster_group_members(group)
+            members = monster_group_members(self.state, group)
             if not members:
                 continue
             used_groups.add(group.id)
@@ -937,7 +816,7 @@ class SimulationEngine:
             monster_group = self.state.monster_groups.get(shelter.occupied_by)
             if monster_group is None:
                 continue
-            members = self._monster_group_members(monster_group)
+            members = monster_group_members(self.state, monster_group)
             if not members:
                 continue
 
@@ -976,23 +855,6 @@ class SimulationEngine:
             })
 
     # --- Находки: срок жизни ~суток (§16.10) ---
-
-    def _expire_findings(self, hour: int) -> None:
-        remaining = []
-        for corpse in self.state.corpses:
-            if corpse.status == "available" and hour - corpse.created_hour >= 24:
-                for item_id in list(corpse.items):
-                    self.state.items.pop(item_id, None)
-                self.state.news_manager.create_event(
-                    hour=hour, minute=0, sector_id=corpse.sector_id,
-                    event_type="finding_expired", participants=[], result="expired",
-                    importance=5,
-                    summary=f"Находка в секторе {corpse.sector_id} исчезла",
-                    details={"corpse_id": corpse.id},
-                )
-                continue
-            remaining.append(corpse)
-        self.state.corpses = remaining
 
     # --- Сигналы бедствия (§16.10) ---
 
@@ -1660,7 +1522,7 @@ class SimulationEngine:
         run_phase9_consequences(self.context)
 
         # Перед проверкой инвариантов — финальная согласованность укрытий (#23)
-        self._free_emptied_shelters(hour)
+        free_emptied_shelters(self.state, hour)
 
         # Проверка инвариантов мира (§22 ТЗ) — ПОСЛЕ шага, на моменте часа
         errors = assert_world_invariants(self.state)
@@ -1688,30 +1550,13 @@ class SimulationEngine:
             "events": events,
         }
 
-    def _sync_human_groups(self) -> None:
-        """Убирает выбывших и удаляет пустые группы, сохраняя инварианты §7.5."""
-        npcs = {npc.id: npc for npc in self.state.humans}
-        for group_id, group in list(self.state.human_groups.items()):
-            for member_id in list(group.members):
-                npc = npcs.get(member_id)
-                if npc is None or npc.status in (EntityStatus.DEAD, EntityStatus.EXILED):
-                    group.remove_member(member_id)
-                    if npc is not None:
-                        npc.group_id = None
-            if not group.members:
-                del self.state.human_groups[group_id]
-                continue
-            group.sector_id = npcs[group.members[0]].sector_id
-            if group.leader_id not in group.members:
-                group.select_leader(npcs)
-
     def _phase4_monster_intentions(self, hour: int) -> None:
         entities = {
             entity.id: entity
             for entity in self.state.humans + self.state.stationary_humans + self.state.monsters
         }
         for group in self.state.monster_groups.values():
-            members = self._monster_group_members(group)
+            members = monster_group_members(self.state, group)
             if not members:
                 continue
             target = None
@@ -1744,55 +1589,6 @@ class SimulationEngine:
             group.target_sector_id = target.sector_id if target is not None else None
             group.target_memory_hour = max(monster.target_memory_hour for monster in members)
 
-    def _group_detector_bonus(self) -> dict[int, int]:
-        """Бонус детекторов аномалий по группам (лучший исправный детектор)."""
-        humans = {npc.id: npc for npc in self.state.humans}
-        bonuses: dict[int, int] = {}
-        for group in self.state.human_groups.values():
-            best = 0
-            for member_id in group.members:
-                npc = humans.get(member_id)
-                if npc is None:
-                    continue
-                for item_id in npc.inventory:
-                    item = self.state.items.get(item_id)
-                    if (
-                        item is not None
-                        and item.type is ItemType.DETECTOR
-                        and item.condition > 0
-                    ):
-                        best = max(best, item.properties.get("anomaly_detection_bonus", 0))
-            if best:
-                bonuses[group.id] = best
-        return bonuses
-
-    def _walk(
-        self,
-        start: int,
-        target_ids: set[int],
-        avoid_ids: set[int],
-        points: float,
-    ) -> list[int]:
-        """Проходит маршрут, пока хватает пунктов движения. Возвращает пройденные сектора."""
-        trails = trail_set(self.state)
-        path: list[int] = []
-        current = start
-        while points > 1e-9:
-            nxt = next_step_towards(
-                self.state.sectors, current, target_ids, avoid_ids, trails,
-            )
-            if nxt is None or nxt == current:
-                break
-            cost = edge_cost(trails, current, nxt)
-            if points + 1e-9 < cost:
-                break
-            points -= cost
-            current = nxt
-            path.append(nxt)
-            if current in target_ids:
-                break
-        return path
-
     def _apply_human_move(
         self,
         group: HumanGroup,
@@ -1819,28 +1615,6 @@ class SimulationEngine:
                 npcs[prisoner_id].sector_id = group.sector_id
         self._check_blocked_trails(group, members, crossed, hour, is_monster=False)
 
-    def _blocked_trail_map(self) -> dict[tuple[int, int], AnomalyEntity]:
-        mapping: dict[tuple[int, int], AnomalyEntity] = {}
-        for anomaly in self.state.anomalies.values():
-            if anomaly.status == AnomalyStatus.ACTIVE and anomaly.blocks_trail:
-                mapping[edge_key(anomaly.blocks_trail[0], anomaly.blocks_trail[1])] = anomaly
-        return mapping
-
-    def _group_has_passage(self, group: HumanGroup, anomaly) -> bool:
-        edge = list(anomaly.blocks_trail)
-        humans = {npc.id: npc for npc in self.state.humans}
-        for member_id in group.members:
-            npc = humans.get(member_id)
-            if npc is None:
-                continue
-            kb = self.state.knowledge_bases.get(npc.id)
-            if kb is None:
-                continue
-            for fact in kb.get_facts(KnowledgeType.SAFE_PATH, subject_id=anomaly.id):
-                if fact.payload.get("edge") == edge:
-                    return True
-        return False
-
     def _check_blocked_trails(
         self,
         group,
@@ -1852,13 +1626,13 @@ class SimulationEngine:
         """Перекрытые тропы: одна проверка на группу при переходе. (§10.5)"""
         if not crossed:
             return
-        blocked = self._blocked_trail_map()
+        blocked = blocked_trail_map(self.state)
         is_night = self.state.time.is_night()
         for edge in crossed:
             anomaly = blocked.get(edge)
             if anomaly is None:
                 continue
-            if not is_monster and self._group_has_passage(group, anomaly):
+            if not is_monster and group_has_passage(self.state, group, anomaly):
                 continue  # держатели прохода пересекают без проверки
             attentiveness = max(member.attentiveness for member in members)
             if is_monster:
@@ -1867,7 +1641,7 @@ class SimulationEngine:
                     else MONSTER_NATIVE_ANOMALY_BONUS
                 )
             else:
-                bonus = self._group_detector_bonus().get(group.id, 0)
+                bonus = group_detector_bonus(self.state).get(group.id, 0)
             contact = check_anomaly_contact(
                 entity_sector=members[0].sector_id,
                 anomaly=anomaly,
@@ -1907,7 +1681,7 @@ class SimulationEngine:
         self._moved_monster_ids = set()
         trails = trail_set(self.state)
         for group in self.state.monster_groups.values():
-            all_members = self._monster_group_members(group, active_only=False)
+            all_members = monster_group_members(self.state, group, active_only=False)
             members = [monster for monster in all_members if monster.status == EntityStatus.ACTIVE]
             if not members or len(members) != len(all_members):
                 continue
@@ -1917,12 +1691,12 @@ class SimulationEngine:
             points = 2.0 if group.species == "territorial_predator" else 1.0
             path: list[int] = []
             if group.intention == "stalk" and group.target_sector_id is not None:
-                path = self._walk(
-                    group.sector_id, {group.target_sector_id}, set(), points,
+                path = walk(
+                    self.state, group.sector_id, {group.target_sector_id}, set(), points,
                 )
             elif group.intention == "return_home" and group.home_sector_id is not None:
-                path = self._walk(
-                    group.sector_id, {group.home_sector_id}, set(), points,
+                path = walk(
+                    self.state, group.sector_id, {group.home_sector_id}, set(), points,
                 )
             elif group.intention == "roam":
                 current = group.sector_id
@@ -2053,7 +1827,7 @@ class SimulationEngine:
                 if group.sector_id != sector_id:
                     continue
                 members = [
-                    monster for monster in self._monster_group_members(group)
+                    monster for monster in monster_group_members(self.state, group)
                     if monster.id not in engaged_monsters
                 ]
                 if members:
@@ -2081,7 +1855,7 @@ class SimulationEngine:
                         key=lambda item: sum(npc.health_share for npc in item[1]) / len(item[1]),
                     )
                     if self._monsters_attack(monsters, target_members, is_night):
-                        guards = self._base_guards(sector_id, target_members[0].faction)
+                        guards = base_guards(self.state, sector_id, target_members[0].faction)
                         self._schedule_monster_attack(
                             monster_group, monsters, target_members + guards,
                             target_group.id, sector_id, False,
@@ -2122,7 +1896,7 @@ class SimulationEngine:
                     if sector.controller_faction == first_faction != second_faction:
                         defender_group, defender_members = first_group, first_members
                         attacker_group, attacker_members = second_group, second_members
-                    guards = self._base_guards(sector_id, defender_members[0].faction)
+                    guards = base_guards(self.state, sector_id, defender_members[0].faction)
                     self._pending_battles.append({
                         "sector_id": sector_id,
                         "attackers": attacker_members,
@@ -2195,7 +1969,7 @@ class SimulationEngine:
         for group in self.state.monster_groups.values():
             if group.intention != "feed":
                 continue
-            members = self._monster_group_members(group)
+            members = monster_group_members(self.state, group)
             if not members or any(monster.id in engaged_monsters for monster in members):
                 continue  # частично вовлечённая в бой группа не участвует в борьбе за труп
             corpse = next(
@@ -2231,15 +2005,6 @@ class SimulationEngine:
                 challenger[0].intention = "roam"
             self._feeding_claims[strongest[0].id] = corpse_id
 
-    def _base_guards(self, sector_id: int, faction: str) -> list[HumanNPC]:
-        sector = self.state.sectors[sector_id]
-        if not sector.is_faction_start or sector.controller_faction != faction:
-            return []
-        return [
-            npc for npc in self.state.stationary_humans
-            if npc.sector_id == sector_id and npc.stationary_role == "guard"
-            and npc.status == EntityStatus.ACTIVE
-        ]
     def _monsters_attack(self, monsters: list[Monster], prey: list, is_night: bool) -> bool:
         predator = monsters[0]
         species = species_value(predator)
@@ -2901,7 +2666,7 @@ class SimulationEngine:
             corpse = next((item for item in self.state.corpses if item.id == corpse_id), None)
             if group is None or corpse is None or corpse.status != "available":
                 continue
-            members = self._monster_group_members(group)
+            members = monster_group_members(self.state, group)
             if not members or any(monster.id in self._combat_monster_ids for monster in members):
                 continue  # группа не кормится частично: любой бой отменяет кормление всей группы
             result = self._feed_manager.consume(corpse, members[0], hour, self.state.items)
@@ -2922,7 +2687,7 @@ class SimulationEngine:
     def _process_monster_rest(self, fed_groups: set[int], is_night: bool) -> None:
         for group in self.state.monster_groups.values():
             # Регенерация здоровья: пассивная, усиленная в час отдыха (§14.3)
-            for monster in self._monster_group_members(group, active_only=False):
+            for monster in monster_group_members(self.state, group, active_only=False):
                 if monster.status in (EntityStatus.DEAD, EntityStatus.EXILED):
                     continue
                 regen = MONSTER_HEALTH_REGEN_PASSIVE
@@ -2934,7 +2699,7 @@ class SimulationEngine:
                 )
             if group.id in fed_groups:
                 continue
-            members = self._monster_group_members(group, active_only=False)
+            members = monster_group_members(self.state, group, active_only=False)
             if not members or any(monster.id in self._combat_monster_ids for monster in members):
                 continue
             if group.intention == "rest":

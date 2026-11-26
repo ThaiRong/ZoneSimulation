@@ -232,3 +232,92 @@ def process_create_shelter(state, group: HumanGroup, hour: int) -> bool:
         details={"shelter_id": shelter_id, "sector_id": group.sector_id},
     )
     return True
+
+
+def free_emptied_shelters(state, hour: int) -> None:
+    """Освобождает укрытия, если монстры ушли из сектора. (§13.7, #23)"""
+    from zonesim.world.entity import EntityStatus
+
+    for shelter in state.shelters.values():
+        if not shelter.is_occupied or shelter.occupied_by is None:
+            continue
+        group = state.monster_groups.get(shelter.occupied_by)
+        if group is None or group.sector_id != shelter.sector_id:
+            shelter.occupied_by = None
+            state.news_manager.create_event(
+                hour=hour, minute=0, sector_id=shelter.sector_id,
+                event_type="shelter", participants=[], result="freed_emptied",
+                importance=15,
+                summary=f"Укрытие {shelter.id} освобождено (монстры ушли)",
+                details={"shelter_id": shelter.id},
+            )
+
+
+def update_shelter_participants(state, hour: int) -> None:
+    """Обновляет участников Shelter и удаляет пустые группы. (§7.10, #20)"""
+    from zonesim.world.entity import EntityStatus
+
+    # Импортируем тут, чтобы избежать циклического импорта
+    from zonesim.ai import REST
+
+    npcs = {npc.id: npc for npc in state.humans}
+
+    for shelter_id, shelter in list(state.temp_shelters.items()):
+        if not shelter.is_active:
+            continue
+
+        # Обновляем участников
+        for group_id, npc_ids in list(shelter.participants.items()):
+            group = state.human_groups.get(group_id)
+            if group is None:
+                shelter.remove_group(group_id)
+                continue
+
+            # Проверяем что группа жива и в том же секторе
+            active_members_shelter = [
+                mid for mid in group.members
+                if mid in npcs and npcs[mid].sector_id == shelter.sector_id
+                and npcs[mid].status not in (EntityStatus.DEAD, EntityStatus.EXILED)
+            ]
+
+            if not active_members_shelter:
+                shelter.remove_group(group_id)
+            else:
+                shelter.participants[group_id] = active_members_shelter
+
+        # Проверяем экспирацию
+        if shelter.expire(hour):
+            # Эвакуируем участников из разрушенного убежища (§12.7, #20)
+            from zonesim.world.shelter import shelter_sector_ids
+            from zonesim.actions.movement import walk
+
+            shelter_ids = shelter_sector_ids(state)
+            for group_id, npc_ids in list(shelter.participants.items()):
+                group = state.human_groups.get(group_id)
+                if group is None or not npc_ids:
+                    continue
+                # Перемещаем к ближайшему Shelter
+                path = walk(state, group.sector_id, shelter_ids, set(), points=1.0)
+                if path and len(path) >= 2:
+                    for npc_id in npc_ids:
+                        npc = None
+                        for n in state.humans:
+                            if n.id == npc_id:
+                                npc = n
+                                break
+                        if npc:
+                            npc.sector_id = path[1]
+                            group.sector_id = path[1]
+                            # Разбуживаем спящих участников (#13 invariant)
+                            if npc.status == EntityStatus.SLEEPING:
+                                npc.status = EntityStatus.ACTIVE
+                                npc.intention = REST
+                                group.comfort = False  # сбросим comfort
+            state.news_manager.create_event(
+                hour=hour, minute=0, sector_id=shelter.sector_id,
+                event_type="shelter_expired", participants=[], result="expired",
+                importance=5,
+                summary=f"Убежище {shelter_id} в секторе {shelter.sector_id} разрушено",
+                details={"shelter_id": shelter_id},
+            )
+            del state.temp_shelters[shelter_id]

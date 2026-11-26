@@ -128,3 +128,34 @@ def get_move_distance(species: str = "Human", max_stamina_pct: float = 0.0) -> i
     if species == "Human":
         return 1
     return MONSTER_SPEED.get(species, 1)
+
+
+def walk(
+    state,
+    start: int,
+    target_ids: set[int],
+    avoid_ids: set[int],
+    points: float,
+) -> list[int]:
+    """Проходит маршрут, пока хватает пунктов движения. Возвращает пройденные сектора."""
+    from zonesim.world.trails import trail_set
+    from zonesim.ai import next_step_towards, edge_cost
+
+    trails = trail_set(state)
+    path: list[int] = []
+    current = start
+    while points > 1e-9:
+        nxt = next_step_towards(
+            state.sectors, current, target_ids, avoid_ids, trails,
+        )
+        if nxt is None or nxt == current:
+            break
+        cost = edge_cost(trails, current, nxt)
+        if points + 1e-9 < cost:
+            break
+        points -= cost
+        current = nxt
+        path.append(nxt)
+        if current in target_ids:
+            break
+    return path

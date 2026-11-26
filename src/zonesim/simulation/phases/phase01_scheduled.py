@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from zonesim.generation.migration import process_migration
 from zonesim.simulation.context import SimulationContext
+from zonesim.world.groups import sync_monster_groups
+from zonesim.world.shelter import free_emptied_shelters
 from zonesim.world.entity import EntityStatus, HumanNPC, Monster
 from zonesim.world.group import HumanGroup
 
@@ -67,7 +69,7 @@ def run_phase1_scheduled(ctx: SimulationContext) -> None:
         state.next_monster_id += 1
     state.monsters.extend(new_monsters)
     if new_entities or new_monsters:
-        engine._sync_monster_groups()
+        sync_monster_groups(state)
 
     # === Эмиссия ===
     engine._process_emission_schedule(hour)
@@ -76,7 +78,7 @@ def run_phase1_scheduled(ctx: SimulationContext) -> None:
 
     # === Укрытия ===
     engine._process_shelter_occupation(hour)
-    engine._free_emptied_shelters(hour)
+    free_emptied_shelters(state, hour)
 
     # === Охрана ===
     engine._process_guard_rotation(hour)

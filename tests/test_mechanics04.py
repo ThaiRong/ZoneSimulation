@@ -12,6 +12,8 @@ from zonesim.world.entity import EntityStatus
 from zonesim.world.item import create_item
 from zonesim.world.sector import get_distance
 from zonesim.world.trails import trail_set
+from zonesim.actions.movement import walk
+from zonesim.knowledge.expiry import expire_findings
 
 from tests.test_actions_integration import _solo_group
 
@@ -49,7 +51,7 @@ class TestTrails:
     def test_humans_walk_two_trail_edges_per_hour(self):
         engine = SimulationEngine(seed=42)
         a, b, c = _trail_chain(engine, 2)
-        path = engine._walk(a, {c}, set(), points=1.0)
+        path = walk(engine.state,a, {c}, set(), points=1.0)
         assert path == [b, c]
 
     def test_normal_edges_cost_full_point(self):
@@ -61,9 +63,9 @@ class TestTrails:
             if edge not in trail_set(engine.state) and (edge[1], edge[0]) not in trail_set(engine.state)
         ]
         a, b = plain[0]
-        path = engine._walk(a, {b}, set(), points=1.0)
+        path = walk(engine.state,a, {b}, set(), points=1.0)
         assert path == [b]
-        path = engine._walk(a, {b}, set(), points=0.5)
+        path = walk(engine.state,a, {b}, set(), points=0.5)
         assert path == []
 
     def test_territorial_predator_walks_four_trail_edges(self):
@@ -76,7 +78,7 @@ class TestTrails:
         engine.state.sectors[0] = Sector(id=0, name="S0", neighbors=[1])
         engine.state.sectors[4] = Sector(id=4, name="S4", neighbors=[3])
         engine.state.trails = [[0, 1], [1, 2], [2, 3], [3, 4]]
-        path = engine._walk(0, {4}, set(), points=2.0)
+        path = walk(engine.state,0, {4}, set(), points=2.0)
         assert path == [1, 2, 3, 4]
 
     def test_blocked_trail_requires_passage_knowledge(self):
@@ -245,7 +247,7 @@ class TestFindings:
             owner_id=None,
         )
         corpse.items.append(item.id)
-        engine._expire_findings(24)
+        expire_findings(engine.state,24)
         assert corpse not in engine.state.corpses
         assert item.id not in engine.state.items
 
@@ -253,7 +255,7 @@ class TestFindings:
         engine = SimulationEngine(seed=42)
         corpse = engine._create_corpse(engine.state.humans[0], hour=20)
         corpse.status = "available"
-        engine._expire_findings(24)
+        expire_findings(engine.state,24)
         assert corpse in engine.state.corpses
 
 

@@ -8,6 +8,9 @@
 from __future__ import annotations
 
 from zonesim.simulation.context import SimulationContext
+from zonesim.world.groups import sync_human_groups, sync_monster_groups
+from zonesim.knowledge.expiry import expire_findings
+from zonesim.world.shelter import update_shelter_participants, free_emptied_shelters
 
 
 def run_phase0_check(ctx: SimulationContext) -> None:
@@ -16,9 +19,9 @@ def run_phase0_check(ctx: SimulationContext) -> None:
     state = ctx.state
     hour = state.time.hour
 
-    engine._sync_human_groups()
-    engine._sync_monster_groups()
-    engine._expire_findings(hour)
-    engine._update_shelter_participants(hour)
+    sync_human_groups(state)
+    sync_monster_groups(state)
+    expire_findings(state, hour)
+    update_shelter_participants(state, hour)
     # Освобождаем укрытия, если монстры ушли (§13.7)
-    engine._free_emptied_shelters(hour)
+    free_emptied_shelters(state, hour)

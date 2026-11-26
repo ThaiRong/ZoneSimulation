@@ -5,6 +5,7 @@ from zonesim.combat.base import Combatant
 from zonesim.simulation.engine import SimulationEngine
 from zonesim.simulation.phases import run_phase6_detections, run_phase7_actions
 from zonesim.world.entity import EntityStatus
+from zonesim.world.groups import sync_monster_groups, sync_human_groups
 from zonesim.world.faction import home_sector_id
 
 
@@ -96,7 +97,7 @@ class TestEngineCombat:
         for other in engine.state.humans:
             if other.id != npc.id:
                 other.status = EntityStatus.DEAD
-        engine._sync_human_groups()
+        sync_human_groups(engine.state)
         group = engine.state.human_groups[group.id]
         group.sector_id = sector_id
         npc.sector_id = sector_id
@@ -121,8 +122,7 @@ class TestEngineCombat:
         monster.health = 100
         monster.attack = 70
         engine.state.anomalies = {}
-        engine._sync_monster_groups()
-        engine._moved_human_ids = set()
+        sync_monster_groups(engine.state)
         engine.state.rng.random = lambda: 0.0
         return npc, monster
 

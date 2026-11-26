@@ -7,6 +7,7 @@ from zonesim.simulation.phases import run_phase7_actions
 from zonesim.world.entity import EntityStatus
 from zonesim.world.item import ItemType
 from zonesim.combat.power import squad_power
+from zonesim.world.groups import sync_monster_groups
 
 
 def _guards(engine):
@@ -256,7 +257,7 @@ class TestMonsterAttackDecision:
         for other in engine.state.monsters:
             if other.id != monster.id:
                 other.status = EntityStatus.DEAD
-        engine._sync_monster_groups()
+        sync_monster_groups(engine.state)
         return monster
 
     def test_monster_avoids_fortified_garrison(self):

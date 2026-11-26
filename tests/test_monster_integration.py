@@ -8,6 +8,7 @@ from zonesim.monsters.behavior import select_weakest_target, species_value
 from zonesim.monsters.hunt import should_pursue
 from zonesim.persistence.serialization import state_to_dict
 from zonesim.simulation.engine import SimulationEngine
+from zonesim.world.groups import sync_monster_groups
 from zonesim.world.entity import EntityStatus, Monster, MonsterSpecies
 from zonesim.world.group import HumanGroup, MonsterGroup
 from zonesim.world.item import ItemType
@@ -34,7 +35,7 @@ def _clear_monsters(engine, keep=None):
     for monster in engine.state.monsters:
         if keep is None or monster.id != keep.id:
             monster.status = EntityStatus.DEAD
-    engine._sync_monster_groups()
+    sync_monster_groups(engine.state)
 
 
 def _fresh_monsters(engine, *monsters):
@@ -44,7 +45,7 @@ def _fresh_monsters(engine, *monsters):
     for monster in monsters:
         monster.status = EntityStatus.ACTIVE
         engine.state.next_monster_id = max(engine.state.next_monster_id, monster.id + 1)
-    engine._sync_monster_groups()
+    sync_monster_groups(engine.state)
 
 
 def _make_human_group(engine, *npcs, group_id=None):

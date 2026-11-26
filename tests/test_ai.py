@@ -23,6 +23,7 @@ from zonesim.ai import (
 )
 from zonesim.core.time import SeededRNG
 from zonesim.simulation.engine import SimulationEngine
+from zonesim.world.groups import sync_monster_groups, sync_human_groups
 from zonesim.world.entity import EntityStatus
 
 
@@ -183,14 +184,13 @@ class TestEngineIntegration:
         engine = SimulationEngine(seed=42)
         for monster in engine.state.monsters:
             monster.status = EntityStatus.DEAD
-        engine._sync_monster_groups()
+        sync_monster_groups(engine.state)
         npc = next(h for h in engine.state.humans if h.status == EntityStatus.ACTIVE)
         group = engine.state.human_groups[npc.group_id]
         for other in engine.state.humans:
             if other.id != npc.id:
                 other.status = EntityStatus.DEAD
-        engine._sync_human_groups()
-        group = engine.state.human_groups[npc.group_id]
+        sync_human_groups(engine.state)
         for member_id in group.members:
             member = next(h for h in engine.state.humans if h.id == member_id)
             member.stamina = 5
@@ -202,14 +202,13 @@ class TestEngineIntegration:
         engine = SimulationEngine(seed=42)
         for monster in engine.state.monsters:
             monster.status = EntityStatus.DEAD
-        engine._sync_monster_groups()
+        sync_monster_groups(engine.state)
         npc = next(h for h in engine.state.humans if h.status == EntityStatus.ACTIVE)
         group = engine.state.human_groups[npc.group_id]
         for other in engine.state.humans:
             if other.id != npc.id:
                 other.status = EntityStatus.DEAD
-        engine._sync_human_groups()
-        group = engine.state.human_groups[npc.group_id]
+        sync_human_groups(engine.state)
         for member_id in group.members:
             member = next(h for h in engine.state.humans if h.id == member_id)
             member.stamina = 20

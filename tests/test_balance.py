@@ -7,6 +7,7 @@ from zonesim.anomalies.core import Anomaly, AnomalyStatus, AnomalyType
 from zonesim.combat import CombatSystem
 from zonesim.combat.base import Combatant
 from zonesim.simulation.engine import SimulationEngine
+from zonesim.world.groups import sync_monster_groups
 from zonesim.simulation.phases import run_phase6_detections
 from zonesim.world.entity import EntityStatus, Monster, MonsterSpecies
 from zonesim.world.item import ItemType, give_item
@@ -110,7 +111,7 @@ class TestMonsterAnomalySense:
         for other in engine.state.monsters:
             if other.id != monster.id:
                 other.status = EntityStatus.DEAD
-        engine._sync_monster_groups()
+        sync_monster_groups(engine.state)
         engine.state.anomalies = {}
         anomaly = Anomaly(
             id=engine.state.next_anomaly_id, sector_id=5,

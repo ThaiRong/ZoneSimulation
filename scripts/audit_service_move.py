@@ -408,6 +408,121 @@ KNOWN_DUP_EXCEPTIONS = {
     ),
 }
 
+# ============================================================
+# BATCH B3: Level 2 extraction (3.9-B3)
+# ============================================================
+B3_PRE_COMMIT = "4b2b94b"
+
+BATCH_B3 = [
+    MethodPair(
+        "_walk", "walk", "actions/movement.py",
+        rules=[
+            (r"\bself\.state\.rng\b", "state.rng"),
+            (r"\bself\._trail_set\b", "trail_set"),
+        ],
+        expected_mismatches=[
+            MismatchEntry(1, "self._trail_set", "trail_set(state)"),
+        ],
+        mismatch_note="_walk: self._trail_set → trail_set(state) (property via B2.1 function)",
+    ),
+    MethodPair(
+        "_blocked_trail_map", "blocked_trail_map", "world/trails.py",
+        rules=[
+            (r"\bself\.state\.anomalies\b", "state.anomalies"),
+        ],
+        expected_mismatches=[],
+        mismatch_note="",
+    ),
+    MethodPair(
+        "_group_has_passage", "group_has_passage", "world/trails.py",
+        rules=[
+            (r"\bself\.state\.humans\b", "state.humans"),
+            (r"\bself\.state\.knowledge_bases\b", "state.knowledge_bases"),
+        ],
+        expected_mismatches=[],
+        mismatch_note="",
+    ),
+    MethodPair(
+        "_group_detector_bonus", "group_detector_bonus", "knowledge/__init__.py",
+        rules=[
+            (r"\bself\.state\.humans\b", "state.humans"),
+            (r"\bself\.state\.items\b", "state.items"),
+            (r"\bself\.state\.human_groups\b", "state.human_groups"),
+        ],
+        expected_mismatches=[],
+        mismatch_note="",
+    ),
+    MethodPair(
+        "_base_guards", "base_guards", "combat/guards.py",
+        rules=[
+            (r"\bself\.state\.sectors\b", "state.sectors"),
+            (r"\bself\.state\.stationary_humans\b", "state.stationary_humans"),
+        ],
+        expected_mismatches=[],
+        mismatch_note="",
+    ),
+    MethodPair(
+        "_monster_group_members", "monster_group_members", "world/groups.py",
+        rules=[
+            (r"\bself\.state\.monsters\b", "state.monsters"),
+        ],
+        expected_mismatches=[],
+        mismatch_note="",
+    ),
+    MethodPair(
+        "_sync_human_groups", "sync_human_groups", "world/groups.py",
+        rules=[
+            (r"\bself\.state\.humans\b", "state.humans"),
+            (r"\bself\.state\.human_groups\b", "state.human_groups"),
+        ],
+        expected_mismatches=[],
+        mismatch_note="",
+    ),
+    MethodPair(
+        "_sync_monster_groups", "sync_monster_groups", "world/groups.py",
+        rules=[
+            (r"\bself\.state\.monsters\b", "state.monsters"),
+            (r"\bself\.state\.monster_groups\b", "state.monster_groups"),
+            (r"\bself\.state\.next_monster_group_id\b", "state.next_monster_group_id"),
+        ],
+        expected_mismatches=[],
+        mismatch_note="",
+    ),
+    MethodPair(
+        "_expire_findings", "expire_findings", "knowledge/expiry.py",
+        rules=[
+            (r"\bself\.state\.corpses\b", "state.corpses"),
+            (r"\bself\.state\.items\b", "state.items"),
+            (r"\bself\.state\.news_manager\b", "state.news_manager"),
+        ],
+        expected_mismatches=[],
+        mismatch_note="",
+    ),
+    MethodPair(
+        "_free_emptied_shelters", "free_emptied_shelters", "world/shelter.py",
+        rules=[
+            (r"\bself\.state\.shelters\b", "state.shelters"),
+            (r"\bself\.state\.monster_groups\b", "state.monster_groups"),
+            (r"\bself\.state\.news_manager\b", "state.news_manager"),
+        ],
+        expected_mismatches=[],
+        mismatch_note="",
+    ),
+    MethodPair(
+        "_update_shelter_participants", "update_shelter_participants", "world/shelter.py",
+        rules=[
+            (r"\bself\.state\.humans\b", "state.humans"),
+            (r"\bself\.state\.temp_shelters\b", "state.temp_shelters"),
+            (r"\bself\.state\.human_groups\b", "state.human_groups"),
+            (r"\bself\.state\.news_manager\b", "state.news_manager"),
+        ],
+        expected_mismatches=[
+            MismatchEntry(1, "self._walk", "walk"),
+        ],
+        mismatch_note="_update_shelter_participants: self._walk → walk (new B3 function)",
+    ),
+]
+
 
 def git_show(path, commit):
     result = subprocess.run(
@@ -1088,14 +1203,138 @@ def audit_structural():
     return 0 if all_ok else 1
 
 
+def audit_b3():
+    """Аудит B3 + мутационная самопроверка."""
+    print("=" * 70)
+    print("AUDIT B3: 11 extracted methods (3.9-B3)")
+    print("Pre-batch commit: " + B3_PRE_COMMIT)
+    print("=" * 70)
+
+    all_ok = True
+    checks = 0
+    failures = 0
+
+    # 1. Структурная проверка
+    print("")
+    print("STRUCTURAL CHECK:")
+    engine_code = (SRC / "simulation" / "engine.py").read_text(encoding="utf-8")
+
+    for pair in BATCH_B3:
+        checks += 1
+        count = len(re.findall(r'\bdef ' + pair.old_name + r'\b', engine_code))
+        status = "OK" if count == 0 else "FAIL (" + str(count) + ")"
+        print("  " + pair.old_name + " removed: " + status)
+        if count != 0:
+            all_ok = False
+            failures += 1
+
+    for pair in BATCH_B3:
+        checks += 1
+        mod_path = SRC / pair.target_module
+        if not mod_path.exists():
+            print("  " + pair.target_module + ": NOT FOUND")
+            all_ok = False
+            failures += 1
+            continue
+        code = mod_path.read_text(encoding="utf-8")
+        found = re.search(r'\bdef ' + pair.new_name + r'\b', code) is not None
+        status = "OK" if found else "NOT FOUND"
+        print("  " + pair.target_module + "::" + pair.new_name + ": " + status)
+        if not found:
+            all_ok = False
+            failures += 1
+
+    # 2. Мутационная самопроверка
+    print("")
+    print("MUTATION SELF-CHECK:")
+    for pair in BATCH_B3[:3]:  # Проверим первые 3
+        mod_path = SRC / pair.target_module
+        code = mod_path.read_text(encoding="utf-8")
+        # Внесём мутацию
+        mutated = code + "\n# MUTATION_INJECTED\n"
+        mod_path.write_text(mutated, encoding="utf-8")
+        # Прогоним audit_equivalent для этого pair
+        sub_ok = _check_single_pair(pair, B3_PRE_COMMIT)
+        # Откатим
+        mod_path.write_text(code, encoding="utf-8")
+        checks += 1
+        if sub_ok:
+            print("  " + pair.new_name + " mutation: NOT DETECTED (FAIL)")
+            all_ok = False
+            failures += 1
+        else:
+            print("  " + pair.new_name + " mutation: DETECTED (OK)")
+
+    # 3. Проверка дубликатов
+    print("")
+    print("DUPLICATE CHECK:")
+    # Фильтр: только функции верхнего уровня (не методы классов)
+    safe_domain_functions = set()
+    for pair in BATCH_B3:
+        mod_path = SRC / pair.target_module
+        if mod_path.exists():
+            code = mod_path.read_text(encoding="utf-8")
+            tree = ast.parse(code)
+            for node in ast.iter_child_nodes(tree):
+                if isinstance(node, ast.FunctionDef):
+                    safe_domain_functions.add(node.name)
+
+    checks += 1
+    dup_found = False
+    for func_name in safe_domain_functions:
+        if "_" + func_name in KNOWN_DUP_EXCEPTIONS:
+            continue
+        engine_method = "_" + func_name
+        if re.search(r'\bdef ' + re.escape(engine_method) + r'\b', engine_code):
+            print("  DUP: " + engine_method + " in engine + " + func_name + " in domain")
+            all_ok = False
+            failures += 1
+            dup_found = True
+
+    if not dup_found:
+        print("  Нет дубликатов: OK")
+
+    print("")
+    print("=" * 70)
+    print("B3: " + str(checks) + " checks, " + str(failures) + " failures")
+    if all_ok:
+        print("B3 AUDIT PASSED")
+    else:
+        print("B3 AUDIT FAILED")
+    print("=" * 70)
+
+    return 0 if all_ok else 1
+
+
+def _check_single_pair(pair, pre_commit):
+    """Проверяет один pair: если тело изменено — возвращает False."""
+    old_code = git_show("src/zonesim/simulation/engine.py", pre_commit)
+    old_body = extract_body(old_code, pair.old_name)
+    if old_body is None:
+        return True  # не нашли — пропускаем
+
+    new_body = extract_new_func_body(pair.target_module, pair.new_name)
+    if new_body is None:
+        return True
+
+    transformed = apply_rules(old_body, pair.rules)
+    old_norm = normalize(transformed)
+    new_norm = normalize(new_body)
+
+    return old_norm == new_norm
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Аудит B1/B2/B2_1 сервисных методов")
-    parser.add_argument("--batch", choices=["B1", "B2", "B2_1"], default="B1")
+    parser = argparse.ArgumentParser(description="Аудит B1/B2/B2_1/B3 сервисных методов")
+    parser.add_argument("--batch", choices=["B1", "B2", "B2_1", "B3"], default="B1")
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--equivalent", action="store_true")
     group.add_argument("--structural", action="store_true")
     group.add_argument("--both", action="store_true")
     args = parser.parse_args()
+
+    if args.batch == "B3":
+        return audit_b3()
 
     if args.batch == "B2_1":
         return audit_b2_1()

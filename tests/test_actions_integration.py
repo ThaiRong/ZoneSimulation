@@ -10,6 +10,7 @@ from zonesim.anomalies.core import Anomaly, AnomalyStatus, AnomalyType
 from zonesim.economy.trade import CaptureManager
 from zonesim.persistence.serialization import state_to_dict
 from zonesim.simulation.engine import SimulationEngine
+from zonesim.world.groups import sync_monster_groups, sync_human_groups
 from zonesim.world.entity import EntityStatus, Monster, MonsterSpecies
 from zonesim.world.group import HumanGroup
 from zonesim.world.item import ItemType, create_item, give_item
@@ -31,7 +32,7 @@ def _solo_group(engine):
     for other in engine.state.humans:
         if other.id != npc.id:
             other.status = EntityStatus.DEAD
-    engine._sync_human_groups()
+    sync_human_groups(engine.state)
     engine.state.human_groups = {}
     group = HumanGroup(
         id=engine.state.next_group_id,
@@ -50,7 +51,7 @@ def _clear_monsters(engine, keep=None):
     for monster in engine.state.monsters:
         if keep is None or monster.id != keep.id:
             monster.status = EntityStatus.DEAD
-    engine._sync_monster_groups()
+    sync_monster_groups(engine.state)
 
 
 def _give_kit(engine, npc, item_ref):
@@ -184,7 +185,7 @@ class TestCapturePrerequisites:
             max_health=100,
         )
         engine.state.monsters.append(other)
-        engine._sync_monster_groups()
+        sync_monster_groups(engine.state)
         assert not group_can_capture(engine.state, group, [npc])
 
     def test_capture_success_removes_monster_from_population(self):
@@ -205,7 +206,7 @@ class TestCapturePrerequisites:
         assert len(live) == 1
         assert live[0].properties["species"] == "large_migrator"
         assert live[0].properties["source_monster_id"] == monster.id
-        engine._sync_monster_groups()
+        sync_monster_groups(engine.state)
         assert all(monster.id not in g.members for g in engine.state.monster_groups.values())
         events = [e for e in engine.state.news_manager.events if e.event_type == "monster_captured"]
         assert events[0].result == "captured"

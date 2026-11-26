@@ -9,6 +9,7 @@ from __future__ import annotations
 from zonesim.anomalies.core import AnomalyStatus
 from zonesim.anomalies.damage import apply_anomaly_damage, check_anomaly_contact
 from zonesim.knowledge.fact import KnowledgeType
+from zonesim.knowledge import group_detector_bonus
 from zonesim.simulation.context import SimulationContext
 from zonesim.world.entity import EntityStatus
 from zonesim.combat.results import resolve_zero_health
@@ -21,7 +22,7 @@ def run_phase6_detections(ctx: SimulationContext) -> None:
     hour = ctx.hour
 
     is_night = ctx.is_night
-    detector_bonus = engine._group_detector_bonus()
+    detector_bonus = group_detector_bonus(state)
 
     for npc in state.humans:
         # Контакт проверяется при прохождении через сектор (§8, фаза 8)

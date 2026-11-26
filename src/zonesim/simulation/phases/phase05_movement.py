@@ -24,6 +24,7 @@ from zonesim.world.entity import EntityStatus
 from zonesim.world.faction import home_sector_id
 from zonesim.world.shelter import shelter_targets
 from zonesim.world.trails import trail_set
+from zonesim.actions.movement import walk
 
 
 def run_phase5_movement(ctx: SimulationContext) -> None:
@@ -94,7 +95,7 @@ def run_phase5_movement(ctx: SimulationContext) -> None:
             target_ids = {group.target_sector_id}
         if not target_ids:
             continue
-        path = engine._walk(group.sector_id, target_ids, group_avoid, points=1.0)
+        path = walk(state, group.sector_id, target_ids, group_avoid, points=1.0)
         if path:
             engine._apply_human_move(group, members, path, npcs, hour)
 
