@@ -395,7 +395,88 @@ is_group_emission_sheltered    → anomalies/emission.py (_emission_safe_sectors
 
 **Риски:** `_use_medkit_charge` → `_consume_item` — порядок важен, обе в одном батче.
 
-### Батч 3: Уровень 2
+---
+
+## 4.1 Батч 2 — фактический состав (3.9-B2)
+
+**Дата фиксации:** 5b48afb (pre-batch)
+**Fork критерий:** метод вызывает ТОЛЬКО `self._<уже вынесенные>` или чистые внешние функции.
+**Вызовов `self._<ещё не вынесенный хелпер>`** — 0 (все зависимости включены в батч).
+
+### Фактический состав (18 методов: 14 B2 + 4 зависимости)
+
+| Метод | Целевой модуль | Новая сигнатура | Зависимости (self._xxx) |
+|-------|----------------|-----------------|------------------------|
+| `_emergency_medkit` | combat/medkit.py | `emergency_medkit(state, npc, members)` | `_use_medkit_charge` (в батче) |
+| `_rest_heal` | needs/healing.py | `rest_heal(state, group, members)` | `_use_medkit_charge` (в батче), `_sync_npc_from_items` (в батче) |
+| `_use_medkit_charge` | combat/medkit.py | `use_medkit_charge(state, item, members)` | `_consume_item` (B1 ✓) |
+| `_sell_loot` | economy/trader.py | `sell_loot(state, leader, trader)` | `_consume_item` (B1 ✓) |
+| `_give_artifact` | needs/artifact.py | `give_artifact(state, npc, anomaly, hour)` | `_create_item` (в батче) |
+| `_set_unconscious_or_dead` | combat/results.py | `set_unconscious_or_dead(state, npc, start_health, hour, cause)` | `_resolve_zero_health` (B1 ✓) |
+| `_group_can_capture` | actions/capture.py | `group_can_capture(state, group, members)` | `_capture_target` (B1 ✓), `_group_kit` (B1 ✓) |
+| `_group_can_destroy` | actions/destroy.py | `group_can_destroy(state, group, members)` | `_group_kit` (B1 ✓) |
+| `_process_create_shelter` | world/shelter.py | `process_create_shelter(state, group, hour)` | `_active_members` (B1 ✓), `_group_leader` (B1 ✓) |
+| `_check_and_journal_relations` | relations/journal.py | `check_and_journal_relations(state, hour)` | `_log_relation_change` (B1 ✓) |
+| `_roll_trail_blockages` | world/trails.py | `roll_trail_blockages(state)` | `_roll_trail_blockage` (в батче) |
+| `_group_in_shelter` | world/shelter.py | `group_in_shelter(state, group)` | `_shelter_sector_ids` (в батче) |
+| `_shelter_targets` | world/shelter.py | `shelter_targets(state, group, hour)` | `_shelter_sector_ids` (в батче) |
+| `_is_group_emission_sheltered` | anomalies/emission.py | `is_group_emission_sheltered(state, group)` | `_emission_safe_sectors` (B1 ✓) |
+| **_create_item** (зависимость) | world/items.py | `create_item(state, catalog, item_type, name, base_value, owner_id, quantity, properties)` | — (чистый, extern `give_item`) |
+| **_roll_trail_blockage** (зависимость) | world/trails.py | `roll_trail_blockage(state, anomaly)` | — (чистый, extern `EMISSION_TRAIL_BLOCK_CHANCE`) |
+| **_shelter_sector_ids** (зависимость) | world/shelter.py | `shelter_sector_ids(state)` | — (чистый, читает state) |
+| **_sync_npc_from_items** (зависимость) | world/items.py | `sync_npc_from_items(state, npc)` | — (чистый, читает state.items) |
+
+**Замечания:**
+- План указал 14 методов, фактический состав — 18 (14 + 4 зависимости).
+- Зависимости `_create_item`, `_roll_trail_blockage`, `_shelter_sector_ids`, `_sync_npc_from_items` — все чистые (0 `self._xxx` вызовов), включены в батч.
+- `_sync_npc_from_items` добавлен т.к. `_rest_heal` вызывает его на строке 1538.
+
+### Вызывающие стороны (фактические места замены)
+
+**Фазы:**
+| Вызов | Файл:строка | Станет |
+|-------|-------------|--------|
+| `engine._group_can_destroy` | `phases/phase04_intentions.py:119` | `group_can_destroy(state, group, members)` |
+| `engine._group_can_capture` | `phases/phase04_intentions.py:120` | `group_can_capture(state, group, members)` |
+| `engine._shelter_targets` | `phases/phase05_movement.py:88` | `shelter_targets(state, group, hour)` |
+| `engine._process_create_shelter` | `phases/phase07_actions.py:63` | `process_create_shelter(state, group, hour)` |
+| `engine._roll_trail_blockage` | `phases/phase08_environment.py:33` | `roll_trail_blockage(state, anomaly)` |
+
+**engine.py (self._xxx вызовы):**
+| Вызов | Строки | Станет |
+|-------|--------|--------|
+| `self._roll_trail_blockages()` | 225 | `roll_trail_blockages(state)` |
+| `self._roll_trail_blockage(a)` | 343, 737 | `roll_trail_blockage(state, a)` |
+| `self._group_in_shelter` | 410 | `group_in_shelter(state, group)` |
+| `self._shelter_sector_ids()` | 410, 442, 508, 509, 2952 | `shelter_sector_ids(state)` |
+| `self._shelter_targets(g, h)` | 508-509 | `shelter_targets(state, g, h)` |
+| `self._is_group_emission_sheltered(g)` | 775, 3027 | `is_group_emission_sheltered(state, g)` |
+| `self._mark_group_emission_exposed(g, h)` → `self._emergency_medkit` | 791 | `emergency_medkit(state, npc, members)` |
+| `self._mark_group_emission_exposed(g, h)` → `self._set_unconscious_or_dead` | 797 | `set_unconscious_or_dead(state, npc, start, hour, cause="emission")` |
+| `self._emergency_medkit(npc, members)` | 852 | `emergency_medkit(state, item, members)` |
+| `self._use_medkit_charge(item, members)` | 852 | `use_medkit_charge(state, item, members)` |
+| `self._sell_loot(leader, trader)` | 1492 | `sell_loot(state, leader, trader)` |
+| `self._use_medkit_charge(medkit, members)` | 1508 | `use_medkit_charge(state, medkit, members)` |
+| `self._rest_heal(group, members)` | 1537 | `rest_heal(state, group, members)` |
+| `self._use_medkit_charge(kit, members)` | 1537 | `use_medkit_charge(state, kit, members)` |
+| `self._sync_npc_from_items(patient)` | 1538 | `sync_npc_from_items(state, patient)` |
+| `self._give_artifact(npc, target, hour)` | 2802 | `give_artifact(state, npc, target, hour)` |
+| `self._set_unconscious_or_dead(...)` | 2899 | `set_unconscious_or_dead(state, npc, start_health, hour, cause)` |
+| `self._sync_npc_from_items(entity)` | 2913 | `sync_npc_from_items(state, entity)` |
+| `self._give_artifact(npc, target, hour)` | 3407 | `give_artifact(state, npc, target, hour)` |
+
+**Тесты:**
+| Вызов | Файл:строки | Станет |
+|-------|-------------|--------|
+| `engine._group_can_capture(group, [npc])` | `tests/test_actions_integration.py:169,171,173,175,186` | `group_can_capture(state, group, [npc])` |
+| `engine._group_can_destroy(group, [npc])` | `tests/test_actions_integration.py:90,92,94,96,99` | `group_can_destroy(state, group, [npc])` |
+| `engine._create_item(...)` | `tests/test_actions_integration.py:295` | `create_item(engine.state, catalog, ...)` |
+| `engine._create_item(...)` | `tests/test_monster_integration.py:95` | `create_item(engine.state, catalog, ...)` |
+| `engine._create_item(...)` | `tests/test_items_loot.py:70` | `create_item(engine.state, catalog, ...)` |
+| `engine._create_item(...)` | `tests/test_mechanics04.py:239` | `create_item(engine.state, catalog, ...)` |
+| `engine._create_item(...)` | `tests/test_rest_trade.py:112,184,199` | `create_item(engine.state, catalog, ...)` |
+
+**Ожидаемое уменьшение engine.py:** ~180 строк (18 методов × ~10 строк среднее)
 
 **Методы (12):**
 
