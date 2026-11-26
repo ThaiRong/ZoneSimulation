@@ -11,6 +11,7 @@ from zonesim.anomalies.damage import apply_anomaly_damage, check_anomaly_contact
 from zonesim.knowledge.fact import KnowledgeType
 from zonesim.simulation.context import SimulationContext
 from zonesim.world.entity import EntityStatus
+from zonesim.combat.results import resolve_zero_health
 
 
 def run_phase6_detections(ctx: SimulationContext) -> None:
@@ -62,7 +63,7 @@ def run_phase6_detections(ctx: SimulationContext) -> None:
 
         outcome = "hit"
         if npc.health <= 0:
-            outcome = engine._resolve_zero_health(npc, start_health)
+            outcome = resolve_zero_health(state, npc, start_health)
 
         state.news_manager.create_event(
             hour=hour,

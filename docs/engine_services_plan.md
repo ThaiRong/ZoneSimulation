@@ -409,18 +409,18 @@ is_group_emission_sheltered    → anomalies/emission.py (_emission_safe_sectors
 |-------|----------------|-----------------|------------------------|
 | `_emergency_medkit` | combat/medkit.py | `emergency_medkit(state, npc, members)` | `_use_medkit_charge` (в батче) |
 | `_rest_heal` | needs/healing.py | `rest_heal(state, group, members)` | `_use_medkit_charge` (в батче), `_sync_npc_from_items` (в батче) |
-| `_use_medkit_charge` | combat/medkit.py | `use_medkit_charge(state, item, members)` | `_consume_item` (B1 ✓) |
-| `_sell_loot` | economy/trader.py | `sell_loot(state, leader, trader)` | `_consume_item` (B1 ✓) |
+| `_use_medkit_charge` | combat/medkit.py | `use_medkit_charge(state, item, members)` | `_consume_item` (B2) |
+| `_sell_loot` | economy/trader.py | `sell_loot(state, leader, trader)` | `_consume_item` (B2) |
 | `_give_artifact` | needs/artifact.py | `give_artifact(state, npc, anomaly, hour)` | `_create_item` (в батче) |
-| `_set_unconscious_or_dead` | combat/results.py | `set_unconscious_or_dead(state, npc, start_health, hour, cause)` | `_resolve_zero_health` (B1 ✓) |
-| `_group_can_capture` | actions/capture.py | `group_can_capture(state, group, members)` | `_capture_target` (B1 ✓), `_group_kit` (B1 ✓) |
-| `_group_can_destroy` | actions/destroy.py | `group_can_destroy(state, group, members)` | `_group_kit` (B1 ✓) |
-| `_process_create_shelter` | world/shelter.py | `process_create_shelter(state, group, hour)` | `_active_members` (B1 ✓), `_group_leader` (B1 ✓) |
-| `_check_and_journal_relations` | relations/journal.py | `check_and_journal_relations(state, hour)` | `_log_relation_change` (B1 ✓) |
+| `_set_unconscious_or_dead` | combat/results.py | `set_unconscious_or_dead(state, npc, start_health, hour, cause)` | `_resolve_zero_health` (B2) |
+| `_group_can_capture` | actions/capture.py | `group_can_capture(state, group, members)` | `_capture_target` (B2), `_group_kit` (B1) |
+| `_group_can_destroy` | actions/destroy.py | `group_can_destroy(state, group, members)` | `_group_kit` (B1) |
+| `_process_create_shelter` | world/shelter.py | `process_create_shelter(state, group, hour)` | `_active_members` (B2), `_group_leader` (B2) |
+| `_check_and_journal_relations` | relations/journal.py | `check_and_journal_relations(state, hour)` | `_log_relation_change` (B2) |
 | `_roll_trail_blockages` | world/trails.py | `roll_trail_blockages(state)` | `_roll_trail_blockage` (в батче) |
 | `_group_in_shelter` | world/shelter.py | `group_in_shelter(state, group)` | `_shelter_sector_ids` (в батче) |
 | `_shelter_targets` | world/shelter.py | `shelter_targets(state, group, hour)` | `_shelter_sector_ids` (в батче) |
-| `_is_group_emission_sheltered` | anomalies/emission.py | `is_group_emission_sheltered(state, group)` | `_emission_safe_sectors` (B1 ✓) |
+| `_is_group_emission_sheltered` | anomalies/emission.py | `is_group_emission_sheltered(state, group)` | `_emission_safe_sectors` (B2) |
 | **_create_item** (зависимость) | world/items.py | `create_item(state, catalog, item_type, name, base_value, owner_id, quantity, properties)` | — (чистый, extern `give_item`) |
 | **_roll_trail_blockage** (зависимость) | world/trails.py | `roll_trail_blockage(state, anomaly)` | — (чистый, extern `EMISSION_TRAIL_BLOCK_CHANCE`) |
 | **_shelter_sector_ids** (зависимость) | world/shelter.py | `shelter_sector_ids(state)` | — (чистый, читает state) |
@@ -430,6 +430,28 @@ is_group_emission_sheltered    → anomalies/emission.py (_emission_safe_sectors
 - План указал 14 методов, фактический состав — 18 (14 + 4 зависимости).
 - Зависимости `_create_item`, `_roll_trail_blockage`, `_shelter_sector_ids`, `_sync_npc_from_items` — все чистые (0 `self._xxx` вызовов), включены в батч.
 - `_sync_npc_from_items` добавлен т.к. `_rest_heal` вызывает его на строке 1538.
+
+### B2.1 — устранение дубликатов (3.9-B2.1)
+
+**Цель:** Удалить 8 методов из engine.py, оставив ЕДИНСТВЕННУЮ реализацию в доменных модулях.
+**Preset commit:** 5d1ba3b
+**Статус:** ВЫПОЛНЕНО
+
+| # | Метод engine | Доменный модуль | Статус |
+|---|-------------|-----------------|--------|
+| 1 | `_active_members` | `world/groups.py::active_members` | ✓ удалён, вызов обновлён |
+| 2 | `_group_leader` | `world/groups.py::group_leader` | ✓ удалён, вызовы обновлены |
+| 3 | `_capture_target` | `actions/capture.py::capture_target` | ✓ удалён |
+| 4 | `_consume_item` | `world/item.py::consume_item` | ✓ удалён |
+| 5 | `_emission_safe_sectors` | `anomalies/emission.py::emission_safe_sectors` | ✓ удалён |
+| 6 | `_log_relation_change` | `relations/journal.py::log_relation_change` | ✓ удалён |
+| 7 | `_resolve_zero_health` | `combat/results.py::resolve_zero_health` | ✓ удалён |
+| 8 | `_trail_set` | `world/trails.py::trail_set` | ✓ удалён (был @property) |
+
+**Итого:** 8 дубликатов устранены, 0 вызовов `self._<имя>` осталось в engine.py, 0 вызовов `engine._<имя>` осталось в src/ и tests/.
+**trail_set:** был `@property`, все обращения переведены на функцию `trail_set(state)`.
+
+---
 
 ### Вызывающие стороны (фактические места замены)
 

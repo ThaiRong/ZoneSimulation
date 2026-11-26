@@ -23,6 +23,7 @@ from zonesim.simulation.context import SimulationContext
 from zonesim.world.entity import EntityStatus
 from zonesim.world.faction import home_sector_id
 from zonesim.world.shelter import shelter_targets
+from zonesim.world.trails import trail_set
 
 
 def run_phase5_movement(ctx: SimulationContext) -> None:
@@ -57,7 +58,7 @@ def run_phase5_movement(ctx: SimulationContext) -> None:
                 continue  # остальные движения запрещены
 
         avoid = engine._known_anomaly_sectors(leader)
-        trails = engine._trail_set
+        trails = trail_set(state)
         if group.intention == EXPLORE:
             memory = state.visit_memory.setdefault(leader.id, {})
             destination = choose_explore_target(

@@ -11,13 +11,14 @@ from zonesim.simulation.phases import run_phase4_intentions
 from zonesim.world.entity import EntityStatus
 from zonesim.world.item import create_item
 from zonesim.world.sector import get_distance
+from zonesim.world.trails import trail_set
 
 from tests.test_actions_integration import _solo_group
 
 
 def _trail_chain(engine, length=2):
     """Цепочка из length+1 сектора, все рёбра — тропы."""
-    trails = engine._trail_set
+    trails = trail_set(engine.state)
     for a, sector in engine.state.sectors.items():
         for b in sector.neighbors:
             if (a, b) not in trails:
@@ -57,7 +58,7 @@ class TestTrails:
             edge for edge in (
                 (s.id, n) for s in engine.state.sectors.values() for n in s.neighbors
             )
-            if edge not in engine._trail_set and (edge[1], edge[0]) not in engine._trail_set
+            if edge not in trail_set(engine.state) and (edge[1], edge[0]) not in trail_set(engine.state)
         ]
         a, b = plain[0]
         path = engine._walk(a, {b}, set(), points=1.0)

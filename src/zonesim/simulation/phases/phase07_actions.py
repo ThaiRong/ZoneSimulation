@@ -24,6 +24,7 @@ from zonesim.needs.sleep import (
 )
 from zonesim.simulation.context import SimulationContext
 from zonesim.world.entity import EntityStatus
+from zonesim.world.groups import active_members
 from zonesim.world.shelter import process_create_shelter
 
 
@@ -68,7 +69,7 @@ def run_phase7_actions(ctx: SimulationContext) -> None:
         if group.id in acted_groups or group.intention != HELP:
             continue
         distress = engine._active_distress_for(group, hour)
-        members = engine._active_members(group)
+        members = active_members(state, group)
         if distress is None or not members:
             continue
         if group.sector_id == distress["sector_id"]:

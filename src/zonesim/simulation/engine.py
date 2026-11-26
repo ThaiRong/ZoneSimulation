@@ -19,6 +19,7 @@ from zonesim.combat.base import Combatant, CombatFactory
 from zonesim.combat.unconscious import calculate_unconscious_chance, resolve_unconscious_check
 
 from zonesim.actions.detection import check_anomaly_detection
+from zonesim.actions.capture import capture_target
 
 from zonesim.ai import (
     ARTIFACT_SEARCH,
@@ -77,7 +78,7 @@ from zonesim.world.trails import (
     trail_set, roll_trail_blockage, roll_trail_blockages,
 )
 from zonesim.world.item import create_item, consume_item, sync_npc_from_items
-from zonesim.relations.journal import check_and_journal_relations
+from zonesim.relations.journal import check_and_journal_relations, log_relation_change
 from zonesim.anomalies.emission import emission_safe_sectors, is_group_emission_sheltered
 
 from zonesim.economy.contracts import ContractManager
@@ -338,10 +339,6 @@ class SimulationEngine:
         }
         trails = [list(edge) for edge in sorted(edges) if self.state.rng.random() < 0.4]
         self.state.trails = trails
-
-    @property
-    def _trail_set(self) -> set[tuple[int, int]]:
-        return {edge_key(pair[0], pair[1]) for pair in self.state.trails}
 
     def _init_shelters(self) -> None:
         """Стационарные укрытия: 8 шт, не более одного в секторе,
@@ -711,27 +708,6 @@ class SimulationEngine:
 
     # === Helpers для выброса (§12.7, #20) ===
 
-    def _emission_safe_sectors(self) -> set[int]:
-        """Постоянные секторы, защищающие от выброса (§12.7, #20).
-
-        Включает:
-        - Сектора StormShelter (стационарные убежища)
-        - Стартовые сектора фракций (базы)
-        - Сектора активных стационарных торговцев
-        Временные убежища (temp_shelters) НЕ защищают (§12.7).
-
-        Возвращает множество секторов. Используется в _apply_emission_exposure,
-        _check_emission_movement (инвариант #20) и _apply_battle_result.
-        """
-        return {
-            s.sector_id for s in self.state.shelters.values()
-        } | {
-            s.id for s in self.state.sectors.values() if s.is_faction_start
-        } | {
-            npc.sector_id for npc in self.state.stationary_humans
-            if npc.stationary_role == "trader" and npc.status == EntityStatus.ACTIVE
-        }
-
     def _mark_group_emission_exposed(self, group: HumanGroup, hour: int) -> None:
         """Записывает группу в emission_exposed и применяет урон (§12.7).
 
@@ -895,7 +871,7 @@ class SimulationEngine:
             self.state.ongoing_shelter_assaults.clear()
             return
 
-        shelter_ids = self._emission_safe_sectors()
+        shelter_ids = emission_safe_sectors(self.state)
 
         # Находим все укрытия, занятые монстрами
         monster_occupied_shelters = {
@@ -1373,7 +1349,7 @@ class SimulationEngine:
                 if spent + price <= leader_money:
                     spent += price
                     plan.append((kit_ref, 1))
-        target = self._capture_target(group)
+        target = capture_target(self.state, group)
         if target is not None:
             kit_ref = CAPTURE_KIT_REF.get(species_value(target))
             owned = any(
@@ -1509,7 +1485,7 @@ class SimulationEngine:
                             notified_factions=[first_faction, second_faction],
                         )
                         self.state.faction_relations.change(first_faction, second_faction, delta)
-                        self._log_relation_change(hour, first_faction, second_faction, delta, evt.id)
+                        log_relation_change(self.state, hour, first_faction, second_faction, delta, evt.id)
 
     def _exchange_knowledge(self, group_a: HumanGroup, group_b: HumanGroup, hour: int) -> None:
         """Обмен сведениями между лидерами отдыхающих групп. (§17)"""
@@ -1627,19 +1603,6 @@ class SimulationEngine:
         for (a, b), val in fr._relations.items():
             snap[(a, b)] = val
         self.state.prev_relation_snapshot = snap
-
-    def _log_relation_change(
-        self, hour: int, faction_a: str, faction_b: str,
-        delta: int, event_id: int | None,
-    ) -> None:
-        """Записывает изменение отношений в журнал (§17 инвариант)."""
-        self.state.relation_change_journal.append({
-            "hour": hour,
-            "faction_a": faction_a,
-            "faction_b": faction_b,
-            "delta": delta,
-            "event_id": event_id,
-        })
 
     def simulate_hour(self) -> dict[str, Any]:
         """
@@ -1781,26 +1744,6 @@ class SimulationEngine:
             group.target_sector_id = target.sector_id if target is not None else None
             group.target_memory_hour = max(monster.target_memory_hour for monster in members)
 
-    def _capture_target(self, group: HumanGroup) -> Monster | None:
-        """Ослабленный монстр в секторе группы. (§16.8: здоровье ≤ 35%)"""
-        candidates = [
-            monster for monster in self.state.monsters
-            if monster.sector_id == group.sector_id
-            and monster.status in (EntityStatus.ACTIVE, EntityStatus.UNCONSCIOUS)
-            and monster.health_share <= 0.35
-        ]
-        if not candidates:
-            return None
-        # активное сопротивление других монстров рядом запрещает захват
-        resisting = any(
-            monster.status == EntityStatus.ACTIVE
-            for monster in self.state.monsters
-            if monster.sector_id == group.sector_id and monster not in candidates
-        )
-        if resisting:
-            return None
-        return min(candidates, key=lambda monster: monster.health_share)
-
     def _group_detector_bonus(self) -> dict[int, int]:
         """Бонус детекторов аномалий по группам (лучший исправный детектор)."""
         humans = {npc.id: npc for npc in self.state.humans}
@@ -1823,27 +1766,6 @@ class SimulationEngine:
                 bonuses[group.id] = best
         return bonuses
 
-    def _active_members(self, group: HumanGroup) -> list[HumanNPC]:
-        npcs = {npc.id: npc for npc in self.state.humans}
-        return [
-            npcs[mid] for mid in group.members
-            if mid in npcs and npcs[mid].status == EntityStatus.ACTIVE
-        ]
-
-    def _group_leader(self, group: HumanGroup, members: list[HumanNPC]) -> HumanNPC:
-        return next((npc for npc in members if npc.id == group.leader_id), members[0])
-
-    def _consume_item(self, item: Item, members: list[HumanNPC]) -> None:
-        """Удаляет израсходованный предмет из инвентаря и реестра."""
-        owner = next((npc for npc in members if item.id in npc.inventory), None)
-        if owner is not None:
-            owner.inventory.remove(item.id)
-            if owner.equipped_weapon_id == item.id:
-                owner.equipped_weapon_id = None
-            if owner.equipped_armor_id == item.id:
-                owner.equipped_armor_id = None
-        self.state.items.pop(item.id, None)
-
     def _walk(
         self,
         start: int,
@@ -1852,7 +1774,7 @@ class SimulationEngine:
         points: float,
     ) -> list[int]:
         """Проходит маршрут, пока хватает пунктов движения. Возвращает пройденные сектора."""
-        trails = self._trail_set
+        trails = self.state.trails
         path: list[int] = []
         current = start
         while points > 1e-9:
@@ -1983,7 +1905,7 @@ class SimulationEngine:
         from zonesim.world.sector import get_distance
 
         self._moved_monster_ids = set()
-        trails = self._trail_set
+        trails = self.state.trails
         for group in self.state.monster_groups.values():
             all_members = self._monster_group_members(group, active_only=False)
             members = [monster for monster in all_members if monster.status == EntityStatus.ACTIVE]
@@ -2352,18 +2274,6 @@ class SimulationEngine:
             group_advantage=len(monsters) - len(prey),
         )
         return self.state.rng.random() * 100 < chance
-
-    def _resolve_zero_health(self, npc: HumanNPC, start_health: int) -> str:
-        """Здоровье 0: бессознательное состояние по шансу §11.10, иначе гибель."""
-        start_share = start_health / npc.max_health if npc.max_health > 0 else 0.0
-        chance = calculate_unconscious_chance(start_share)
-        if resolve_unconscious_check(self.state.rng.random(), chance) == "unconscious":
-            npc.status = EntityStatus.UNCONSCIOUS
-            npc.unconscious_reason = "health_zero"
-            npc.unconscious_start_hour = self.state.time.hour
-            return "unconscious"
-        npc.status = EntityStatus.DEAD
-        return "dead"
 
     # --- Вспомогательные методы намерений ---
 
@@ -2839,7 +2749,7 @@ class SimulationEngine:
                     notified_factions=[attacker_faction, defender_faction],
                 )
                 self.state.faction_relations.change(attacker_faction, defender_faction, delta)
-                self._log_relation_change(hour, attacker_faction, defender_faction, delta, evt.id)
+                log_relation_change(self.state, hour, attacker_faction, defender_faction, delta, evt.id)
 
         # Условие A: после зачистки убежища — все атакующие группы входят без лимита (§12.7)
         if battle.get("emission_shelter_assault") and (
@@ -3145,7 +3055,7 @@ class SimulationEngine:
         members = active_members(self.state,  group)
         if not members or any(npc.id in self._combat_human_ids for npc in members):
             return False
-        target = self._capture_target(group)
+        target = capture_target(self.state, group)
         if target is None:
             return False
         _, kit = group_kit(self.state, 

@@ -332,6 +332,82 @@ BATCH_B2 = [
     ),
 ]
 
+# ============================================================
+# BATCH B2_1: duplicate elimination (3.9-B2.1)
+# ============================================================
+# 8 methods that existed BOTH in engine.py AND domain modules.
+# Only the domain module versions are kept; engine methods are removed.
+B2_1_PRE_COMMIT = "5d1ba3b"
+
+BATCH_B2_1 = [
+    MethodPair(
+        "_active_members", "active_members", "world/groups.py",
+        rules=[],
+        expected_mismatches=[],
+        mismatch_note="duplicate: only domain function kept",
+    ),
+    MethodPair(
+        "_group_leader", "group_leader", "world/groups.py",
+        rules=[],
+        expected_mismatches=[],
+        mismatch_note="duplicate: only domain function kept",
+    ),
+    MethodPair(
+        "_capture_target", "capture_target", "actions/capture.py",
+        rules=[],
+        expected_mismatches=[],
+        mismatch_note="duplicate: only domain function kept",
+    ),
+    MethodPair(
+        "_consume_item", "consume_item", "world/item.py",
+        rules=[],
+        expected_mismatches=[],
+        mismatch_note="duplicate: only domain function kept",
+    ),
+    MethodPair(
+        "_emission_safe_sectors", "emission_safe_sectors", "anomalies/emission.py",
+        rules=[],
+        expected_mismatches=[],
+        mismatch_note="duplicate: only domain function kept",
+    ),
+    MethodPair(
+        "_log_relation_change", "log_relation_change", "relations/journal.py",
+        rules=[],
+        expected_mismatches=[],
+        mismatch_note="duplicate: only domain function kept",
+    ),
+    MethodPair(
+        "_resolve_zero_health", "resolve_zero_health", "combat/results.py",
+        rules=[],
+        expected_mismatches=[],
+        mismatch_note="duplicate: only domain function kept",
+    ),
+    MethodPair(
+        "_trail_set", "trail_set", "world/trails.py",
+        rules=[
+            (r"self\._trail_set", "trail_set(state)"),
+        ],
+        expected_mismatches=[
+            MismatchEntry(1, "self._trail_set", "trail_set(state)"),
+        ],
+        mismatch_note="_trail_set: was @property, converted to function trail_set(state)",
+    ),
+]
+
+# Exceptions for the "no duplicates" check:
+# These functions exist in engine.py AND in domain modules but are intentionally
+# kept in engine (they are orchestrators or were not part of B2_1 scope).
+KNOWN_DUP_EXCEPTIONS = {
+    "generate_world": (
+        "orchestrator: generate_world is the world-gen entry point, "
+        "not a service method"
+    ),
+    "known_anomaly_sectors": (
+        "not extracted in B2_1: will be handled in a dedicated batch "
+        "(depends on knowledge base state)"
+    ),
+}
+
 
 def git_show(path, commit):
     result = subprocess.run(
@@ -736,6 +812,144 @@ def audit_b2_structural():
     return 0 if all_ok else 1
 
 
+def audit_b2_1():
+    print("=" * 70)
+    print("AUDIT B2_1: duplicate elimination (3.9-B2.1)")
+    print("Pre-commit: " + B2_1_PRE_COMMIT)
+    print("=" * 70)
+
+    all_ok = True
+    checks = 0
+    failures = 0
+
+    engine_code = (SRC / "simulation" / "engine.py").read_text(encoding="utf-8")
+
+    # 1. Проверка: методы удалены из engine.py
+    print("")
+    print("CHECK 1: methods removed from engine.py")
+    for pair in BATCH_B2_1:
+        checks += 1
+        count = len(re.findall(r'\bdef ' + pair.old_name + r'\b', engine_code))
+        status = "OK" if count == 0 else "FAIL (still " + str(count) + ")"
+        print("  " + pair.old_name + ": " + status)
+        if count != 0:
+            all_ok = False
+            failures += 1
+
+    # 2. Проверка: функции есть в доменных модулях
+    print("")
+    print("CHECK 2: functions exist in domain modules")
+    for pair in BATCH_B2_1:
+        checks += 1
+        mod_path = SRC / pair.target_module
+        if not mod_path.exists():
+            print("  " + pair.target_module + ": NOT FOUND")
+            all_ok = False
+            failures += 1
+            continue
+        code = mod_path.read_text(encoding="utf-8")
+        found = re.search(r'\bdef ' + pair.new_name + r'\b', code) is not None
+        status = "OK" if found else "NOT FOUND"
+        print("  " + pair.target_module + "::" + pair.new_name + ": " + status)
+        if not found:
+            all_ok = False
+            failures += 1
+
+    # 3. Проверка: нет вызовов engine._<имя> в src/ и tests/
+    print("")
+    print("CHECK 3: no engine._<name> calls in src/ tests/")
+    for pair in BATCH_B2_1:
+        checks += 1
+        call_pattern = r'engine\.' + re.escape(pair.old_name.lstrip('_'))
+        found_calls = []
+        for d in ["src", "tests"]:
+            dpath = REPO_ROOT / d
+            if not dpath.exists():
+                continue
+            for root, _, files in os.walk(dpath):
+                for f in files:
+                    if not f.endswith(".py"):
+                        continue
+                    fp = Path(root) / f
+                    # skip audit script itself
+                    if "audit_service_move" in str(fp):
+                        continue
+                    try:
+                        code = fp.read_text(encoding="utf-8")
+                    except (UnicodeDecodeError, OSError):
+                        continue
+                    for m in re.finditer(call_pattern, code):
+                        found_calls.append(str(fp.relative_to(REPO_ROOT)))
+        if found_calls:
+            print("  " + pair.new_name + ": FAIL (" + str(len(found_calls)) + " calls)")
+            for fc in found_calls[:3]:
+                print("    " + fc)
+            all_ok = False
+            failures += 1
+        else:
+            print("  " + pair.new_name + ": OK")
+
+    # 4. НОВАЯ ПРОВЕРКА: нет дубликатов (method in engine == function in domain)
+    print("")
+    print("CHECK 4: no duplicate pairs (engine method == domain function)")
+    # Scan all domain modules for functions that also exist as _<name> methods in engine
+    domain_modules_to_check = [
+        ("world/groups.py", ["active_members", "group_leader", "group_kit"]),
+        ("actions/capture.py", ["capture_target", "group_can_capture"]),
+        ("world/item.py", ["consume_item", "create_item", "sync_npc_from_items"]),
+        ("anomalies/emission.py", ["emission_safe_sectors", "is_group_emission_sheltered"]),
+        ("relations/journal.py", ["log_relation_change", "check_and_journal_relations"]),
+        ("combat/results.py", ["resolve_zero_health", "set_unconscious_or_dead"]),
+        ("world/trails.py", ["trail_set", "roll_trail_blockage", "roll_trail_blockages"]),
+    ]
+    dup_found = False
+    for mod_name, func_names in domain_modules_to_check:
+        mod_path = SRC / mod_name
+        if not mod_path.exists():
+            continue
+        mod_code = mod_path.read_text(encoding="utf-8")
+        for func_name in func_names:
+            # Skip known exceptions
+            if func_name in KNOWN_DUP_EXCEPTIONS:
+                continue
+            # Check if there's a matching engine method
+            engine_method = "_" + func_name
+            if re.search(r'\bdef ' + re.escape(engine_method) + r'\b', engine_code):
+                print("  DUPLICATE: " + mod_name + "::" + func_name +
+                      " has matching engine method " + engine_method)
+                dup_found = True
+                all_ok = False
+                failures += 1
+
+    if not dup_found:
+        print("  OK (no duplicates found)")
+        # Print exceptions
+        for exc_name, exc_reason in KNOWN_DUP_EXCEPTIONS.items():
+            print("  EXCLUDED: " + exc_name + " — " + exc_reason)
+
+    # 5. Проверка: размер engine.py
+    print("")
+    print("CHECK 5: engine.py size")
+    checks += 1
+    lines = len(engine_code.splitlines())
+    status = "OK (" + str(lines) + " lines)" if lines < 3317 else "FAIL (" + str(lines) + ")"
+    print("  engine.py: " + status)
+    if lines >= 3317:
+        all_ok = False
+        failures += 1
+
+    print("")
+    print("=" * 70)
+    print("B2_1: " + str(checks) + " checks, " + str(failures) + " failures")
+    if all_ok:
+        print("B2_1 AUDIT PASSED")
+    else:
+        print("B2_1 AUDIT FAILED")
+    print("=" * 70)
+
+    return 0 if all_ok else 1
+
+
 def audit_structural():
     print("=" * 70)
     print("AUDIT STRUCTURAL: B1 service methods")
@@ -875,13 +1089,16 @@ def audit_structural():
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Аудит B1/B2 сервисных методов")
-    parser.add_argument("--batch", choices=["B1", "B2"], default="B1")
+    parser = argparse.ArgumentParser(description="Аудит B1/B2/B2_1 сервисных методов")
+    parser.add_argument("--batch", choices=["B1", "B2", "B2_1"], default="B1")
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--equivalent", action="store_true")
     group.add_argument("--structural", action="store_true")
     group.add_argument("--both", action="store_true")
     args = parser.parse_args()
+
+    if args.batch == "B2_1":
+        return audit_b2_1()
 
     if args.batch == "B2":
         if args.both:

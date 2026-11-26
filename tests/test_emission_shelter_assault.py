@@ -14,6 +14,8 @@ import pytest
 from zonesim.simulation.engine import SimulationEngine
 from zonesim.world.entity import EntityStatus
 from zonesim.world.group import HumanGroup, MonsterGroup
+from zonesim.world.trails import trail_set
+from zonesim.anomalies.emission import emission_safe_sectors
 from zonesim.combat import CombatSystem
 from zonesim.combat.base import CombatFactory
 from zonesim.knowledge.fact import KnowledgeType
@@ -134,7 +136,7 @@ class TestHumansAssaultMonsterShelter:
         _spawn_human_group(engine, human_ids[:4], sector_id)
 
         # Люди должны НЕ sheltered: sector_id is NOT a faction_start or trader
-        safe = engine._emission_safe_sectors()
+        safe = emission_safe_sectors(state)
         # Проверим что sector_id НЕ sheltered — если sheltered, используем base sector
         # где нет убежища (базы имеют faction_start=True)
         # StormShelter sector IS in safe, so we need a different approach.
