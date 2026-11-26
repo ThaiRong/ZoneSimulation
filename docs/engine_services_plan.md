@@ -520,6 +520,37 @@ roll_trail_blockage            → world/trails.py       (property _trail_set)
 
 **Риски:** `apply_battle_result` вызывает 7 хелперов — все из батчей 1-2. `apply_emission_exposure` → `mark_group_emission_exposed` — взаимная зависимость внутри батча.
 
+### Батч 3 — фактический состав (3.9-B3)
+
+**Дата фиксации:** HEAD f0065d2 (pre-batch)
+**Fork критерий:** метод вызывает ТОЛЬКО `self._<уже вынесенные>` или чистые внешние функции.
+**Вызовов `self._<ещё не вынесенный хелпер>`** — 0 для включённых методов.
+
+### Фактический состав (11 методов)
+
+| # | Метод engine | Доменный модуль | Новая сигнатура | Зависимости (self._xxx) | Статус |
+|---|-------------|-----------------|-----------------|------------------------|--------|
+| 1 | `_walk` | `actions/movement.py` | `walk(state, start, target_ids, avoid_ids, points) -> list[int]` | `_trail_set` (B2.1) | ✅ ГОТОВ |
+| 2 | `_blocked_trail_map` | `world/trails.py` | `blocked_trail_map(state) -> dict[tuple[int,int], AnomalyEntity]` | — (чистый) | ✅ ГОТОВ |
+| 3 | `_group_has_passage` | `world/trails.py` | `group_has_passage(state, group, anomaly) -> bool` | — (чистый) | ✅ ГОТОВ |
+| 4 | `_group_detector_bonus` | `knowledge/__init__.py` | `group_detector_bonus(state) -> dict[int, int]` | — (чистый) | ✅ ГОТОВ |
+| 5 | `_base_guards` | `combat/guards.py` | `base_guards(state, sector_id, faction) -> list[HumanNPC]` | — (чистый) | ✅ ГОТОВ |
+| 6 | `_monster_group_members` | `world/groups.py` | `monster_group_members(state, group, active_only=True) -> list[Monster]` | species_value() (внешняя) | ✅ ГОТОВ |
+| 7 | `_sync_human_groups` | `world/groups.py` | `sync_human_groups(state) -> None` | — (чистый) | ✅ ГОТОВ |
+| 8 | `_sync_monster_groups` | `world/groups.py` | `sync_monster_groups(state) -> None` | species_value() (внешняя) | ✅ ГОТОВ |
+| 9 | `_expire_findings` | `knowledge/expiry.py` | `expire_findings(state, hour) -> None` | — (чистый) | ✅ ГОТОВ |
+| 10 | `_free_emptied_shelters` | `world/shelter.py` | `free_emptied_shelters(state, hour) -> None` | — (чистый) | ✅ ГОТОВ |
+| 11 | `_update_shelter_participants` | `world/shelter.py` | `update_shelter_participants(state, hour) -> None` | `shelter_sector_ids` (B2), `walk` (B3) | ✅ ГОТОВ |
+
+### Исключённые методы (зависят от невынесенных)
+
+| Метод | Причина исключения | Зависимость | Статус |
+|-------|-------------------|-------------|--------|
+| `_apply_human_move` | тянет невынесенный `_create_corpse` | `_check_blocked_trails` | ❌ техдолг |
+| `_check_blocked_trails` | тянет невынесенные `_blocked_trail_map`, `_group_has_passage`, `_group_detector_bonus`, `_create_corpse` | все 4 выше | ❌ техдолг |
+
+> **Примечание:** `_apply_human_move` и `_check_blocked_trails` включены в "кандидаты уровня 2" из ордига, но НЕ были вынесены, т.к. зависят от `_create_corpse` (BATC 8, combat/loot.py) и других методов из этого батча. При вынесении B3 методы `_blocked_trail_map`, `_group_has_passage`, `_group_detector_bonus` будут вынесены, но `_create_corpse` — нет. Это останавливает B3 для этих двух методов.
+
 ### Батч 4: Шелтеры, трейды, эмитсии
 
 **Методы (10):**
