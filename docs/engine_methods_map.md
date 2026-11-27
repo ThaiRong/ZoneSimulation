@@ -95,8 +95,8 @@
 | 83 | _group_leader | 2367 | world/groups | Лидер группы | world/groups.py | 4 |
 | 84 | _consume_item | 2370 | world/items | Расход предмета | world/items.py | 7 |
 | 85 | _phase5_movement | 2381 | phase/5_movement | Точка входа фазы 5: перемещение | phases/phase5_movement.py | 5 |
-| 86 | _walk | 2454 | world/movement | Построение пути через рёбра графа | world/movement.py | 5 |
-| 87 | _apply_human_move | 2481 | world/movement | Применение перемещения группы | world/movement.py | 5 |
+| 86 | _walk | 2454 | actions/movement | Построение пути через рёбра графа | actions/movement.py | 5 |
+| 87 | _apply_human_move | 2481 | world/movement | Применение перемещения группы | deferred to B8 (depends on _create_corpse) | 5 |
 | 88 | _blocked_trail_map | 2507 | world/trails | Карта перекрытых троп | world/trails.py | 5 |
 | 89 | _group_has_passage | 2514 | world/trails | Есть ли проход через аномалию | world/trails.py | 5 |
 | 90 | _check_blocked_trails | 2529 | world/trails | Проверка перекрытых троп | world/trails.py | 5 |

@@ -2884,7 +2884,7 @@ class SimulationEngine:
                     target.sector_id = flee_sector
                     if monster_group is not None:
                         monster_group.sector_id = flee_sector
-                        for member in self._monster_group_members(monster_group, active_only=False):
+                        for member in monster_group_members(self.state, monster_group, active_only=False):
                             member.sector_id = flee_sector
                 outcome = "escaped"
             self.state.news_manager.create_event(

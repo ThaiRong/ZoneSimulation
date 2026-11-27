@@ -1303,6 +1303,15 @@ def audit_b3():
         print("B3 AUDIT FAILED")
     print("=" * 70)
 
+    # 6. Статическая проверка вызовов
+    print("")
+    static_rc = audit_static_call_validation()
+    if static_rc == 0:
+        print("STATIC CALL VALIDATION: PASSED")
+    else:
+        print("STATIC CALL VALIDATION: FAILED")
+        return static_rc
+
     return 0 if all_ok else 1
 
 
@@ -1322,6 +1331,103 @@ def _check_single_pair(pair, pre_commit):
     new_norm = normalize(new_body)
 
     return old_norm == new_norm
+
+
+def audit_static_call_validation():
+    """Статическая проверка: нет вызовов удалённых методов.
+
+    Находит все обращения вида (self|engine|e)\\._(...) и сверяет с множеством
+    методов, определённых в SimulationEngine через ast. Любое обращение к неопределённому
+    методу из BATCH_B3/B2/B2_1 — FAIL.
+    """
+    print("")
+    print("=" * 70)
+    print("STATIC CALL VALIDATION: no calls to removed methods")
+    print("=" * 70)
+
+    all_ok = True
+    failures = 0
+
+    # 1. Собираем удалённые методы из всех батчей
+    removed_methods = set()
+    for batch in [BATCH_B1, BATCH_B2, BATCH_B2_1, BATCH_B3]:
+        for pair in batch:
+            removed_methods.add(pair.old_name)
+
+    # 2. Собираем текущие методы SimulationEngine
+    engine_code = (SRC / "simulation" / "engine.py").read_text(encoding="utf-8")
+    engine_tree = ast.parse(engine_code)
+    current_methods = set()
+    for node in ast.walk(engine_tree):
+        if isinstance(node, ast.ClassDef) and node.name == "SimulationEngine":
+            for item in node.body:
+                if isinstance(item, ast.FunctionDef):
+                    current_methods.add(item.name)
+
+    # 3. Паттерн для поиска вызовов
+    call_pattern = re.compile(
+        r'(self|engine|e)\.(_[a-zA-Z_][a-zA-Z0-9_]*)\s*\('
+    )
+
+    # 4. Проверяем engine.py, phases, tests
+    files_to_check = []
+    files_to_check.append(("src/zonesim/simulation/engine.py", engine_code))
+
+    phases_dir = SRC / "simulation" / "phases"
+    if phases_dir.exists():
+        for p in phases_dir.glob("*.py"):
+            files_to_check.append((f"src/zonesim/simulation/phases/{p.name}", p.read_text(encoding="utf-8")))
+
+    tests_dir = REPO_ROOT / "tests"
+    if tests_dir.exists():
+        for p in tests_dir.glob("test_*.py"):
+            files_to_check.append((f"tests/{p.name}", p.read_text(encoding="utf-8")))
+
+    for filepath, code in files_to_check:
+        lines = code.splitlines()
+        for line_no, line in enumerate(lines, 1):
+            # Пропускаем комментарии
+            stripped = line.strip()
+            if stripped.startswith("#") or '"""' in stripped or "'''" in stripped:
+                continue
+            # Пропускаем docstring строки (упрощённо)
+            for match in call_pattern.finditer(line):
+                caller = match.group(1)
+                method_name = match.group(2)
+                # Проверяем: если метод удалён и НЕ определён сейчас — это FAIL
+                if method_name in removed_methods and method_name not in current_methods:
+                    # Но это может быть допустимо, если метод ещё не удалён из engine
+                    # (для B3 audit это строго запрещённый паттерн)
+                    print(f"  FAIL: {filepath}:{line_no}: {caller}.{method_name}() — метод удалён")
+                    all_ok = False
+                    failures += 1
+
+    # 5. Дополнительно: self._X в engine.py должен быть в current_methods
+    for line_no, line in enumerate(lines, 1):
+        stripped = line.strip()
+        if stripped.startswith("#") or '"""' in stripped or "'''" in stripped:
+            continue
+        for match in call_pattern.finditer(line):
+            caller = match.group(1)
+            method_name = match.group(2)
+            if caller == "self" and method_name.startswith("_") and method_name not in current_methods:
+                print(f"  WARN: engine.py:{line_no}: self.{method_name}() — не определён в SimulationEngine")
+                all_ok = False
+                failures += 1
+
+    if failures == 0:
+        print("  Все вызовы валидны: OK")
+
+    print("")
+    print("=" * 70)
+    print(f"STATIC CALL VALIDATION: {failures} failures")
+    if all_ok:
+        print("STATIC CALL VALIDATION PASSED")
+    else:
+        print("STATIC CALL VALIDATION FAILED")
+    print("=" * 70)
+
+    return 0 if all_ok else 1
 
 
 def main():
