@@ -581,7 +581,7 @@ conditional_trader_is_active     → already in batch 1
  или чистые внешние функции. **Вызовов `self._<ещё не вынесенный хелпер>` — 0.**
 **Вызовов невынесенных хелперов:** 0 для включённых методов.
 
-### Фактический состав (17 методов)
+### Фактический состав (16 методов)
 
 | # | Метод engine | Доменный модуль | Новая сигнатура | Зависимости (self._xxx) | Статус |
 |---|-------------|-----------------|-----------------|------------------------|--------|
@@ -601,12 +601,12 @@ conditional_trader_is_active     → already in batch 1
 | 14 | `_process_emission_shelter_assault` | `world/shelter.py` | `process_emission_shelter_assault(state, hour)` | `_emission_active` (#4), `emission_safe_sectors` (B2), `monster_group_members` (B2.1) | ✅ |
 | 15 | `_stale_shelter_occupied_knowledge` | `world/shelter.py` | `stale_shelter_occupied_knowledge(state, shelter_id, hour)` | — (чистый, state.read) | ✅ |
 | 16 | `_group_can_create_shelter` | `world/shelter.py` | `group_can_create_shelter(state, group, members) -> bool` | — (чистый, state.read) | ✅ |
-| 17 | `_expire_conditional_trader_if_expired` | `economy/trader.py` | `expire_conditional_trader_if_expired(state, hour)` | `conditional_trader_can_sleep` (#2, B1), `_schedule_conditional_trader` (B1) | ✅ |
 
 ### Исключённые методы (зависят от невынесенных)
 
 | Метод | Причина исключения | Зависимость | Статус |
 |-------|-------------------|-------------|--------|
+| `_expire_conditional_trader_if_expired` | тянет `_schedule_conditional_trader` | `_schedule_conditional_trader` (engine, не вынесен) | ❌ техдолг |
 | `_spawn_conditional_trader` | тянет `_give_starting_equipment` | `spawn_catalog_item` (B5) | ❌ техдолг |
 | `_check_monster_anomaly_contacts` | тянет `_create_corpse` | `create_corpse` (B8) | ❌ техдолг |
 
@@ -618,25 +618,22 @@ conditional_trader_is_active     → already in batch 1
 | `_purchase_plan` | зависит от `trade_price` | Батч 9 |
 | `_process_rest_trade` | 7 хелперов, `trade_price` | Батч 9 |
 | `_process_rest_exchanges` | уже вынесен в Батче 3 | ✅ B3 |
-| `_conditional_trader_is_active` | план не указал, но включён для чистоты | B1/B4 |
 
-> **Примечание:** В плане Батч 4 указан как 10 методов, фактический состав — 17 методов.
-> Разница: план включал невынесенные (`spawn_conditional_trader`, `process_conditional_trader_schedule`, `broadcast_conditional_trader_info`), которые зависят от `_give_starting_equipment` (B5).
+> **Примечание:** В плане Батч 4 указан как 10 методов, фактический состав — 16 методов.
+> Разница: план включал невынесенные (`spawn_conditional_trader`, `process_conditional_trader_schedule`, `broadcast_conditional_trader_info`, `expire_conditional_trader_if_expired`), которые зависят от `_give_starting_equipment` (B5) или `_schedule_conditional_trader` (engine).
 > Фактический состав включает все методы, для которых все зависимости удовлетворены.
-> `_spawn_conditional_trader` и `_check_monster_anomaly_contacts` исключены по правилу критерия принадлежности.
 
 ### Вызывающие стороны (для обновления вызовов)
 
 **Фазы:**
 | Вызов | Файл:строка | Станет |
 |-------|-------------|--------|
-| `engine._process_emission_schedule` | `phases/phase02_environment.py:*` | `process_emission_schedule(state, hour)` |
-| `engine._apply_emission_exposure` | `phases/phase09_consequences.py:*` | `apply_emission_exposure(state, hour)` |
-| `engine._process_shelter_occupation` | `phases/phase09_consequences.py:*` | `process_shelter_occupation(state, hour)` |
-| `engine._group_can_create_shelter` | `phases/phase04_intentions.py:*` | `group_can_create_shelter(state, group, members)` |
-| `engine._expire_conditional_trader_if_expired` | `phases/phase01_scheduled.py:*` | `expire_conditional_trader_if_expired(state, hour)` |
-| `engine._conditional_trader_can_sleep` | `phases/phase01_scheduled.py:*` | `conditional_trader_can_sleep(state)` |
-| `engine._conditional_trader_base_sector` | `phases/phase01_scheduled.py:*` | `conditional_trader_base_sector(state)` |
+| `engine._process_emission_schedule` | `phases/phase01_scheduled.py:75` | `process_emission_schedule(state, hour)` |
+| `engine._apply_emission_exposure` | `phases/phase01_scheduled.py:77` | `apply_emission_exposure(state, hour)` |
+| `engine._process_shelter_occupation` | `phases/phase01_scheduled.py:80` | `process_shelter_occupation(state, hour)` |
+| `engine._emission_known` | `phases/phase04_intentions.py:35` | `emission_known(state, hour)` |
+| `engine._group_can_create_shelter` | `phases/phase04_intentions.py:134` | `group_can_create_shelter(state, group, members)` |
+| `engine._process_emission_shelter_assault` | `phases/phase06_detections.py:84` | `process_emission_shelter_assault(state, hour)` |
 
 **engine.py (self._xxx вызовы):**
 | Вызов | Строки | Станет |
@@ -671,7 +668,7 @@ conditional_trader_is_active     → already in batch 1
 |-------|--------|--------|
 | `engine._process_emission_shelter_assault(hour)` | 84 | `process_emission_shelter_assault(state, hour)` |
 
-**Ожидаемое уменьшение engine.py:** ~250 строк (17 методов × ~15 строк среднее)
+**Ожидаемое уменьшение engine.py:** ~220 строк (16 методов × ~14 строк среднее)
 
 ### Батч 5: Инит-хелперы, экипировка
 
