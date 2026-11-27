@@ -18,6 +18,7 @@ from zonesim.ai import (
     edge_cost,
     edge_key,
 )
+from zonesim.anomalies.emission import emission_active
 from zonesim.needs.sleep import STAMINA_COST_MOVEMENT, update_stamina
 from zonesim.simulation.context import SimulationContext
 from zonesim.world.entity import EntityStatus
@@ -37,7 +38,7 @@ def run_phase5_movement(ctx: SimulationContext) -> None:
     engine._moved_human_ids: set[int] = set()
 
     # Запрет движения во время выброса (§12.7, #20)
-    if engine._emission_active(hour):
+    if emission_active(state, hour):
         return
 
     border_ids = {s.id for s in state.sectors.values() if s.is_border}
@@ -50,7 +51,7 @@ def run_phase5_movement(ctx: SimulationContext) -> None:
         members = [npcs[mid] for mid in group.members if mid in npcs]
         if not members or any(npc.status != EntityStatus.ACTIVE for npc in members):
             continue  # группа не оставляет спящих и бессознательных членей
-        if engine._emission_active(hour):
+        if emission_active(state, hour):
             # Во время выброса разрешено ТОЛЬКО движение к Shelter
             if group.intention == SHELTER:
                 # Продолжаем обработку SHELTER ниже

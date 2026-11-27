@@ -345,32 +345,6 @@ class SimulationEngine:
         }
         self.state.shelter_count = len(self.state.shelters)
 
-    def _conditional_trader_is_active(self) -> bool:
-        """Проверяет, что ситуативный торговец ещё работает."""
-        if self.state.conditional_trader_id is None:
-            return False
-        current_hour = self.state.time.hour
-        return (
-            self.state.conditional_trader_start_hour <= current_hour
-            and current_hour < self.state.conditional_trader_end_hour
-        )
-
-    def _conditional_trader_can_sleep(self) -> bool:
-        """Временная база: отдых (REST) можно, но спать (SLEEP) нельзя."""
-        return conditional_trader_is_active(self.state)
-
-    def _conditional_trader_base_sector(self) -> int | None:
-        """Возвращает ID сектора временной базы или None."""
-        if conditional_trader_is_active(self.state):
-            return self.state.conditional_trader_sector
-        return None
-
-    def _emission_active(self, hour: int) -> bool:
-        return emission_active(self.state, hour)
-
-    def _emission_known(self, hour: int) -> bool:
-        return emission_known(self.state, hour)
-
     def _schedule_conditional_trader(self, hour: int) -> None:
         """Запланировать следующий появление ситуативного торговца. (§16.6)"""
         if self.state.next_conditional_spawn_hour >= 0:
@@ -515,37 +489,7 @@ class SimulationEngine:
             self._schedule_conditional_trader(hour)
 
 
-    # --- Выброс (§12.7) ---
-
-    def _process_emission_schedule(self, hour: int) -> None:
-        process_emission_schedule(self.state, hour)
-
-    def _broadcast_emission_warning(self, hour: int) -> None:
-        broadcast_emission_warning(self.state, hour)
-
-    def _anomaly_move_candidates(self, anomaly) -> list[int]:
-        return anomaly_move_candidates(self.state, anomaly)
-
-    def _move_all_anomalies(self, hour: int) -> None:
-        move_all_anomalies(self.state, hour)
-
-    # === Helpers для выброса (§12.7, #20) ===
-
-    def _mark_group_emission_exposed(self, group: HumanGroup, hour: int) -> None:
-        mark_group_emission_exposed(self.state, group, hour)
-
-    def _apply_emission_exposure(self, hour: int) -> None:
-        apply_emission_exposure(self.state, hour)
-
-    def _process_shelter_occupation(self, hour: int) -> None:
-        process_shelter_occupation(self.state, hour)
-
-    def _create_shelter_occupied_knowledge(self, shelter_id: int, sector_id: int,
-                                           monster_group_id: int, hour: int) -> None:
-        create_shelter_occupied_knowledge(self.state, shelter_id, sector_id, monster_group_id, hour)
-
-    def _process_emission_shelter_assault(self, hour: int) -> None:
-        process_emission_shelter_assault(self.state, hour, self._pending_battles)
+    # --- Выброс (§12.7) — все функции перенесены в anomalies/emission.py
 
     # --- Находки: срок жизни ~суток (§16.10) ---
 
@@ -949,8 +893,6 @@ class SimulationEngine:
                     plan.append((default_ref, 1))
         return plan
 
-    def _group_can_create_shelter(self, group: HumanGroup, members: list[HumanNPC]) -> bool:
-        return group_can_create_shelter(self.state, group, members)
 
     def _process_rest_trade(self, hour: int, resting_groups: list[HumanGroup]) -> None:
         """Торговля как час отдыха у торговца: сначала продажа, потом закупка. (§16)"""
@@ -2078,10 +2020,10 @@ class SimulationEngine:
                 # она получает урон выброса и записывается в emission_exposed (§12.7)
                 if (
                     group.id in self.state.human_groups
-                    and self._emission_active(hour)
+                    and emission_active(self.state, hour)
                     and not is_group_emission_sheltered(self.state,  group)
                 ):
-                    self._mark_group_emission_exposed(group, hour)
+                    mark_group_emission_exposed(self.state, group, hour)
             monster_group_key = (
                 "attacker_monster_group_id" if side == "attackers" else "defender_monster_group_id"
             )
@@ -2224,7 +2166,7 @@ class SimulationEngine:
                         # Условие #20: убираем из emission_exposed
                         self.state.emission_exposed.pop(group.id, None)
                     # Условие D: факт "занято монстрами" устаревает
-                    self._stale_shelter_occupied_knowledge(shelter_id, hour)
+                    stale_shelter_occupied_knowledge(self.state, shelter_id, hour)
 
     def _damage_carried_valuables(self, npc: HumanNPC, combat: CombatSystem, result) -> None:
         damage = max(
@@ -2557,7 +2499,7 @@ class SimulationEngine:
         """Формирование артефактов — Фаза 2: Окружающая среда. (§12.5)"""
         # Формирование артефактов; во время выброса — с ускорением (§12.7)
         acceleration = (
-            EMISSION_ARTIFACT_ACCELERATION if self._emission_active(hour) else 1
+            EMISSION_ARTIFACT_ACCELERATION if emission_active(self.state, hour) else 1
         )
         for anomaly in self.state.anomalies.values():
             if anomaly.status == AnomalyStatus.ACTIVE:

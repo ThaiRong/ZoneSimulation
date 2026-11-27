@@ -16,7 +16,8 @@ from zonesim.world.entity import EntityStatus
 from zonesim.world.group import HumanGroup, MonsterGroup
 from zonesim.world.trails import trail_set
 from zonesim.anomalies.emission import emission_safe_sectors
-from zonesim.world.shelter import process_emission_shelter_assault, stale_shelter_occupied_knowledge
+from zonesim.world.shelter import process_emission_shelter_assault, stale_shelter_occupied_knowledge, create_shelter_occupied_knowledge
+from zonesim.anomalies.emission import apply_emission_exposure
 from zonesim.combat import CombatSystem
 from zonesim.combat.base import CombatFactory
 from zonesim.knowledge.fact import KnowledgeType
@@ -330,7 +331,7 @@ class TestMonsterImmunityToEmission:
             ]
             if members:
                 group.sector_id = members[0].sector_id
-        engine._apply_emission_exposure(state.time.hour)
+        apply_emission_exposure(state, state.time.hour)
 
         # Монстры всё ещё не в exposed
         monster_ids = {m.id for m in state.monsters}
@@ -388,7 +389,7 @@ class TestShelterOccupiedKnowledge:
         _move_monster_group_to(engine, mg_id, sector_id)
 
         hour = state.time.hour
-        engine._create_shelter_occupied_knowledge(shelter_id, sector_id, mg_id, hour)
+        create_shelter_occupied_knowledge(state, shelter_id, sector_id, mg_id, hour)
 
         npc = state.humans[0]
         kb = state.knowledge_bases[npc.id]
@@ -410,7 +411,7 @@ class TestShelterOccupiedKnowledge:
         mg_id = state.monster_groups[0].id
         _move_monster_group_to(engine, mg_id, sector_id)
 
-        engine._create_shelter_occupied_knowledge(shelter_id, sector_id, mg_id, state.time.hour)
+        create_shelter_occupied_knowledge(state, shelter_id, sector_id, mg_id, state.time.hour)
 
         for npc in state.humans[:4]:
             kb = state.knowledge_bases.get(npc.id)
@@ -431,7 +432,7 @@ class TestKnowledgeStaleness:
         shelter_id, shelter, sector_id = _get_shelter(engine)
         assert shelter is not None
 
-        engine._create_shelter_occupied_knowledge(shelter_id, sector_id, 0, state.time.hour)
+        create_shelter_occupied_knowledge(state, shelter_id, sector_id, 0, state.time.hour)
 
         npc = state.humans[0]
         kb = state.knowledge_bases[npc.id]

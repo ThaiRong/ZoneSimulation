@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from zonesim.actions.capture import group_can_capture
 from zonesim.actions.destroy import group_can_destroy
-from zonesim.anomalies.emission import emission_known
+from zonesim.anomalies.emission import emission_active, emission_known
 from zonesim.world.shelter import group_can_create_shelter
 from zonesim.ai import (
     ARTIFACT_SEARCH,
@@ -57,7 +57,7 @@ def run_phase4_intentions(ctx: SimulationContext) -> None:
         members = [npcs[mid] for mid in group.members if mid in npcs]
         if not members:
             continue
-        if emission_known_value or engine._emission_active(hour):
+        if emission_known_value or emission_active(state, hour):
             group.intention = SHELTER
             for member in members:
                 if member.status == EntityStatus.ACTIVE:

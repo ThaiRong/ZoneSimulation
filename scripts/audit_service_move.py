@@ -523,6 +523,30 @@ BATCH_B3 = [
     ),
 ]
 
+# ============================================================
+# BATCH B4: emission/shelter/trader delegate elimination (3.9-B4.1)
+# ============================================================
+B4_PRE_COMMIT = "2d481f7"
+
+BATCH_B4 = [
+    MethodPair("_conditional_trader_is_active", "conditional_trader_is_active", "economy/trader.py", rules=[], expected_mismatches=[], mismatch_note="duplicate"),
+    MethodPair("_conditional_trader_can_sleep", "conditional_trader_can_sleep", "economy/trader.py", rules=[], expected_mismatches=[], mismatch_note="alias"),
+    MethodPair("_conditional_trader_base_sector", "conditional_trader_base_sector", "economy/trader.py", rules=[], expected_mismatches=[], mismatch_note="alias"),
+    MethodPair("_emission_active", "emission_active", "anomalies/emission.py", rules=[], expected_mismatches=[], mismatch_note="alias"),
+    MethodPair("_emission_known", "emission_known", "anomalies/emission.py", rules=[], expected_mismatches=[], mismatch_note="alias"),
+    MethodPair("_process_emission_schedule", "process_emission_schedule", "anomalies/emission.py", rules=[], expected_mismatches=[], mismatch_note="alias"),
+    MethodPair("_broadcast_emission_warning", "broadcast_emission_warning", "anomalies/emission.py", rules=[], expected_mismatches=[], mismatch_note="alias"),
+    MethodPair("_anomaly_move_candidates", "anomaly_move_candidates", "anomalies/migration.py", rules=[], expected_mismatches=[], mismatch_note="alias"),
+    MethodPair("_move_all_anomalies", "move_all_anomalies", "anomalies/migration.py", rules=[], expected_mismatches=[], mismatch_note="alias"),
+    MethodPair("_mark_group_emission_exposed", "mark_group_emission_exposed", "anomalies/emission.py", rules=[], expected_mismatches=[], mismatch_note="alias"),
+    MethodPair("_apply_emission_exposure", "apply_emission_exposure", "anomalies/emission.py", rules=[], expected_mismatches=[], mismatch_note="alias"),
+    MethodPair("_process_shelter_occupation", "process_shelter_occupation", "world/shelter.py", rules=[], expected_mismatches=[], mismatch_note="alias"),
+    MethodPair("_create_shelter_occupied_knowledge", "create_shelter_occupied_knowledge", "world/shelter.py", rules=[], expected_mismatches=[], mismatch_note="alias"),
+    MethodPair("_process_emission_shelter_assault", "process_emission_shelter_assault", "world/shelter.py", rules=[], expected_mismatches=[], mismatch_note="alias"),
+    MethodPair("_stale_shelter_occupied_knowledge", "stale_shelter_occupied_knowledge", "world/shelter.py", rules=[], expected_mismatches=[], mismatch_note="removed"),
+    MethodPair("_group_can_create_shelter", "group_can_create_shelter", "world/shelter.py", rules=[], expected_mismatches=[], mismatch_note="alias"),
+]
+
 
 def git_show(path, commit):
     result = subprocess.run(
@@ -1333,6 +1357,78 @@ def _check_single_pair(pair, pre_commit):
     return old_norm == new_norm
 
 
+def audit_b4():
+    """Аудит B4: 16 методов удалены из engine.py."""
+    print("")
+    print("=" * 70)
+    print("AUDIT B4: 16 methods eliminated (3.9-B4.1)")
+    print("Pre-batch commit: " + B4_PRE_COMMIT)
+    print("=" * 70)
+    all_ok = True
+    checks = 0
+    failures = 0
+    engine_code = (SRC / "simulation" / "engine.py").read_text(encoding="utf-8")
+    print("")
+    print("STRUCTURAL CHECK:")
+    for pair in BATCH_B4:
+        checks += 1
+        count = len(re.findall(r'\bdef ' + pair.old_name + r'\b', engine_code))
+        status = "OK" if count == 0 else "FAIL (" + str(count) + ")"
+        print("  " + pair.old_name + " removed: " + status)
+        if count != 0:
+            all_ok = False
+            failures += 1
+    for pair in BATCH_B4:
+        checks += 1
+        mod_path = SRC / pair.target_module
+        if not mod_path.exists():
+            print("  " + pair.target_module + ": NOT FOUND")
+            all_ok = False
+            failures += 1
+            continue
+        code = mod_path.read_text(encoding="utf-8")
+        found = re.search(r'\bdef ' + pair.new_name + r'\b', code) is not None
+        status = "OK" if found else "NOT FOUND"
+        print("  " + pair.target_module + "::" + pair.new_name + ": " + status)
+        if not found:
+            all_ok = False
+            failures += 1
+    print("")
+    print("DUPLICATE CHECK:")
+    safe_domain_functions = set()
+    for pair in BATCH_B4:
+        mod_path = SRC / pair.target_module
+        if mod_path.exists():
+            code = mod_path.read_text(encoding="utf-8")
+            tree = ast.parse(code)
+            for node in ast.iter_child_nodes(tree):
+                if isinstance(node, ast.FunctionDef):
+                    safe_domain_functions.add(node.name)
+    checks += 1
+    dup_found = False
+    for func_name in safe_domain_functions:
+        if "_" + func_name in KNOWN_DUP_EXCEPTIONS:
+            continue
+        engine_method = "_" + func_name
+        if re.search(r'\bdef ' + re.escape(engine_method) + r'\b', engine_code):
+            print("  DUP: " + engine_method + " in engine + " + func_name + " in domain")
+            all_ok = False
+            failures += 1
+            dup_found = True
+    if not dup_found:
+        print("  Нет дубликатов: OK")
+    print("")
+    print("=" * 70)
+    print("B4: " + str(checks) + " checks, " + str(failures) + " failures")
+    if all_ok:
+        print("B4 AUDIT PASSED")
+    else:
+        print("B4 AUDIT FAILED")
+    print("=" * 70)
+    static_rc = audit_static_call_validation()
+    return 0 if static_rc == 0 and all_ok else 1
+
+
 def audit_static_call_validation():
     """Статическая проверка: нет вызовов удалённых методов.
 
@@ -1350,7 +1446,7 @@ def audit_static_call_validation():
 
     # 1. Собираем удалённые методы из всех батчей
     removed_methods = set()
-    for batch in [BATCH_B1, BATCH_B2, BATCH_B2_1, BATCH_B3]:
+    for batch in [BATCH_B1, BATCH_B2, BATCH_B2_1, BATCH_B3, BATCH_B4]:
         for pair in batch:
             removed_methods.add(pair.old_name)
 
@@ -1431,8 +1527,8 @@ def audit_static_call_validation():
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Аудит B1/B2/B2_1/B3 сервисных методов")
-    parser.add_argument("--batch", choices=["B1", "B2", "B2_1", "B3"], default="B1")
+    parser = argparse.ArgumentParser(description="Аудит B1/B2/B2_1/B3/B4 сервисных методов")
+    parser.add_argument("--batch", choices=["B1", "B2", "B2_1", "B3", "B4"], default="B1")
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--equivalent", action="store_true")
     group.add_argument("--structural", action="store_true")
@@ -1441,6 +1537,9 @@ def main():
 
     if args.batch == "B3":
         return audit_b3()
+
+    if args.batch == "B4":
+        return audit_b4()
 
     if args.batch == "B2_1":
         return audit_b2_1()

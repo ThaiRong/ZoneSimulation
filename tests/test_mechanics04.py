@@ -4,7 +4,8 @@ import pytest
 
 from zonesim.ai import HELP, SHELTER
 from zonesim.anomalies.core import Anomaly, AnomalyStatus, AnomalyType
-from zonesim.anomalies.emission import is_emission_active, apply_emission_exposure
+from zonesim.anomalies.emission import is_emission_active, apply_emission_exposure, process_emission_schedule
+from zonesim.anomalies.migration import move_all_anomalies
 from zonesim.world.shelter import process_shelter_occupation
 from zonesim.knowledge.fact import KnowledgeBase, KnowledgeType
 from zonesim.simulation.engine import SimulationEngine
@@ -187,7 +188,7 @@ class TestEmission:
         npc.health = npc.max_health = 100
         hour = self._activate(engine)
         stamina_before = npc.stamina
-        engine._apply_emission_exposure(hour)
+        apply_emission_exposure(engine.state, hour)
         assert npc.health <= 50  # 50+% урона
         assert npc.stamina < stamina_before  # лёгкая травма
         npc.health = 100
@@ -204,7 +205,7 @@ class TestEmission:
         npc.sector_id = trader.sector_id
         npc.health = 100
         hour = self._activate(engine)
-        engine._apply_emission_exposure(hour)
+        apply_emission_exposure(engine.state, hour)
         assert npc.health == 100
 
     def test_emission_moves_anomalies_once(self):
@@ -212,7 +213,7 @@ class TestEmission:
         before = {a.id: a.sector_id for a in engine.state.anomalies.values()
                   if a.status == AnomalyStatus.ACTIVE}
         hour = engine.state.time.hour
-        engine._move_all_anomalies(hour)
+        move_all_anomalies(engine.state, hour)
         after = {a.id: a.sector_id for a in engine.state.anomalies.values()
                  if a.status == AnomalyStatus.ACTIVE}
         moved = sum(1 for aid in before if after.get(aid) != before[aid])
@@ -226,12 +227,12 @@ class TestEmission:
         engine = SimulationEngine(seed=42)
         hour = engine.state.time.hour
         engine.state.next_emission_hour = hour
-        engine._process_emission_schedule(hour)
+        process_emission_schedule(engine.state, hour)
         assert is_emission_active(
             engine.state.emission_start_hour, engine.state.emission_end_hour, hour,
         )
         assert engine.state.next_emission_hour == -1
-        engine._process_emission_schedule(engine.state.emission_end_hour)
+        process_emission_schedule(engine.state, engine.state.emission_end_hour)
         assert engine.state.emission_start_hour == -1
         assert engine.state.next_emission_hour > engine.state.emission_end_hour
 

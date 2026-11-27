@@ -121,7 +121,8 @@ def process_emission_schedule(state, hour: int) -> None:
 
 
 def broadcast_emission_warning(state, hour: int) -> None:
-    from zonesim.knowledge import KnowledgeBase, KnowledgeType
+    from zonesim.knowledge.fact import KnowledgeBase, KnowledgeType
+    from zonesim.world.entity import EntityStatus
     for npc in state.humans:
         if npc.status in (EntityStatus.DEAD, EntityStatus.EXILED):
             continue

@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from zonesim.anomalies.core import AnomalyStatus
-from zonesim.anomalies.migration import check_anomaly_migration
+from zonesim.anomalies.migration import check_anomaly_migration, anomaly_move_candidates
 from zonesim.simulation.context import SimulationContext
 from zonesim.world.trails import roll_trail_blockage
 
@@ -26,7 +26,7 @@ def run_phase8_environment(ctx: SimulationContext) -> None:
                 rng_val = state.rng.random()
                 migration = check_anomaly_migration(
                     anomaly, hour,
-                    sector_ids=engine._anomaly_move_candidates(anomaly),
+                    sector_ids=anomaly_move_candidates(state, anomaly),
                     faction_start_ids=start_ids,
                     rng_value=rng_val,
                 )

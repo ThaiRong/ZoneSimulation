@@ -32,7 +32,8 @@
       "Bash(powershell *)",
       "Bash(select-object *)",
       "Bash(mkdir *)",
-      "Bash(move *)"
+      "Bash(move *)",
+      "Bash(git reflog *)"
     ]
   },
   "$version": 3
