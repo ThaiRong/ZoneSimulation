@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from zonesim.actions.capture import group_can_capture
 from zonesim.actions.destroy import group_can_destroy
+from zonesim.anomalies.emission import emission_known
+from zonesim.world.shelter import group_can_create_shelter
 from zonesim.ai import (
     ARTIFACT_SEARCH,
     RESEARCH,
@@ -32,7 +34,7 @@ def run_phase4_intentions(ctx: SimulationContext) -> None:
     npcs = {npc.id: npc for npc in state.humans}
 
     engine._process_distress_signals(hour)
-    emission_known = engine._emission_known(hour)
+    emission_known_value = emission_known(state, hour)
 
     # Снимок KB перед выбором намерений — для инварианта #25
     snap: dict[int, list[dict]] = {}
@@ -55,7 +57,7 @@ def run_phase4_intentions(ctx: SimulationContext) -> None:
         members = [npcs[mid] for mid in group.members if mid in npcs]
         if not members:
             continue
-        if emission_known or engine._emission_active(hour):
+        if emission_known_value or engine._emission_active(hour):
             group.intention = SHELTER
             for member in members:
                 if member.status == EntityStatus.ACTIVE:
@@ -131,7 +133,7 @@ def run_phase4_intentions(ctx: SimulationContext) -> None:
             ),
             can_help=can_help,
             distress_distance=distress_distance,
-            can_create_shelter=engine._group_can_create_shelter(group, members),
+            can_create_shelter=group_can_create_shelter(state, group, members),
             can_search_artifact=any(
                 f.subject_id in state.anomalies
                 and state.anomalies[f.subject_id].status == AnomalyStatus.ACTIVE

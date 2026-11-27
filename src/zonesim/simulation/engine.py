@@ -70,12 +70,15 @@ from zonesim.combat.guards import base_guards
 from zonesim.needs.healing import rest_heal
 from zonesim.needs.artifact import give_artifact
 
-from zonesim.economy.trader import sell_loot, SELL_PRICE_SHARE
+from zonesim.economy.trader import sell_loot, SELL_PRICE_SHARE, conditional_trader_is_active, conditional_trader_can_sleep, conditional_trader_base_sector
 from zonesim.world.groups import group_kit, active_members, group_leader
 from zonesim.world.groups import monster_group_members, sync_human_groups, sync_monster_groups
 from zonesim.world.shelter import (
     shelter_sector_ids, group_in_shelter, shelter_targets, process_create_shelter,
     free_emptied_shelters, update_shelter_participants,
+    process_shelter_occupation, create_shelter_occupied_knowledge,
+    process_emission_shelter_assault, stale_shelter_occupied_knowledge,
+    group_can_create_shelter,
 )
 from zonesim.actions.movement import walk
 from zonesim.knowledge import group_detector_bonus
@@ -86,7 +89,11 @@ from zonesim.world.trails import (
 )
 from zonesim.world.item import create_item, consume_item, sync_npc_from_items
 from zonesim.relations.journal import check_and_journal_relations, log_relation_change
-from zonesim.anomalies.emission import emission_safe_sectors, is_group_emission_sheltered
+from zonesim.anomalies.emission import (
+    emission_safe_sectors, is_group_emission_sheltered, emission_active, emission_known,
+    process_emission_schedule, broadcast_emission_warning, mark_group_emission_exposed,
+    apply_emission_exposure,
+)
 
 from zonesim.economy.contracts import ContractManager
 from zonesim.economy.trade import CaptureManager, ImportExportManager, ExportRecord
@@ -95,7 +102,7 @@ from zonesim.economy.pricing import calculate_sell_price, get_type_multiplier, c
 from zonesim.anomalies.core import Anomaly as AnomalyEntity, AnomalyType, AnomalyStatus
 from zonesim.anomalies.damage import apply_anomaly_damage, check_anomaly_contact
 from zonesim.anomalies.artifact import ArtifactManager, Artifact
-from zonesim.anomalies.migration import check_anomaly_migration
+from zonesim.anomalies.migration import check_anomaly_migration, anomaly_move_candidates, move_all_anomalies
 from zonesim.anomalies.destroy import attempt_destroy_anomaly, get_anomaly_parts_after_destruction
 from zonesim.anomalies.emission import (
     EMISSION_ARTIFACT_ACCELERATION,
@@ -350,21 +357,19 @@ class SimulationEngine:
 
     def _conditional_trader_can_sleep(self) -> bool:
         """Временная база: отдых (REST) можно, но спать (SLEEP) нельзя."""
-        return self._conditional_trader_is_active()
+        return conditional_trader_is_active(self.state)
 
     def _conditional_trader_base_sector(self) -> int | None:
         """Возвращает ID сектора временной базы или None."""
-        if self._conditional_trader_is_active():
+        if conditional_trader_is_active(self.state):
             return self.state.conditional_trader_sector
         return None
 
     def _emission_active(self, hour: int) -> bool:
-        return is_emission_active(
-            self.state.emission_start_hour, self.state.emission_end_hour, hour,
-        )
+        return emission_active(self.state, hour)
 
     def _emission_known(self, hour: int) -> bool:
-        return is_emission_known(self.state.emission_warning_hour, hour)
+        return emission_known(self.state, hour)
 
     def _schedule_conditional_trader(self, hour: int) -> None:
         """Запланировать следующий появление ситуативного торговца. (§16.6)"""
@@ -513,346 +518,34 @@ class SimulationEngine:
     # --- Выброс (§12.7) ---
 
     def _process_emission_schedule(self, hour: int) -> None:
-        state = self.state
-        if state.next_emission_hour < 0 and state.emission_start_hour < 0:
-            state.next_emission_hour = hour + schedule_next_emission(self.state.rng)
-            state.emission_warning_hour = -1
-        if state.emission_start_hour >= 0 and hour >= state.emission_end_hour:
-            # завершение выброса
-            state.emission_start_hour = -1
-            state.emission_end_hour = -1
-            state.emission_warning_hour = -1
-            state.emission_exposed.clear()
-            state.next_emission_hour = hour + schedule_next_emission(self.state.rng)
-            self.state.news_manager.create_event(
-                hour=hour, minute=0, sector_id=0,
-                event_type="emission", participants=[], result="ended",
-                importance=60, summary="Выброс завершился",
-                details={"next_emission_hour": state.next_emission_hour},
-            )
-        elif self._emission_active(hour):
-            pass  # выброс продолжается
-        elif state.next_emission_hour >= 0 and hour >= state.next_emission_hour:
-            state.emission_start_hour = hour
-            state.emission_end_hour = hour + roll_duration(self.state.rng)
-            state.next_emission_hour = -1  # перепланируется при завершении
-            self._move_all_anomalies(hour)
-            self.state.news_manager.create_event(
-                hour=hour, minute=0, sector_id=0,
-                event_type="emission", participants=[], result="started",
-                importance=70,
-                summary=f"Начался выброс (до часа {state.emission_end_hour})",
-                details={"end_hour": state.emission_end_hour},
-            )
-        elif state.emission_warning_hour < 0 and hour >= state.next_emission_hour - 6:
-            lead = roll_warning_lead(self.state.rng)
-            state.emission_warning_hour = state.next_emission_hour - lead
-            if hour >= state.emission_warning_hour:
-                self._broadcast_emission_warning(hour)
+        process_emission_schedule(self.state, hour)
 
     def _broadcast_emission_warning(self, hour: int) -> None:
-        for npc in self.state.humans:
-            if npc.status in (EntityStatus.DEAD, EntityStatus.EXILED):
-                continue
-            kb = self.state.knowledge_bases.setdefault(npc.id, KnowledgeBase())
-            kb.add_manual(
-                npc.id, KnowledgeType.EVENT, subject_id=self.state.next_emission_hour,
-                payload={
-                    "type": "emission",
-                    "start": self.state.next_emission_hour,
-                    "end": self.state.emission_end_hour
-                    if self._emission_active(hour) else -1,
-                },
-                hour=hour,
-            )
-        self.state.news_manager.create_event(
-            hour=hour, minute=0, sector_id=0,
-            event_type="emission", participants=[], result="warning",
-            importance=65,
-            summary=f"Предупреждение: выброс ожидается к часу {self.state.next_emission_hour}",
-            details={"start": self.state.next_emission_hour},
-        )
+        broadcast_emission_warning(self.state, hour)
 
     def _anomaly_move_candidates(self, anomaly) -> list[int]:
-        """Допустимые цели перемещения: текущий или соседний сектор (§12.6)."""
-        start_ids = {s.id for s in self.state.sectors.values() if s.is_faction_start}
-        candidates = {anomaly.sector_id, *self.state.sectors[anomaly.sector_id].neighbors}
-        return [sid for sid in candidates if sid not in start_ids]
+        return anomaly_move_candidates(self.state, anomaly)
 
     def _move_all_anomalies(self, hour: int) -> None:
-        """Однократное перемещение всех активных аномалий в первый час выброса."""
-        start_ids = {s.id for s in self.state.sectors.values() if s.is_faction_start}
-        for anomaly in self.state.anomalies.values():
-            migration = check_anomaly_migration(
-                anomaly, hour, move_interval=0, move_chance=1.0,
-                sector_ids=self._anomaly_move_candidates(anomaly),
-                faction_start_ids=start_ids,
-                rng_value=self.state.rng.random(),
-            )
-            if migration["moved"]:
-                anomaly.sector_id = migration["to_sector"]
-                anomaly.move_timer = 0
-                roll_trail_blockage(self.state,  anomaly)
-                self.state.news_manager.create_event(
-                    hour=hour, minute=0, sector_id=migration["to_sector"],
-                    event_type="anomaly_move", participants=[], result="moved",
-                    importance=20,
-                    summary=f"Аномалия {anomaly.id} переместилась (выброс)",
-                    details=migration,
-                )
+        move_all_anomalies(self.state, hour)
 
     # === Helpers для выброса (§12.7, #20) ===
 
     def _mark_group_emission_exposed(self, group: HumanGroup, hour: int) -> None:
-        """Записывает группу в emission_exposed и применяет урон (§12.7).
-
-        Вызывается когда группа НЕ shelter во время выброса.
-        Первый час: урон + лёгкая травма; второй час: гибель.
-        """
-        first_hour = self.state.emission_exposed.get(group.id)
-        if first_hour is None:
-            self.state.emission_exposed[group.id] = hour
-            members = active_members(self.state,  group)
-            if not members:
-                return
-            for npc in members:
-                if npc.health_share < 0.5:
-                    emergency_medkit(self.state,  npc, members)
-                start = npc.health
-                npc.health = max(0, npc.health - int(npc.max_health * EMISSION_EXPOSURE_DAMAGE))
-                npc.stamina = max(1, npc.stamina - 5)  # гарантированная лёгкая травма
-                npc.attentiveness = max(1, npc.attentiveness - 3)
-                if npc.health <= 0:
-                    set_unconscious_or_dead(self.state,  npc, start, hour, cause="emission")
-            self.state.news_manager.create_event(
-                hour=hour, minute=30, sector_id=group.sector_id,
-                event_type="emission", participants=[m.id for m in members],
-                result="exposed", importance=50,
-                summary=f"Группа {group.id} оказалась под выбросом без укрытия",
-                details={"group_id": group.id},
-            )
-        elif hour - first_hour >= EMISSION_EXPOSURE_KILL_HOUR - 1:
-            members = active_members(self.state,  group)
-            for npc in members:
-                npc.health = 0
-                npc.status = EntityStatus.DEAD
-                self._create_corpse(npc, hour)
-            self.state.emission_exposed.pop(group.id, None)
-            self.state.news_manager.create_event(
-                hour=hour, minute=30, sector_id=group.sector_id,
-                event_type="emission", participants=[m.id for m in members],
-                result="wiped", importance=60,
-                summary=f"Группа {group.id} погибла под выбросом",
-                details={"group_id": group.id},
-            )
+        mark_group_emission_exposed(self.state, group, hour)
 
     def _apply_emission_exposure(self, hour: int) -> None:
-        """Урон группам, не успевшим укрыться. (§12.7)
-
-        Группы НЕ перемещаются во время выброса (запрет в Phase 5).
-        Группы в permanent shelter — защищены.
-        Группы вне shelter — получают урон.
-        """
-        for group in self.state.human_groups.values():
-            members = active_members(self.state,  group)
-            if not members:
-                self.state.emission_exposed.pop(group.id, None)
-                continue
-            # Используем единый helper — group.sector_id (синхронизирован с членами)
-            if is_group_emission_sheltered(self.state,  group):
-                self.state.emission_exposed.pop(group.id, None)
-                continue
-            self._mark_group_emission_exposed(group, hour)
+        apply_emission_exposure(self.state, hour)
 
     def _process_shelter_occupation(self, hour: int) -> None:
-        # истечение занятия проверяется каждый час
-        for shelter in self.state.shelters.values():
-            if shelter.is_occupied and hour >= shelter.occupied_until:
-                shelter.occupied_by = None
-                self.state.news_manager.create_event(
-                    hour=hour, minute=0, sector_id=shelter.sector_id,
-                    event_type="shelter", participants=[], result="freed",
-                    importance=15,
-                    summary=f"Монстры покинули укрытие в секторе {shelter.sector_id}",
-                    details={"shelter_id": shelter.id},
-                )
-        if hour % 24 != 0:
-            return
-        candidates = [
-            group for group in self.state.monster_groups.values()
-            if any(m.status == EntityStatus.ACTIVE for m in monster_group_members(self.state, group))
-        ]
-        if not candidates:
-            return
-        used_groups: set[int] = set()
-        for shelter in self.state.shelters.values():
-            if shelter.is_occupied:
-                continue
-            free_groups = [g for g in candidates if g.id not in used_groups]
-            if not free_groups:
-                break
-            if self.state.rng.random() >= EMISSION_MONSTER_SHELTER_CHANCE:
-                continue
-            group = self.state.rng.choice(free_groups)
-            members = monster_group_members(self.state, group)
-            if not members:
-                continue
-            used_groups.add(group.id)
-            shelter.occupied_by = group.id
-            shelter.occupied_until = hour + self.state.rng.randint(
-                EMISSION_MONSTER_STAY_MIN, EMISSION_MONSTER_STAY_MAX,
-            )
-            group.sector_id = shelter.sector_id
-            for monster in members:
-                monster.sector_id = shelter.sector_id
-            self.state.news_manager.create_event(
-                hour=hour, minute=0, sector_id=shelter.sector_id,
-                event_type="shelter", participants=[m.id for m in members],
-                result="occupied", importance=30,
-                summary=f"Монстры заняли укрытие в секторе {shelter.sector_id}",
-                details={"shelter_id": shelter.id, "group_id": group.id},
-            )
-            # Условие D: знание о занятом убежище = информация (§17)
-            self._create_shelter_occupied_knowledge(shelter.id, shelter.sector_id, group.id, hour)
+        process_shelter_occupation(self.state, hour)
 
     def _create_shelter_occupied_knowledge(self, shelter_id: int, sector_id: int,
                                            monster_group_id: int, hour: int) -> None:
-        """Условие D: создаёт KnowledgeFact при обнаружении занятого монстрами убежища (§17)."""
-        for npc in self.state.humans:
-            if npc.status in (EntityStatus.DEAD, EntityStatus.EXILED):
-                continue
-            kb = self.state.knowledge_bases.setdefault(npc.id, KnowledgeBase())
-            # Добавляем факт для каждого NPC (все члены группы получают общие знания)
-            kb.add_manual(
-                npc.id,
-                KnowledgeType.SHELTER_OCCUPIED,
-                subject_id=shelter_id,
-                payload={
-                    "sector_id": sector_id,
-                    "monster_group_id": monster_group_id,
-                    "shelter_id": shelter_id,
-                },
-                hour=hour,
-                source="observation",
-            )
+        create_shelter_occupied_knowledge(self.state, shelter_id, sector_id, monster_group_id, hour)
 
     def _process_emission_shelter_assault(self, hour: int) -> None:
-        """Штурм людьми убежищ, занятых монстрами (§12.7, условие B).
-
-        Во время выброса:
-        - Группа людей в секторе с убежищем, занятым монстрами (StormShelter.occupied_by),
-          И сама не укрытая (не в permanent shelter/bases/trader) → штурмует.
-        - Укрытые группы (в permanent shelter секторе, базе, у торговца) НЕ атакуют.
-        - Несколько групп атакуют ОДНО убежище одновременно (агрегированный бой).
-        """
-        if not self._emission_active(hour):
-            # Вне выброса — штурм не происходит
-            self.state.ongoing_shelter_assaults.clear()
-            return
-
-        shelter_ids = emission_safe_sectors(self.state)
-
-        # Находим все укрытия, занятые монстрами
-        monster_occupied_shelters = {
-            s.id: s for s in self.state.shelters.values()
-            if s.is_occupied and s.occupied_by is not None
-        }
-
-        # Для каждого shelter: собираем атакующие группы
-        assault_map: dict[int, list[int]] = {}  # shelter_id -> [group_ids]
-        for sid, shelter in monster_occupied_shelters.items():
-            sector_id = shelter.sector_id
-            attacking_group_ids: list[int] = []
-            for group in self.state.human_groups.values():
-                if not group.members:
-                    continue
-                members = {
-                    n.id: n for n in self.state.humans
-                    if n.id in group.members
-                    and n.status not in (EntityStatus.DEAD, EntityStatus.EXILED)
-                }
-                if not members:
-                    continue
-                # Группа должна быть в секторе убежища
-                if group.sector_id != sector_id:
-                    continue
-                # Не атакуют: группа в permanent shelter секторе (shelter_id),
-                # но НЕ в faction_start или trader sector
-                if group.sector_id in shelter_ids:
-                    # Проверяем: это permanent shelter или base/trader?
-                    # Если sector_id == shelter.sector_id и это permanent shelter — группа уже sheltered
-                    is_base_or_trader = (
-                        any(
-                            s.id == sector_id and s.is_faction_start
-                            for s in self.state.sectors.values()
-                        )
-                        or any(
-                            npc.sector_id == sector_id
-                            and npc.stationary_role == "trader"
-                            and npc.status == EntityStatus.ACTIVE
-                            for npc in self.state.stationary_humans
-                        )
-                    )
-                    if is_base_or_trader:
-                        continue
-                    # Если группа в секторе StormShelter — она sheltered
-                    continue
-                # Не атакуют: уже атакующие в ongoing_assaults на другой shelter
-                if group.id in [
-                    g for gids in assault_map.values() for g in gids
-                ]:
-                    continue
-                attacking_group_ids.append(group.id)
-
-            if attacking_group_ids:
-                assault_map[sid] = attacking_group_ids
-
-        self.state.ongoing_shelter_assaults = assault_map
-
-        # Добавляем битвы в pending_battles
-        for shelter_id, attacking_group_ids in assault_map.items():
-            shelter = self.state.shelters[shelter_id]
-            sector_id = shelter.sector_id
-            monster_group = self.state.monster_groups.get(shelter.occupied_by)
-            if monster_group is None:
-                continue
-            members = monster_group_members(self.state, monster_group)
-            if not members:
-                continue
-
-            # Агрегируем всех людей из всех атакующих групп
-            all_attackers: list = []
-            for gid in attacking_group_ids:
-                group = self.state.human_groups.get(gid)
-                if group is None:
-                    continue
-                for member_id in group.members:
-                    npc = next((n for n in self.state.humans if n.id == member_id), None)
-                    if npc and npc.status not in (EntityStatus.DEAD, EntityStatus.EXILED):
-                        all_attackers.append(npc)
-
-            if not all_attackers:
-                continue
-
-            # Условие C: монстры-защитники в убежище имеют defender_ambush=True
-            self._pending_battles.append({
-                "sector_id": sector_id,
-                "attackers": all_attackers,
-                "defenders": members,
-                "attacker_is_monster": False,
-                "defender_is_monster": True,
-                "attacker_group_id": None,  # агрегированные группы
-                "defender_group_id": shelter.occupied_by,
-                "attacker_monster_group_id": None,
-                "defender_monster_group_id": shelter.occupied_by,
-                "attacker_ambush": False,  # люди не в засаде
-                "defender_ambush": True,  # условие C: монстры в убежище = засада
-                "relation": 0,
-                "feed_corpse_id": None,
-                "force_no_retreat": True,  # условие B: бой до исхода
-                "emission_shelter_assault": True,
-                "shelter_id": shelter_id,
-            })
+        process_emission_shelter_assault(self.state, hour, self._pending_battles)
 
     # --- Находки: срок жизни ~суток (§16.10) ---
 
@@ -1257,25 +950,7 @@ class SimulationEngine:
         return plan
 
     def _group_can_create_shelter(self, group: HumanGroup, members: list[HumanNPC]) -> bool:
-        """Проверяет наличие набора для убежища (§7.10).
-
-        Нерасходный предмет: базово есть у всех людей, не тратится.
-        Кулдаун на уровне группы: не чаще одного убежища за 12 часов.
-        """
-        # Проверка: хотя бы один NPC имеет набор
-        has_kit = any(
-            self.state.items.get(item_id) and self.state.items[item_id].type is ItemType.SHELTER_KIT
-            for npc in members
-            for item_id in npc.inventory
-        )
-        if not has_kit:
-            return False
-
-        # Кулдаун на уровне группы
-        if self.state.time.hour - group.last_shelter_hour < 12:
-            return False
-
-        return True
+        return group_can_create_shelter(self.state, group, members)
 
     def _process_rest_trade(self, hour: int, resting_groups: list[HumanGroup]) -> None:
         """Торговля как час отдыха у торговца: сначала продажа, потом закупка. (§16)"""
@@ -2550,28 +2225,6 @@ class SimulationEngine:
                         self.state.emission_exposed.pop(group.id, None)
                     # Условие D: факт "занято монстрами" устаревает
                     self._stale_shelter_occupied_knowledge(shelter_id, hour)
-
-    def _stale_shelter_occupied_knowledge(self, shelter_id: int, hour: int) -> None:
-        """Условие D: знание "занято монстрами" устаревает после зачистки (§17.3).
-        Не мутируя факт (#16), добавляем новый факт с valid_until = hour.
-        """
-        for kb in self.state.knowledge_bases.values():
-            for fact in kb.facts:
-                if (
-                    fact.fact_type == KnowledgeType.SHELTER_OCCUPIED
-                    and fact.subject_id == shelter_id
-                ):
-                    # Помечаем как истёкший (не мутируем, ставим valid_until)
-                    if not fact.valid_until or fact.valid_until > hour:
-                        fact.valid_until = hour
-                        self.state.news_manager.create_event(
-                            hour=hour, minute=0, sector_id=fact.payload.get("sector_id", 0),
-                            event_type="shelter_knowledge", participants=[], result="stale",
-                            importance=10,
-                            summary=f"Знание об укрытии {shelter_id} устарело (зачищено)",
-                            details={"shelter_id": shelter_id},
-                        )
-                        break
 
     def _damage_carried_valuables(self, npc: HumanNPC, combat: CombatSystem, result) -> None:
         damage = max(

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from zonesim.anomalies.core import AnomalyStatus
 from zonesim.anomalies.damage import apply_anomaly_damage, check_anomaly_contact
+from zonesim.world.shelter import process_emission_shelter_assault
 from zonesim.knowledge.fact import KnowledgeType
 from zonesim.knowledge import group_detector_bonus
 from zonesim.simulation.context import SimulationContext
@@ -81,4 +82,4 @@ def run_phase6_detections(ctx: SimulationContext) -> None:
     engine._check_monster_anomaly_contacts(hour, is_night)
     engine._schedule_encounters(is_night, hour)
     # Штурм убежищ людьми в выброс (§12.7, условие B)
-    engine._process_emission_shelter_assault(hour)
+    process_emission_shelter_assault(state, hour, engine._pending_battles)

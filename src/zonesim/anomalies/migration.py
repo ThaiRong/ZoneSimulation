@@ -62,3 +62,35 @@ def calculate_anomaly_move_timer(
     if anomaly.status != AnomalyStatus.ACTIVE:
         return 0
     return 48 - (anomaly.move_timer % 48)
+
+
+def anomaly_move_candidates(state, anomaly) -> list[int]:
+    """Допустимые цели перемещения: текущий или соседний сектор (§12.6)."""
+    start_ids = {s.id for s in state.sectors.values() if s.is_faction_start}
+    candidates = {anomaly.sector_id, *state.sectors[anomaly.sector_id].neighbors}
+    return [sid for sid in candidates if sid not in start_ids]
+
+
+def move_all_anomalies(state, hour: int) -> None:
+    """Однократное перемещение всех активных аномалий в первый час выброса."""
+    from zonesim.world.trails import roll_trail_blockage
+
+    start_ids = {s.id for s in state.sectors.values() if s.is_faction_start}
+    for anomaly in state.anomalies.values():
+        migration = check_anomaly_migration(
+            anomaly, hour, move_interval=0, move_chance=1.0,
+            sector_ids=anomaly_move_candidates(state, anomaly),
+            faction_start_ids=start_ids,
+            rng_value=state.rng.random(),
+        )
+        if migration["moved"]:
+            anomaly.sector_id = migration["to_sector"]
+            anomaly.move_timer = 0
+            roll_trail_blockage(state, anomaly)
+            state.news_manager.create_event(
+                hour=hour, minute=0, sector_id=migration["to_sector"],
+                event_type="anomaly_move", participants=[], result="moved",
+                importance=20,
+                summary=f"Аномалия {anomaly.id} переместилась (выброс)",
+                details=migration,
+            )

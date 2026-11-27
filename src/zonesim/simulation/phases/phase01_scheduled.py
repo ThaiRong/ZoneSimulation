@@ -9,7 +9,10 @@ from __future__ import annotations
 from zonesim.generation.migration import process_migration
 from zonesim.simulation.context import SimulationContext
 from zonesim.world.groups import sync_monster_groups
-from zonesim.world.shelter import free_emptied_shelters
+from zonesim.world.shelter import free_emptied_shelters, process_shelter_occupation
+from zonesim.anomalies.emission import (
+    emission_active, apply_emission_exposure, process_emission_schedule,
+)
 from zonesim.world.entity import EntityStatus, HumanNPC, Monster
 from zonesim.world.group import HumanGroup
 
@@ -72,12 +75,12 @@ def run_phase1_scheduled(ctx: SimulationContext) -> None:
         sync_monster_groups(state)
 
     # === Эмиссия ===
-    engine._process_emission_schedule(hour)
-    if engine._emission_active(hour):
-        engine._apply_emission_exposure(hour)
+    process_emission_schedule(state, hour)
+    if emission_active(state, hour):
+        apply_emission_exposure(state, hour)
 
     # === Укрытия ===
-    engine._process_shelter_occupation(hour)
+    process_shelter_occupation(state, hour)
     free_emptied_shelters(state, hour)
 
     # === Охрана ===

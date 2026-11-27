@@ -132,6 +132,29 @@ class Trader:
 SELL_PRICE_SHARE = 0.6  # класс константа SimulationEngine.SELL_PRICE_SHARE
 
 
+def conditional_trader_is_active(state) -> bool:
+    """Проверяет, что ситуативный торговец ещё работает."""
+    if state.conditional_trader_id is None:
+        return False
+    current_hour = state.time.hour
+    return (
+        state.conditional_trader_start_hour <= current_hour
+        and current_hour < state.conditional_trader_end_hour
+    )
+
+
+def conditional_trader_can_sleep(state) -> bool:
+    """Временная база: отдых (REST) можно, но спать (SLEEP) нельзя."""
+    return conditional_trader_is_active(state)
+
+
+def conditional_trader_base_sector(state) -> int | None:
+    """Возвращает ID сектора временной базы или None."""
+    if conditional_trader_is_active(state):
+        return state.conditional_trader_sector
+    return None
+
+
 def sell_loot(state, leader: HumanNPC, trader: HumanNPC, sell_price_share: float = SELL_PRICE_SHARE) -> float:
     """Скупка ценностей у лидера группы. (§16.3)"""
     sellable = (

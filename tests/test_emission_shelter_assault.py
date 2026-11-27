@@ -16,6 +16,7 @@ from zonesim.world.entity import EntityStatus
 from zonesim.world.group import HumanGroup, MonsterGroup
 from zonesim.world.trails import trail_set
 from zonesim.anomalies.emission import emission_safe_sectors
+from zonesim.world.shelter import process_emission_shelter_assault, stale_shelter_occupied_knowledge
 from zonesim.combat import CombatSystem
 from zonesim.combat.base import CombatFactory
 from zonesim.knowledge.fact import KnowledgeType
@@ -292,7 +293,7 @@ class TestNoAttackOnFreeShelter:
         shelter.occupied_by = None
 
         _set_emission(state)
-        engine._process_emission_shelter_assault(state.time.hour)
+        process_emission_shelter_assault(state, state.time.hour, engine._pending_battles)
 
         # При свободном убежище — нет assault битв
         assault_battles = [
@@ -358,7 +359,7 @@ class TestMonsterAmbushBonus:
         shelter.occupied_by = mg_id
 
         _set_emission(state)
-        engine._process_emission_shelter_assault(state.time.hour)
+        process_emission_shelter_assault(state, state.time.hour, engine._pending_battles)
 
         # Проверяем что force_no_retreat и defender_ambush передаются в CS
         cs = CombatSystem(
@@ -437,7 +438,7 @@ class TestKnowledgeStaleness:
         facts = kb.get_facts(KnowledgeType.SHELTER_OCCUPIED, shelter_id)
         assert len(facts) == 1
 
-        engine._stale_shelter_occupied_knowledge(shelter_id, state.time.hour)
+        stale_shelter_occupied_knowledge(state, shelter_id, state.time.hour)
 
         facts = kb.get_facts(KnowledgeType.SHELTER_OCCUPIED, shelter_id)
         if facts:
@@ -468,7 +469,7 @@ class TestNoChangeOutsideEmission:
         state.emission_start_hour = -1
         state.emission_end_hour = -1
 
-        engine._process_emission_shelter_assault(state.time.hour)
+        process_emission_shelter_assault(state, state.time.hour, engine._pending_battles)
 
         assault_battles = [
             b for b in engine._pending_battles

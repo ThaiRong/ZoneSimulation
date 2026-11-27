@@ -4,7 +4,8 @@ import pytest
 
 from zonesim.ai import HELP, SHELTER
 from zonesim.anomalies.core import Anomaly, AnomalyStatus, AnomalyType
-from zonesim.anomalies.emission import is_emission_active
+from zonesim.anomalies.emission import is_emission_active, apply_emission_exposure
+from zonesim.world.shelter import process_shelter_occupation
 from zonesim.knowledge.fact import KnowledgeBase, KnowledgeType
 from zonesim.simulation.engine import SimulationEngine
 from zonesim.simulation.phases import run_phase4_intentions
@@ -146,13 +147,13 @@ class TestShelters:
     def test_monsters_occupy_shelter_and_leave(self):
         engine = SimulationEngine(seed=42)
         engine.state.rng.random = lambda: 0.0
-        engine._process_shelter_occupation(24)
+        process_shelter_occupation(engine.state, 24)
         occupied = [s for s in engine.state.shelters.values() if s.is_occupied]
         assert occupied
         shelter = occupied[0]
         group = engine.state.monster_groups[shelter.occupied_by]
         assert group.sector_id == shelter.sector_id
-        engine._process_shelter_occupation(shelter.occupied_until)
+        process_shelter_occupation(engine.state, shelter.occupied_until)
         assert not shelter.is_occupied
 
 
@@ -190,7 +191,7 @@ class TestEmission:
         assert npc.health <= 50  # 50+% урона
         assert npc.stamina < stamina_before  # лёгкая травма
         npc.health = 100
-        engine._apply_emission_exposure(hour + 1)
+        apply_emission_exposure(engine.state, hour + 1)
         assert npc.status == EntityStatus.DEAD
 
     def test_sheltered_group_unharmed(self):

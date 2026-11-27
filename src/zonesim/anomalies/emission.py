@@ -69,3 +69,146 @@ def is_group_emission_sheltered(state, group) -> bool:
     """
     safe = emission_safe_sectors(state)
     return group.sector_id in safe
+
+
+def emission_active(state, hour: int) -> bool:
+    return is_emission_active(
+        state.emission_start_hour, state.emission_end_hour, hour,
+    )
+
+
+def emission_known(state, hour: int) -> bool:
+    return is_emission_known(state.emission_warning_hour, hour)
+
+
+def process_emission_schedule(state, hour: int) -> None:
+    if state.next_emission_hour < 0 and state.emission_start_hour < 0:
+        state.next_emission_hour = hour + schedule_next_emission(state.rng)
+        state.emission_warning_hour = -1
+    if state.emission_start_hour >= 0 and hour >= state.emission_end_hour:
+        # завершение выброса
+        state.emission_start_hour = -1
+        state.emission_end_hour = -1
+        state.emission_warning_hour = -1
+        state.emission_exposed.clear()
+        state.next_emission_hour = hour + schedule_next_emission(state.rng)
+        state.news_manager.create_event(
+            hour=hour, minute=0, sector_id=0,
+            event_type="emission", participants=[], result="ended",
+            importance=60, summary="Выброс завершился",
+            details={"next_emission_hour": state.next_emission_hour},
+        )
+    elif emission_active(state, hour):
+        pass  # выброс продолжается
+    elif state.next_emission_hour >= 0 and hour >= state.next_emission_hour:
+        state.emission_start_hour = hour
+        state.emission_end_hour = hour + roll_duration(state.rng)
+        state.next_emission_hour = -1  # перепланируется при завершении
+        from zonesim.anomalies.migration import move_all_anomalies as _move_all_anomalies
+        _move_all_anomalies(state, hour)
+        state.news_manager.create_event(
+            hour=hour, minute=0, sector_id=0,
+            event_type="emission", participants=[], result="started",
+            importance=70,
+            summary=f"Начался выброс (до часа {state.emission_end_hour})",
+            details={"end_hour": state.emission_end_hour},
+        )
+    elif state.emission_warning_hour < 0 and hour >= state.next_emission_hour - 6:
+        lead = roll_warning_lead(state.rng)
+        state.emission_warning_hour = state.next_emission_hour - lead
+        if hour >= state.emission_warning_hour:
+            broadcast_emission_warning(state, hour)
+
+
+def broadcast_emission_warning(state, hour: int) -> None:
+    from zonesim.knowledge import KnowledgeBase, KnowledgeType
+    for npc in state.humans:
+        if npc.status in (EntityStatus.DEAD, EntityStatus.EXILED):
+            continue
+        kb = state.knowledge_bases.setdefault(npc.id, KnowledgeBase())
+        kb.add_manual(
+            npc.id, KnowledgeType.EVENT, subject_id=state.next_emission_hour,
+            payload={
+                "type": "emission",
+                "start": state.next_emission_hour,
+                "end": state.emission_end_hour
+                if emission_active(state, hour) else -1,
+            },
+            hour=hour,
+        )
+    state.news_manager.create_event(
+        hour=hour, minute=0, sector_id=0,
+        event_type="emission", participants=[], result="warning",
+        importance=65,
+        summary=f"Предупреждение: выброс ожидается к часу {state.next_emission_hour}",
+        details={"start": state.next_emission_hour},
+    )
+
+
+def mark_group_emission_exposed(state, group, hour: int) -> None:
+    """Записывает группу в emission_exposed и применяет урон (§12.7).
+
+    Вызывается когда группа НЕ shelter во время выброса.
+    Первый час: урон + лёгкая травма; второй час: гибель.
+    """
+    from zonesim.world.groups import active_members
+    from zonesim.combat.medkit import emergency_medkit
+    from zonesim.combat.results import set_unconscious_or_dead
+    from zonesim.world.entity import EntityStatus
+
+    first_hour = state.emission_exposed.get(group.id)
+    if first_hour is None:
+        state.emission_exposed[group.id] = hour
+        members = active_members(state, group)
+        if not members:
+            return
+        for npc in members:
+            if npc.health_share < 0.5:
+                emergency_medkit(state, npc, members)
+            start = npc.health
+            npc.health = max(0, npc.health - int(npc.max_health * EMISSION_EXPOSURE_DAMAGE))
+            npc.stamina = max(1, npc.stamina - 5)  # гарантированная лёгкая травма
+            npc.attentiveness = max(1, npc.attentiveness - 3)
+            if npc.health <= 0:
+                set_unconscious_or_dead(state, npc, start, hour, cause="emission")
+        state.news_manager.create_event(
+            hour=hour, minute=30, sector_id=group.sector_id,
+            event_type="emission", participants=[m.id for m in members],
+            result="exposed", importance=50,
+            summary=f"Группа {group.id} оказалась под выбросом без укрытия",
+            details={"group_id": group.id},
+        )
+    elif hour - first_hour >= EMISSION_EXPOSURE_KILL_HOUR - 1:
+        members = active_members(state, group)
+        for npc in members:
+            npc.health = 0
+            npc.status = EntityStatus.DEAD
+        state.emission_exposed.pop(group.id, None)
+        state.news_manager.create_event(
+            hour=hour, minute=30, sector_id=group.sector_id,
+            event_type="emission", participants=[m.id for m in members],
+            result="wiped", importance=60,
+            summary=f"Группа {group.id} погибла под выбросом",
+            details={"group_id": group.id},
+        )
+
+
+def apply_emission_exposure(state, hour: int) -> None:
+    """Урон группам, не успевшим укрыться. (§12.7)
+
+    Группы НЕ перемещаются во время выброса (запрет в Phase 5).
+    Группы в permanent shelter — защищены.
+    Группы вне shelter — получают урон.
+    """
+    from zonesim.world.groups import active_members
+
+    for group in state.human_groups.values():
+        members = active_members(state, group)
+        if not members:
+            state.emission_exposed.pop(group.id, None)
+            continue
+        # Используем единый helper — group.sector_id (синхронизирован с членами)
+        if is_group_emission_sheltered(state, group):
+            state.emission_exposed.pop(group.id, None)
+            continue
+        mark_group_emission_exposed(state, group, hour)
