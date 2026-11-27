@@ -572,6 +572,107 @@ conditional_trader_is_active     → already in batch 1
 
 **Риски:** `process_conditional_trader_schedule` вызывает `spawn_conditional_trader` который вызывает `give_starting_equipment`. `give_starting_equipment` ещё не вынесен → техдолг.
 
+---
+
+### Батч 4 — фактический состав (3.9-B4)
+
+**Дата фиксации (PRE_COMMIT):** 2d481f7
+**Fork критерий:** метод вызывает ТОЛЬКО `self._<уже вынесенные>` (B1/B2/B2.1/B3)
+ или чистые внешние функции. **Вызовов `self._<ещё не вынесенный хелпер>` — 0.**
+**Вызовов невынесенных хелперов:** 0 для включённых методов.
+
+### Фактический состав (17 методов)
+
+| # | Метод engine | Доменный модуль | Новая сигнатура | Зависимости (self._xxx) | Статус |
+|---|-------------|-----------------|-----------------|------------------------|--------|
+| 1 | `_conditional_trader_is_active` | `economy/trader.py` | `conditional_trader_is_active(state) -> bool` | — (чистый, state.read) | ✅ |
+| 2 | `_conditional_trader_can_sleep` | `economy/trader.py` | `conditional_trader_can_sleep(state) -> bool` | `conditional_trader_is_active` (#1) | ✅ |
+| 3 | `_conditional_trader_base_sector` | `economy/trader.py` | `conditional_trader_base_sector(state) -> int|None` | `conditional_trader_is_active` (#1) | ✅ |
+| 4 | `_emission_active` | `anomalies/emission.py` | `emission_active(state, hour) -> bool` | внешняя `is_emission_active()` | ✅ |
+| 5 | `_emission_known` | `anomalies/emission.py` | `emission_known(state, hour) -> bool` | внешняя `is_emission_known()` | ✅ |
+| 6 | `_process_emission_schedule` | `anomalies/emission.py` | `process_emission_schedule(state, hour)` | `schedule_next_emission`, `roll_duration`, `roll_warning_lead` (внешние), `_emission_active` (#4), `_move_all_anomalies` (#8), `_broadcast_emission_warning` (#7) | ✅ |
+| 7 | `_broadcast_emission_warning` | `anomalies/emission.py` | `broadcast_emission_warning(state, hour)` | `emission_active` (#4) | ✅ |
+| 8 | `_move_all_anomalies` | `anomalies/migration.py` | `move_all_anomalies(state, hour)` | `_anomaly_move_candidates` (#9), `roll_trail_blockage` (B3) | ✅ |
+| 9 | `_anomaly_move_candidates` | `anomalies/migration.py` | `anomaly_move_candidates(state, anomaly) -> list[int]` | — (чистый, state.read) | ✅ |
+| 10 | `_mark_group_emission_exposed` | `anomalies/emission.py` | `mark_group_emission_exposed(state, group, hour)` | `active_members` (B1/B2.1), `emergency_medkit` (B2), `set_unconscious_or_dead` (B2) | ✅ |
+| 11 | `_apply_emission_exposure` | `anomalies/emission.py` | `apply_emission_exposure(state, hour)` | `active_members` (B1/B2.1), `is_group_emission_sheltered` (B2), `mark_group_emission_exposed` (#10) | ✅ |
+| 12 | `_process_shelter_occupation` | `world/shelter.py` | `process_shelter_occupation(state, hour)` | `monster_group_members` (B2.1), `_create_shelter_occupied_knowledge` (#13) | ✅ |
+| 13 | `_create_shelter_occupied_knowledge` | `world/shelter.py` | `create_shelter_occupied_knowledge(state, shelter_id, sector_id, monster_group_id, hour)` | — (чистый, state.read) | ✅ |
+| 14 | `_process_emission_shelter_assault` | `world/shelter.py` | `process_emission_shelter_assault(state, hour)` | `_emission_active` (#4), `emission_safe_sectors` (B2), `monster_group_members` (B2.1) | ✅ |
+| 15 | `_stale_shelter_occupied_knowledge` | `world/shelter.py` | `stale_shelter_occupied_knowledge(state, shelter_id, hour)` | — (чистый, state.read) | ✅ |
+| 16 | `_group_can_create_shelter` | `world/shelter.py` | `group_can_create_shelter(state, group, members) -> bool` | — (чистый, state.read) | ✅ |
+| 17 | `_expire_conditional_trader_if_expired` | `economy/trader.py` | `expire_conditional_trader_if_expired(state, hour)` | `conditional_trader_can_sleep` (#2, B1), `_schedule_conditional_trader` (B1) | ✅ |
+
+### Исключённые методы (зависят от невынесенных)
+
+| Метод | Причина исключения | Зависимость | Статус |
+|-------|-------------------|-------------|--------|
+| `_spawn_conditional_trader` | тянет `_give_starting_equipment` | `spawn_catalog_item` (B5) | ❌ техдолг |
+| `_check_monster_anomaly_contacts` | тянет `_create_corpse` | `create_corpse` (B8) | ❌ техдолг |
+
+### НЕ входят в Батч 4
+
+| Метод | Причина | Батч |
+|-------|---------|------|
+| `_init_trader_stock` | инициализация, orchestrator | Батч 5 |
+| `_purchase_plan` | зависит от `trade_price` | Батч 9 |
+| `_process_rest_trade` | 7 хелперов, `trade_price` | Батч 9 |
+| `_process_rest_exchanges` | уже вынесен в Батче 3 | ✅ B3 |
+| `_conditional_trader_is_active` | план не указал, но включён для чистоты | B1/B4 |
+
+> **Примечание:** В плане Батч 4 указан как 10 методов, фактический состав — 17 методов.
+> Разница: план включал невынесенные (`spawn_conditional_trader`, `process_conditional_trader_schedule`, `broadcast_conditional_trader_info`), которые зависят от `_give_starting_equipment` (B5).
+> Фактический состав включает все методы, для которых все зависимости удовлетворены.
+> `_spawn_conditional_trader` и `_check_monster_anomaly_contacts` исключены по правилу критерия принадлежности.
+
+### Вызывающие стороны (для обновления вызовов)
+
+**Фазы:**
+| Вызов | Файл:строка | Станет |
+|-------|-------------|--------|
+| `engine._process_emission_schedule` | `phases/phase02_environment.py:*` | `process_emission_schedule(state, hour)` |
+| `engine._apply_emission_exposure` | `phases/phase09_consequences.py:*` | `apply_emission_exposure(state, hour)` |
+| `engine._process_shelter_occupation` | `phases/phase09_consequences.py:*` | `process_shelter_occupation(state, hour)` |
+| `engine._group_can_create_shelter` | `phases/phase04_intentions.py:*` | `group_can_create_shelter(state, group, members)` |
+| `engine._expire_conditional_trader_if_expired` | `phases/phase01_scheduled.py:*` | `expire_conditional_trader_if_expired(state, hour)` |
+| `engine._conditional_trader_can_sleep` | `phases/phase01_scheduled.py:*` | `conditional_trader_can_sleep(state)` |
+| `engine._conditional_trader_base_sector` | `phases/phase01_scheduled.py:*` | `conditional_trader_base_sector(state)` |
+
+**engine.py (self._xxx вызовы):**
+| Вызов | Строки | Станет |
+|-------|--------|--------|
+| `self._conditional_trader_is_active()` | 352, 357 | `conditional_trader_is_active(state)` |
+| `self._emission_active(h)` | 533, 564, 748, 2406, 2907 | `emission_active(state, h)` |
+| `self._emission_known(h)` | (extern — фазы) | `emission_known(state, h)` |
+| `self._process_emission_schedule(h)` | (extern — фаза) | `process_emission_schedule(state, h)` |
+| `self._move_all_anomalies(h)` | 539 | `move_all_anomalies(state, h)` |
+| `self._broadcast_emission_warning(h)` | 551 | `broadcast_emission_warning(state, h)` |
+| `self._anomaly_move_candidates(a)` | 588 | `anomaly_move_candidates(state, a)` |
+| `self._mark_group_emission_exposed(g, h)` | 665, 2409 | `mark_group_emission_exposed(state, g, h)` |
+| `self._create_shelter_occupied_knowledge(...)` | 716 | `create_shelter_occupied_knowledge(state, ...)` |
+| `self._expire_conditional_trader_if_expired(h)` | (extern — фаза) | `expire_conditional_trader_if_expired(state, h)` |
+
+**Фаза01 (phases/phase01_scheduled.py):**
+| Вызов | Строка | Станет |
+|-------|--------|--------|
+| `engine._process_emission_schedule(hour)` | 75 | `process_emission_schedule(state, hour)` |
+| `engine._apply_emission_exposure(hour)` | 77 | `apply_emission_exposure(state, hour)` |
+| `engine._process_shelter_occupation(hour)` | 80 | `process_shelter_occupation(state, hour)` |
+| `engine._expire_conditional_trader_if_expired(hour)` | 88 | `expire_conditional_trader_if_expired(state, hour)` |
+
+**Фаза04 (phases/phase04_intentions.py):**
+| Вызов | Строка | Станет |
+|-------|--------|--------|
+| `engine._emission_known(hour)` | 35 | `emission_known(state, hour)` |
+| `engine._group_can_create_shelter(group, members)` | 134 | `group_can_create_shelter(state, group, members)` |
+
+**Фаза06 (phases/phase06_detections.py):**
+| Вызов | Строка | Станет |
+|-------|--------|--------|
+| `engine._process_emission_shelter_assault(hour)` | 84 | `process_emission_shelter_assault(state, hour)` |
+
+**Ожидаемое уменьшение engine.py:** ~250 строк (17 методов × ~15 строк среднее)
+
 ### Батч 5: Инит-хелперы, экипировка
 
 **Методы (6):**
