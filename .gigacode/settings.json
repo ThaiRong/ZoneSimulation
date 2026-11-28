@@ -33,7 +33,9 @@
       "Bash(select-object *)",
       "Bash(mkdir *)",
       "Bash(move *)",
-      "Bash(git reflog *)"
+      "Bash(git reflog *)",
+      "Bash(type *)",
+      "Bash(del *)"
     ]
   },
   "$version": 3

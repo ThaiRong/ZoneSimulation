@@ -256,3 +256,88 @@ class TestInvariant20:
         assert len(violations) == 0, (
             f"Обнаружены нарушения/исключения за 240 часов: {violations[:5]}"
         )
+
+
+class TestEmissionExposureKillsCorpse:
+    """Регрессия B4.2: погибшие от выброса NPC создают трупы.
+
+    При переносе mark_group_emission_exposed из engine в anomalies/emission.py
+    был потерян вызов create_corpse для погибших на втором часе exposure.
+    Этот тест гарантирует: второй час открытого пребывания → все DEAD + Corpse.
+    """
+
+    def test_second_hour_exposure_creates_corpses(self):
+        """Одна группа под выбросом второй час → все члены DEAD, для каждого создан труп."""
+        from zonesim.combat.loot import create_corpse
+        from zonesim.anomalies.emission import mark_group_emission_exposed
+
+        engine = SimulationEngine(seed=42)
+        state = engine.state
+
+        # Находим первую группу и перемещаем в НЕ-shelter сектор
+        shelter_ids = {
+            s.sector_id for s in state.shelters.values()
+        } | {
+            s.id for s in state.sectors.values() if s.is_faction_start
+        } | {
+            npc.sector_id for npc in state.stationary_humans
+            if npc.stationary_role == "trader" and npc.status == EntityStatus.ACTIVE
+        }
+        non_shelter = [sid for sid in state.sectors if sid not in shelter_ids]
+        if not non_shelter:
+            pytest.skip("No non-shelter sectors")
+
+        target_group = None
+        for g in state.human_groups.values():
+            if g.members:
+                target_group = g
+                break
+        if target_group is None:
+            pytest.skip("No groups with members")
+
+        target_sector = non_shelter[0]
+        npcs_map = {n.id: n for n in state.humans}
+        for mid in target_group.members:
+            npc = npcs_map.get(mid)
+            if npc:
+                npc.sector_id = target_sector
+        target_group.sector_id = target_sector
+
+        # Записываем ID членов целевой группы
+        member_ids = list(target_group.members)
+
+        # Сохраняем состояние corpses
+        corpses_before = len(state.corpses)
+        next_id_before = state.next_corpse_id
+
+        # Первый час: mark_group_emission_exposed → первый час (урон)
+        mark_group_emission_exposed(state, target_group, state.time.hour)
+
+        corpses_after_1st = len(state.corpses)
+
+        # Второй час: mark_group_emission_exposed → второй час → гибель + трупы
+        mark_group_emission_exposed(state, target_group, state.time.hour + 1)
+
+        # Проверяем: все члены целевой группы должны быть DEAD
+        for mid in member_ids:
+            npc = npcs_map.get(mid)
+            if npc is None:
+                continue
+            assert npc.status == EntityStatus.DEAD, (
+                f"NPC {npc.id} должен быть DEAD, но status={npc.status}"
+            )
+
+        # Corpses выросли ровно на количество погибших
+        corpses_after = len(state.corpses)
+        next_id_after = state.next_corpse_id
+        dead_count = sum(
+            1 for mid in member_ids
+            if npcs_map.get(mid) and npcs_map[mid].status == EntityStatus.DEAD
+        )
+        assert corpses_after == corpses_after_1st + dead_count, (
+            f"Трупы: ожидало {corpses_after_1st} + {dead_count} = {corpses_after_1st + dead_count}, "
+            f"получено {corpses_after}"
+        )
+        assert next_id_after == next_id_before + dead_count, (
+            f"next_corpse_id: ожидало {next_id_before} + {dead_count}, получено {next_id_after}"
+        )

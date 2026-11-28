@@ -1418,6 +1418,99 @@ def audit_b4():
     if not dup_found:
         print("  Нет дубликатов: OK")
     print("")
+    print("LOST CALLS GATE: no function calls lost during extraction")
+
+    def _git_show(path, commit):
+        result = subprocess.run(
+            ["git", "show", commit + ":" + path],
+            capture_output=True, text=True, encoding="utf-8",
+            cwd=str(REPO_ROOT),
+        )
+        return result.stdout
+
+    def _extract_body(code, func_name):
+        tree = ast.parse(code)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef) and node.name == "SimulationEngine":
+                for item in node.body:
+                    if isinstance(item, ast.FunctionDef) and item.name == func_name:
+                        lines = code.splitlines()
+                        body_start = 0
+                        for child in item.body:
+                            if (isinstance(child, ast.Expr)
+                                    and isinstance(child.value, ast.Constant)
+                                    and isinstance(child.value.value, str)):
+                                body_start += 1
+                            else:
+                                break
+                        start = item.body[body_start].lineno - 1
+                        end = item.end_lineno
+                        return "\n".join(lines[start:end])
+        return None
+
+    def _extract_func_body(code, func_name):
+        tree = ast.parse(code)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == func_name:
+                lines = code.splitlines()
+                body_start = 0
+                for child in node.body:
+                    if (isinstance(child, ast.Expr)
+                            and isinstance(child.value, ast.Constant)
+                            and isinstance(child.value.value, str)):
+                        body_start += 1
+                    else:
+                        break
+                start = node.body[body_start].lineno - 1
+                end = node.end_lineno
+                return "\n".join(lines[start:end])
+        return None
+
+    def _get_calls(text):
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            return set()
+        calls = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name):
+                    calls.add(node.func.id)
+                elif isinstance(node.func, ast.Attribute):
+                    calls.add(node.func.attr)
+        return calls
+
+    def _normalize(name):
+        return name.lstrip("_")
+
+    b4_pre_commit = locals().get("B4_PRE_COMMIT", "2d481f7")
+    engine_old = _git_show("src/zonesim/simulation/engine.py", b4_pre_commit)
+    lost_found = False
+    for pair in BATCH_B4:
+        old_body = _extract_body(engine_old, pair.old_name)
+        if old_body is None:
+            continue  # метод уже отсутствовал — пропуск
+        new_body = _extract_func_body(
+            (SRC / pair.target_module).read_text(encoding="utf-8"), pair.new_name,
+        )
+        if new_body is None:
+            continue
+        old_calls = _get_calls(old_body)
+        new_calls = _get_calls(new_body)
+        lost = []
+        for c in sorted(old_calls):
+            norm = _normalize(c)
+            matched = any(_normalize(nc) == norm for nc in new_calls)
+            if not matched:
+                lost.append(c)
+        if lost:
+            print("  FAIL: " + pair.old_name + " -> " + pair.new_name + ": lost=" + str(lost))
+            lost_found = True
+            all_ok = False
+            failures += 1
+    if not lost_found:
+        print("  Нет потерянных вызовов: OK")
+    print("")
     print("=" * 70)
     print("B4: " + str(checks) + " checks, " + str(failures) + " failures")
     if all_ok:

@@ -180,10 +180,12 @@ def mark_group_emission_exposed(state, group, hour: int) -> None:
             details={"group_id": group.id},
         )
     elif hour - first_hour >= EMISSION_EXPOSURE_KILL_HOUR - 1:
+        from zonesim.combat.loot import create_corpse
         members = active_members(state, group)
         for npc in members:
             npc.health = 0
             npc.status = EntityStatus.DEAD
+            create_corpse(state, npc, hour)
         state.emission_exposed.pop(group.id, None)
         state.news_manager.create_event(
             hour=hour, minute=30, sector_id=group.sector_id,

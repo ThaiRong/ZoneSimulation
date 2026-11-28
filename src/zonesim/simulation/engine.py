@@ -7,8 +7,8 @@ from typing import Any
 
 from zonesim.core.time import GameTime, SeededRNG
 from zonesim.world.entity import HumanNPC, Monster, MonsterSpecies, EntityStatus
-from zonesim.combat.loot import Corpse, EquipmentManager, LootManager
-from zonesim.world.item import Item, ItemType, give_item, place_item_on_corpse
+from zonesim.combat.loot import EquipmentManager, LootManager
+from zonesim.world.item import Item, ItemType, give_item
 
 from zonesim.core.config import GameConfig, DEFAULT_GUARDS_PER_BASE
 from zonesim.generation.worldgen import generate_world
@@ -1270,6 +1270,7 @@ class SimulationEngine:
             if contact["result"] != "hit":
                 continue
             victim = self.state.rng.choice(members)
+            is_monster = isinstance(victim, Monster)
             start = victim.health
             result = apply_anomaly_damage(
                 victim.health, victim.max_health, anomaly, self.state.rng.random(),
@@ -1278,7 +1279,8 @@ class SimulationEngine:
             if is_monster:
                 if victim.health <= 0:
                     victim.status = EntityStatus.DEAD
-                    self._create_corpse(victim, hour)
+                    from zonesim.combat.loot import create_corpse
+                    create_corpse(self.state, victim, hour)
             elif victim.health <= 0:
                 set_unconscious_or_dead(self.state,  victim, start, hour, cause="anomaly")
             self.state.news_manager.create_event(
@@ -1396,7 +1398,8 @@ class SimulationEngine:
             monster.health = result["new_health"]
             if monster.health <= 0:
                 monster.status = EntityStatus.DEAD
-                self._create_corpse(monster, hour)
+                from zonesim.combat.loot import create_corpse
+                create_corpse(self.state, monster, hour)
             self.state.news_manager.create_event(
                 hour=hour, minute=5, sector_id=monster.sector_id,
                 event_type="anomaly_hit", participants=[monster.id],
@@ -2054,7 +2057,8 @@ class SimulationEngine:
 
         for combatant in combat.attackers + combat.defenders:
             if not combatant.is_alive:
-                self._create_corpse(entities[combatant.id], hour)
+                from zonesim.combat.loot import create_corpse
+                create_corpse(self.state, entities[combatant.id], hour)
 
         participants = [entity.id for entity in battle["attackers"] + battle["defenders"]]
         # Передышка после боя для участвовавших групп (§11.1)
@@ -2187,30 +2191,6 @@ class SimulationEngine:
             )
             if damaged:
                 item.condition = new_condition
-
-    def _create_corpse(self, entity, hour: int) -> Corpse:
-        species = getattr(entity, "species", "human")
-        species = species.value if hasattr(species, "value") else species
-        corpse = Corpse(
-            id=self.state.next_corpse_id,
-            original_entity_id=entity.id,
-            original_entity_type="human" if isinstance(entity, HumanNPC) else species,
-            sector_id=entity.sector_id,
-            created_hour=hour,
-            monster_parts=[] if isinstance(entity, HumanNPC) else LootManager.available_monster_parts(entity),
-        )
-        self.state.next_corpse_id += 1
-        self.state.corpses.append(corpse)
-        if isinstance(entity, HumanNPC):
-            for item_id in list(entity.inventory):
-                place_item_on_corpse(self.state.items[item_id], corpse.id, entity.inventory)
-                corpse.items.append(item_id)
-            corpse.money = max(0, entity.money)
-            entity.money = 0
-            entity.equipped_weapon_id = None
-            entity.equipped_armor_id = None
-            entity.artifacts.clear()
-        return corpse
 
     def _process_corpse_action(self, group: HumanGroup, hour: int) -> dict | None:
         npcs = {npc.id: npc for npc in self.state.humans}

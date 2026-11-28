@@ -7,6 +7,7 @@ from enum import Enum
 from typing import Any
 
 from zonesim.world.entity import EntityStatus
+from zonesim.world.item import place_item_on_corpse
 
 
 class LootType(str, Enum):
@@ -282,3 +283,35 @@ class EquipmentManager:
             item["condition"] = 0
             item["value"] = item.get("value", 0) * 0.1  # остаточная стоимость 10%
         return items
+
+
+def create_corpse(state, entity, hour: int) -> "Corpse":
+    """Создать труп сущности и вернуть Corpse. (§7.11)
+
+    Экстракция из SimulationEngine._create_corpse.
+    Порядок операторов и обращений к state.rng — идентичен.
+    """
+    from zonesim.world.entity import HumanNPC
+
+    species = getattr(entity, "species", "human")
+    species = species.value if hasattr(species, "value") else species
+    corpse = Corpse(
+        id=state.next_corpse_id,
+        original_entity_id=entity.id,
+        original_entity_type="human" if isinstance(entity, HumanNPC) else species,
+        sector_id=entity.sector_id,
+        created_hour=hour,
+        monster_parts=[] if isinstance(entity, HumanNPC) else LootManager.available_monster_parts(entity),
+    )
+    state.next_corpse_id += 1
+    state.corpses.append(corpse)
+    if isinstance(entity, HumanNPC):
+        for item_id in list(entity.inventory):
+            place_item_on_corpse(state.items[item_id], corpse.id, entity.inventory)
+            corpse.items.append(item_id)
+        corpse.money = max(0, entity.money)
+        entity.money = 0
+        entity.equipped_weapon_id = None
+        entity.equipped_armor_id = None
+        entity.artifacts.clear()
+    return corpse

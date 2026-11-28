@@ -239,8 +239,9 @@ class TestEmission:
 
 class TestFindings:
     def test_corpse_expires_after_24_hours(self):
+        from zonesim.combat.loot import create_corpse
         engine = SimulationEngine(seed=42)
-        corpse = engine._create_corpse(engine.state.humans[0], hour=0)
+        corpse = create_corpse(engine.state, engine.state.humans[0], hour=0)
         corpse.status = "available"
         item = create_item(
             engine.state,
@@ -254,8 +255,9 @@ class TestFindings:
         assert item.id not in engine.state.items
 
     def test_fresh_corpse_survives(self):
+        from zonesim.combat.loot import create_corpse
         engine = SimulationEngine(seed=42)
-        corpse = engine._create_corpse(engine.state.humans[0], hour=20)
+        corpse = create_corpse(engine.state, engine.state.humans[0], hour=20)
         corpse.status = "available"
         expire_findings(engine.state,24)
         assert corpse in engine.state.corpses

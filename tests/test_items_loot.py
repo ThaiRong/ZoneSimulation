@@ -65,13 +65,14 @@ def test_starting_equipment_has_unique_ids_and_single_owner():
 
 
 def test_death_moves_all_property_to_corpse_without_duplicates():
+    from zonesim.combat.loot import create_corpse
     engine = SimulationEngine(seed=12)
     npc = engine.state.humans[0]
     original_items = set(npc.inventory)
     create_item(engine.state, ItemType.ARTIFACT, "Артефакт", 300.0, owner_id=npc.id)
     original_items.update(npc.inventory)
 
-    corpse = engine._create_corpse(npc, hour=9)
+    corpse = create_corpse(engine.state, npc, hour=9)
 
     assert npc.inventory == []
     assert npc.money == 0
@@ -174,9 +175,10 @@ def test_harvesting_monster_parts_takes_hour_and_preserves_condition():
 
 
 def test_human_corpse_has_no_exportable_parts():
+    from zonesim.combat.loot import create_corpse
     engine = SimulationEngine(seed=15)
     npc = engine.state.humans[0]
-    corpse = engine._create_corpse(npc, hour=10)
+    corpse = create_corpse(engine.state, npc, hour=10)
     result = LootManager.harvest_monster_parts(
         corpse, npc, engine.state.items, engine.state.next_item_id
     )
@@ -198,9 +200,10 @@ def test_armor_condition_decreases_after_damage():
 
 
 def test_items_and_corpse_survive_save_load(tmp_path):
+    from zonesim.combat.loot import create_corpse
     engine = SimulationEngine(seed=16, save_directory=tmp_path)
     npc = engine.state.humans[0]
-    engine._create_corpse(npc, hour=7)
+    create_corpse(engine.state, npc, hour=7)
     engine.save("items")
 
     loaded = SimulationEngine.load("items", tmp_path)
