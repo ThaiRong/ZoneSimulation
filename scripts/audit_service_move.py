@@ -18,6 +18,7 @@ import os
 import re
 import subprocess
 import sys
+import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -574,7 +575,8 @@ def extract_body(code, func_name):
                             break
                     start = item.body[body_start].lineno - 1
                     end = item.end_lineno
-                    return "\n".join(lines[start:end])
+                    body = "\n".join(lines[start:end])
+                    return textwrap.dedent(body)
     return None
 
 
@@ -597,7 +599,8 @@ def extract_new_func_body(target_module, func_name):
                     break
             start = node.body[body_start].lineno - 1
             end = node.end_lineno
-            return "\n".join(lines[start:end])
+            body = "\n".join(lines[start:end])
+            return textwrap.dedent(body)
     return None
 
 
@@ -1426,12 +1429,15 @@ def audit_b4():
             capture_output=True, text=True, encoding="utf-8",
             cwd=str(REPO_ROOT),
         )
+        if result.returncode != 0 or not result.stdout:
+            return None
         return result.stdout
 
-    def _extract_body(code, func_name):
+    def _extract_body_from_class(code, class_name, func_name):
+        """Извлечь тело функции из дерева AST с dedent. Raise SyntaxError."""
         tree = ast.parse(code)
         for node in ast.walk(tree):
-            if isinstance(node, ast.ClassDef) and node.name == "SimulationEngine":
+            if isinstance(node, ast.ClassDef) and node.name == class_name:
                 for item in node.body:
                     if isinstance(item, ast.FunctionDef) and item.name == func_name:
                         lines = code.splitlines()
@@ -1445,10 +1451,12 @@ def audit_b4():
                                 break
                         start = item.body[body_start].lineno - 1
                         end = item.end_lineno
-                        return "\n".join(lines[start:end])
+                        body = "\n".join(lines[start:end])
+                        return textwrap.dedent(body)
         return None
 
-    def _extract_func_body(code, func_name):
+    def _extract_func_body_from_module(code, func_name):
+        """Извлечь тело функции из модульного кода с dedent. Raise SyntaxError."""
         tree = ast.parse(code)
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef) and node.name == func_name:
@@ -1463,14 +1471,13 @@ def audit_b4():
                         break
                 start = node.body[body_start].lineno - 1
                 end = node.end_lineno
-                return "\n".join(lines[start:end])
+                body = "\n".join(lines[start:end])
+                return textwrap.dedent(body)
         return None
 
     def _get_calls(text):
-        try:
-            tree = ast.parse(text)
-        except SyntaxError:
-            return set()
+        """Извлечь вызываемые имена из текста. Raise SyntaxError при ошибке парсинга."""
+        tree = ast.parse(text)
         calls = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Call):
@@ -1483,33 +1490,87 @@ def audit_b4():
     def _normalize(name):
         return name.lstrip("_")
 
-    b4_pre_commit = locals().get("B4_PRE_COMMIT", "2d481f7")
-    engine_old = _git_show("src/zonesim/simulation/engine.py", b4_pre_commit)
-    lost_found = False
-    for pair in BATCH_B4:
-        old_body = _extract_body(engine_old, pair.old_name)
-        if old_body is None:
-            continue  # метод уже отсутствовал — пропуск
-        new_body = _extract_func_body(
-            (SRC / pair.target_module).read_text(encoding="utf-8"), pair.new_name,
-        )
-        if new_body is None:
-            continue
-        old_calls = _get_calls(old_body)
-        new_calls = _get_calls(new_body)
-        lost = []
-        for c in sorted(old_calls):
-            norm = _normalize(c)
-            matched = any(_normalize(nc) == norm for nc in new_calls)
-            if not matched:
-                lost.append(c)
-        if lost:
-            print("  FAIL: " + pair.old_name + " -> " + pair.new_name + ": lost=" + str(lost))
-            lost_found = True
+    # Прямое чтение модульной константы (не locals())
+    pre_commit = B4_PRE_COMMIT
+    engine_old_code = _git_show("src/zonesim/simulation/engine.py", pre_commit)
+
+    checked_pairs = 0
+    lost_count = 0
+    pair_failures = 0
+
+    if engine_old_code is None or engine_old_code.strip() == "":
+        print("  FAIL: base commit " + pre_commit + " not accessible (git show returned empty)")
+        all_ok = False
+        failures += 1
+    else:
+        for pair in BATCH_B4:
+            old_body = _extract_body_from_class(engine_old_code, "SimulationEngine", pair.old_name)
+            if old_body is None:
+                print("  FAIL: " + pair.old_name + " not found in engine@" + pre_commit)
+                all_ok = False
+                failures += 1
+                pair_failures += 1
+                continue
+
+            mod_code_path = SRC / pair.target_module
+            if not mod_code_path.exists():
+                print("  FAIL: target module " + pair.target_module + " not found")
+                all_ok = False
+                failures += 1
+                pair_failures += 1
+                continue
+            mod_code = mod_code_path.read_text(encoding="utf-8")
+            new_body = _extract_func_body_from_module(mod_code, pair.new_name)
+            if new_body is None:
+                print("  FAIL: " + pair.new_name + " not found in " + pair.target_module)
+                all_ok = False
+                failures += 1
+                pair_failures += 1
+                continue
+
+            checked_pairs += 1
+
+            # При SyntaxError — не глотать, а FAIL
+            try:
+                old_calls = _get_calls(old_body)
+            except SyntaxError as e:
+                print("  FAIL: SyntaxError in old body " + pair.old_name + ": " + str(e))
+                all_ok = False
+                failures += 1
+                pair_failures += 1
+                continue
+            try:
+                new_calls = _get_calls(new_body)
+            except SyntaxError as e:
+                print("  FAIL: SyntaxError in new body " + pair.new_name + ": " + str(e))
+                all_ok = False
+                failures += 1
+                pair_failures += 1
+                continue
+
+            lost = []
+            for c in sorted(old_calls):
+                norm = _normalize(c)
+                matched = any(_normalize(nc) == norm for nc in new_calls)
+                if not matched:
+                    lost.append(c)
+            if lost:
+                print("  LOST CALL: " + pair.old_name + " -> " + pair.new_name + ": " + str(lost))
+                lost_count += 1
+                pair_failures += 1
+
+        if pair_failures > 0:
             all_ok = False
-            failures += 1
-    if not lost_found:
-        print("  Нет потерянных вызовов: OK")
+        if not lost_count:
+            print("  Нет потерянных вызовов: OK")
+
+    print("  checked_pairs=" + str(checked_pairs) + " / " + str(len(BATCH_B4)) +
+          "  lost=" + str(lost_count))
+
+    if checked_pairs != len(BATCH_B4):
+        print("  FAIL: проверено " + str(checked_pairs) + " пар из " + str(len(BATCH_B4)))
+        all_ok = False
+        failures += 1
     print("")
     print("=" * 70)
     print("B4: " + str(checks) + " checks, " + str(failures) + " failures")
