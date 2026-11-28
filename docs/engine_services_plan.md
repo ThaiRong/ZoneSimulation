@@ -690,6 +690,137 @@ process_guard_rotation         → relations/guards.py (_spawn_guard, _equip_gua
 
 **Риски:** Цепочка: `process_guard_rotation` → `spawn_guard` → `equip_guard` → `spawn_catalog_item`. Все в одном батче — без зависимостей вперёд.
 
+---
+
+### Батч 5 — фактический состав (3.9-B5)
+
+**Дата фиксации:** <TBD>
+**Fork критерий:** метод вызывает ТОЛЬКО `self._<уже вынесенные>` или чистые внешние функции.
+**Вызовов `self._<ещё не вынесенный хелпер>`** — 0 (все зависимости включены в батч).
+
+#### Фактический состав (8 методов + 1 исключение)
+
+| # | Метод engine | Целевой модуль | Новая сигнатура | Зависимости (self._xxx) | Статус |
+|---|-------------|----------------|-----------------|------------------------|--------|
+| 1 | `_init_trader_stock` | `economy/trader.py` | `init_trader_stock(state, catalog)` | — (только catalog) | кандидат |
+| 2 | `_init_trails` | `world/trails.py` | `init_trails(state)` | — | кандидат |
+| 3 | `_init_shelters` | `world/shelter.py` | `init_shelters(state, rng)` | — | кандидат |
+| 4 | `_spawn_catalog_item` | `world/items.py` | `spawn_catalog_item(state, catalog, item_ref, owner_id, quantity=1)` | — | кандидат |
+| 5 | `_give_starting_equipment` | `world/items.py` | `give_starting_equipment(state, npc)` | `_spawn_catalog_item` (в батче), `sync_npc_from_items` (B2) | кандидат |
+| 6 | `_equip_guard` | `economy/guards.py` | `equip_guard(state, npc, catalog)` | `_spawn_catalog_item` (в батче), `sync_npc_from_items` (B2) | кандидат |
+| 7 | `_spawn_guard` | `economy/guards.py` | `spawn_guard(state, npc_id_ref, wounded, name, reserve_for)` | `_equip_guard` (в батче) | кандидат |
+| 8 | `_process_guard_rotation` | `economy/guards.py` | `process_guard_rotation(state, hour)` | `_spawn_guard` (в батче), `_equip_guard` (в батче) | кандидат |
+
+**Исключение:**
+| Метод | Статус | Причина |
+|-------|--------|---------|
+| `generate_world` | НЕ выносить | orchestrator: точка входа для генерации мира |
+| `sync_monster_groups` | УЖЕ вынесен | `world/groups.py:75` (существует) |
+
+**Константы, переносимые из engine → целевые модули:**
+
+| Константа | Значение | Целевой модуль |
+|-----------|----------|----------------|
+| `TRADER_START_QTY` | `{"weapon": 2, "body_armor": 2, ...}` | `economy/trader.py` |
+| `TRADER_AMMO_QTY` | `{"ammo.pistol": 40, ...}` | `economy/trader.py` |
+| `TRADE_MARKUP` | `1.2` | `economy/trader.py` (не используется в B5 методах — trade_price остаётся) |
+| `GUARD_ROTATION_HEALTH` | `0.5` | `economy/guards.py` |
+| `GUARD_RECOVERY_PER_DAY` | `0.5` | `economy/guards.py` |
+| `GUARDS_PER_BASE` | `DEFAULT_GUARDS_PER_BASE` | `economy/guards.py` |
+
+#### Зависимости методов
+
+```
+_init_trader_stock:
+  → catalog.entries()           [параметр catalog]
+  → self.TRADER_START_QTY        [константа модуля]
+  → self.TRADER_AMMO_QTY         [константа модуля]
+  → state.stationary_humans      [state]
+  → state.trader_stock           [state]
+
+_init_trails:
+  → state.sectors                [state]
+  → state.rng                    [state]
+  → edge_key()                   [zonesim.ai]
+
+_init_shelters:
+  → state.sectors                [state]
+  → state.rng                    [state]
+  → SHELTER_COUNT                [anomalies.emission]
+  → StormShelter                 [world.shelter]
+  → get_distance()               [world.sector, локальный импорт]
+
+_spawn_catalog_item:
+  → catalog.create_item()        [параметр catalog]
+  → state.next_item_id           [state]
+  → state.items                  [state]
+  → humans + stationary_humans   [параметр, для поиска owner]
+  → give_item()                  [zonesim.world.item]
+
+_give_starting_equipment:
+  → _spawn_catalog_item          [в батче B5]
+  → sync_npc_from_items          [B2, world/items.py]
+  → state.next_human_id          [state]
+  → state.humans + stationary_humans [параметр, для поиска owner]
+  → npc.inventory                [аргумент]
+
+_equip_guard:
+  → state.items                  [state]
+  → catalog.entries()            [параметр catalog]
+  → _spawn_catalog_item          [в батче B5]
+  → sync_npc_from_items          [B2, world/items.py]
+
+_spawn_guard:
+  → state.next_human_id          [state]
+  → state.stationary_humans      [state]
+  → _equip_guard                 [в батче B5]
+  → HumanNPC                     [world.entity]
+
+_process_guard_rotation:
+  → _spawn_guard                 [в батче B5]
+  → _equip_guard                 [в батче B5]
+  → state.sectors                [state]
+  → state.stationary_humans      [state]
+  → state.news_manager           [state]
+  → GUARD_ROTATION_HEALTH        [константа модуля]
+  → GUARD_RECOVERY_PER_DAY       [константа модуля]
+  → GUARDS_PER_BASE              [константа модуля]
+  → DEFAULT_GUARDS_PER_BASE      [core.config]
+  → EntityStatus                 [world.entity]
+  → HumanNPC                     [world.entity]
+```
+
+#### Все места вызова
+
+| Метод | Вызывающая сторона | файл:строка |
+|-------|-------------------|-------------|
+| `_generate_world` | `__init__` | `engine.py:229` |
+| `_init_trader_stock` | `_generate_world` | `engine.py:255` |
+| `_init_trails` | `_generate_world` | `engine.py:256` |
+| `_init_shelters` | `_generate_world` | `engine.py:257` |
+| `_give_starting_equipment` | `_generate_world` | `engine.py:251` |
+| `_give_starting_equipment` | `_generate_world` (trader) | `engine.py:441` |
+| `_give_starting_equipment` | `phase01_scheduled` (migration) | `phase01_scheduled.py:57` |
+| `_spawn_catalog_item` | `_equip_guard` | `engine.py:622-629` |
+| `_spawn_catalog_item` | `_give_starting_equipment` | `engine.py:1036-1044` |
+| `_equip_guard` | `_generate_world` | `engine.py:254` |
+| `_equip_guard` | `_process_guard_rotation` | `engine.py:744` |
+| `_equip_guard` | `_process_guard_rotation` (guard replacement) | `engine.py:767` |
+| `_spawn_guard` | `_process_guard_rotation` | `engine.py:702` |
+| `_process_guard_rotation` | `phase01_scheduled.py` | `phase01_scheduled.py:87` |
+| `_process_guard_rotation` | `test_guards.py` | `test_guards.py:71,89,100,106,108,117,118,142,157` |
+
+#### Проверка зависимостей
+
+Все методы батча B5 вызывают ТОЛЬКО:
+- функции, УЖЕ вынесенные в B1–B4 (`sync_npc_from_items` — B2)
+- чистые внешние функции (`give_item`, `edge_key`, `StormShelter`, `get_distance`)
+- функции, ВНУТРИ батча B5 (`_spawn_catalog_item` → `_equip_guard` → `_spawn_guard` → `_process_guard_rotation`)
+- НОВЫХ дубликатов не создаётся
+- `generate_world` и `known_anomaly_sectors` — в исключениях дубликат-гейта
+
+---
+
 ### Батч 6: Движение
 
 **Методы (6):**
