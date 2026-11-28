@@ -694,7 +694,7 @@ process_guard_rotation         → relations/guards.py (_spawn_guard, _equip_gua
 
 ### Батч 5 — фактический состав (3.9-B5)
 
-**Дата фиксации:** <TBD>
+**Дата фиксации:** 2b956e4 (plan: B5 фактический состав — таблица методов, зависимостей, вызовов)
 **Fork критерий:** метод вызывает ТОЛЬКО `self._<уже вынесенные>` или чистые внешние функции.
 **Вызовов `self._<ещё не вынесенный хелпер>`** — 0 (все зависимости включены в батч).
 
@@ -702,14 +702,14 @@ process_guard_rotation         → relations/guards.py (_spawn_guard, _equip_gua
 
 | # | Метод engine | Целевой модуль | Новая сигнатура | Зависимости (self._xxx) | Статус |
 |---|-------------|----------------|-----------------|------------------------|--------|
-| 1 | `_init_trader_stock` | `economy/trader.py` | `init_trader_stock(state, catalog)` | — (только catalog) | кандидат |
-| 2 | `_init_trails` | `world/trails.py` | `init_trails(state)` | — | кандидат |
-| 3 | `_init_shelters` | `world/shelter.py` | `init_shelters(state, rng)` | — | кандидат |
-| 4 | `_spawn_catalog_item` | `world/items.py` | `spawn_catalog_item(state, catalog, item_ref, owner_id, quantity=1)` | — | кандидат |
-| 5 | `_give_starting_equipment` | `world/items.py` | `give_starting_equipment(state, npc)` | `_spawn_catalog_item` (в батче), `sync_npc_from_items` (B2) | кандидат |
-| 6 | `_equip_guard` | `economy/guards.py` | `equip_guard(state, npc, catalog)` | `_spawn_catalog_item` (в батче), `sync_npc_from_items` (B2) | кандидат |
-| 7 | `_spawn_guard` | `economy/guards.py` | `spawn_guard(state, npc_id_ref, wounded, name, reserve_for)` | `_equip_guard` (в батче) | кандидат |
-| 8 | `_process_guard_rotation` | `economy/guards.py` | `process_guard_rotation(state, hour)` | `_spawn_guard` (в батче), `_equip_guard` (в батче) | кандидат |
+| 1 | `_init_trader_stock` | `economy/trader.py` | `init_trader_stock(state, catalog)` | — (только catalog) | вынесен |
+| 2 | `_init_trails` | `world/trails.py` | `init_trails(state)` | — | вынесен |
+| 3 | `_init_shelters` | `world/shelter.py` | `init_shelters(state, rng)` | — | вынесен |
+| 4 | `_spawn_catalog_item` | `world/item.py` | `spawn_catalog_item(state, catalog, item_ref, owner_id, quantity=1)` | — | вынесен |
+| 5 | `_give_starting_equipment` | `world/item.py` | `give_starting_equipment(state, npc, catalog)` | `_spawn_catalog_item` (в батче), `sync_npc_from_items` (B2) | вынесен |
+| 6 | `_equip_guard` | `economy/guards.py` | `equip_guard(state, npc, catalog)` | `_spawn_catalog_item` (в батче), `sync_npc_from_items` (B2) | вынесен |
+| 7 | `_spawn_guard` | `economy/guards.py` | `spawn_guard(state, next_human_id_ref, wounded, name, reserve_for, catalog)` | `_equip_guard` (в батче) | вынесен |
+| 8 | `_process_guard_rotation` | `economy/guards.py` | `process_guard_rotation(state, hour, catalog)` | `_spawn_guard` (в батче), `_equip_guard` (в батче) | вынесен |
 
 **Исключение:**
 | Метод | Статус | Причина |
@@ -759,26 +759,25 @@ _spawn_catalog_item:
 
 _give_starting_equipment:
   → _spawn_catalog_item          [в батче B5]
-  → sync_npc_from_items          [B2, world/items.py]
+  → sync_npc_from_items          [B2, world/item.py]
   → state.next_human_id          [state]
-  → state.humans + stationary_humans [параметр, для поиска owner]
   → npc.inventory                [аргумент]
 
 _equip_guard:
   → state.items                  [state]
   → catalog.entries()            [параметр catalog]
   → _spawn_catalog_item          [в батче B5]
-  → sync_npc_from_items          [B2, world/items.py]
+  → sync_npc_from_items          [B2, world/item.py]
 
 _spawn_guard:
-  → state.next_human_id          [state]
+  → next_human_id_ref[0]         [параметр, для чтения/записи ID]
   → state.stationary_humans      [state]
   → _equip_guard                 [в батче B5]
   → HumanNPC                     [world.entity]
 
 _process_guard_rotation:
-  → _spawn_guard                 [в батче B5]
-  → _equip_guard                 [в батче B5]
+  → _spawn_guard                 [в батче B5, с catalog]
+  → _equip_guard                 [в батче B5, с catalog]
   → state.sectors                [state]
   → state.stationary_humans      [state]
   → state.news_manager           [state]

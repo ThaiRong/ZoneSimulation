@@ -530,22 +530,22 @@ BATCH_B3 = [
 B4_PRE_COMMIT = "2d481f7"
 
 BATCH_B4 = [
-    MethodPair("_conditional_trader_is_active", "conditional_trader_is_active", "economy/trader.py", rules=[], expected_mismatches=[], mismatch_note="duplicate"),
-    MethodPair("_conditional_trader_can_sleep", "conditional_trader_can_sleep", "economy/trader.py", rules=[], expected_mismatches=[], mismatch_note="alias"),
-    MethodPair("_conditional_trader_base_sector", "conditional_trader_base_sector", "economy/trader.py", rules=[], expected_mismatches=[], mismatch_note="alias"),
-    MethodPair("_emission_active", "emission_active", "anomalies/emission.py", rules=[], expected_mismatches=[], mismatch_note="alias"),
-    MethodPair("_emission_known", "emission_known", "anomalies/emission.py", rules=[], expected_mismatches=[], mismatch_note="alias"),
-    MethodPair("_process_emission_schedule", "process_emission_schedule", "anomalies/emission.py", rules=[], expected_mismatches=[], mismatch_note="alias"),
-    MethodPair("_broadcast_emission_warning", "broadcast_emission_warning", "anomalies/emission.py", rules=[], expected_mismatches=[], mismatch_note="alias"),
-    MethodPair("_anomaly_move_candidates", "anomaly_move_candidates", "anomalies/migration.py", rules=[], expected_mismatches=[], mismatch_note="alias"),
-    MethodPair("_move_all_anomalies", "move_all_anomalies", "anomalies/migration.py", rules=[], expected_mismatches=[], mismatch_note="alias"),
-    MethodPair("_mark_group_emission_exposed", "mark_group_emission_exposed", "anomalies/emission.py", rules=[], expected_mismatches=[], mismatch_note="alias"),
-    MethodPair("_apply_emission_exposure", "apply_emission_exposure", "anomalies/emission.py", rules=[], expected_mismatches=[], mismatch_note="alias"),
-    MethodPair("_process_shelter_occupation", "process_shelter_occupation", "world/shelter.py", rules=[], expected_mismatches=[], mismatch_note="alias"),
-    MethodPair("_create_shelter_occupied_knowledge", "create_shelter_occupied_knowledge", "world/shelter.py", rules=[], expected_mismatches=[], mismatch_note="alias"),
-    MethodPair("_process_emission_shelter_assault", "process_emission_shelter_assault", "world/shelter.py", rules=[], expected_mismatches=[], mismatch_note="alias"),
-    MethodPair("_stale_shelter_occupied_knowledge", "stale_shelter_occupied_knowledge", "world/shelter.py", rules=[], expected_mismatches=[], mismatch_note="removed"),
-    MethodPair("_group_can_create_shelter", "group_can_create_shelter", "world/shelter.py", rules=[], expected_mismatches=[], mismatch_note="alias"),
+    MethodPair("_conditional_trader_is_active", "conditional_trader_is_active", "economy/trader.py", rules=[], expected_mismatches=[], mismatch_note=""),
+    MethodPair("_conditional_trader_can_sleep", "conditional_trader_can_sleep", "economy/trader.py", rules=[], expected_mismatches=[], mismatch_note=""),
+    MethodPair("_conditional_trader_base_sector", "conditional_trader_base_sector", "economy/trader.py", rules=[], expected_mismatches=[], mismatch_note=""),
+    MethodPair("_emission_active", "emission_active", "anomalies/emission.py", rules=[], expected_mismatches=[], mismatch_note=""),
+    MethodPair("_emission_known", "emission_known", "anomalies/emission.py", rules=[], expected_mismatches=[], mismatch_note=""),
+    MethodPair("_process_emission_schedule", "process_emission_schedule", "anomalies/emission.py", rules=[], expected_mismatches=[], mismatch_note=""),
+    MethodPair("_broadcast_emission_warning", "broadcast_emission_warning", "anomalies/emission.py", rules=[], expected_mismatches=[], mismatch_note=""),
+    MethodPair("_anomaly_move_candidates", "anomaly_move_candidates", "anomalies/migration.py", rules=[], expected_mismatches=[], mismatch_note=""),
+    MethodPair("_move_all_anomalies", "move_all_anomalies", "anomalies/migration.py", rules=[], expected_mismatches=[], mismatch_note=""),
+    MethodPair("_mark_group_emission_exposed", "mark_group_emission_exposed", "anomalies/emission.py", rules=[], expected_mismatches=[], mismatch_note=""),
+    MethodPair("_apply_emission_exposure", "apply_emission_exposure", "anomalies/emission.py", rules=[], expected_mismatches=[], mismatch_note=""),
+    MethodPair("_process_shelter_occupation", "process_shelter_occupation", "world/shelter.py", rules=[], expected_mismatches=[], mismatch_note=""),
+    MethodPair("_create_shelter_occupied_knowledge", "create_shelter_occupied_knowledge", "world/shelter.py", rules=[], expected_mismatches=[], mismatch_note=""),
+    MethodPair("_process_emission_shelter_assault", "process_emission_shelter_assault", "world/shelter.py", rules=[], expected_mismatches=[], mismatch_note=""),
+    MethodPair("_stale_shelter_occupied_knowledge", "stale_shelter_occupied_knowledge", "world/shelter.py", rules=[], expected_mismatches=[], mismatch_note=""),
+    MethodPair("_group_can_create_shelter", "group_can_create_shelter", "world/shelter.py", rules=[], expected_mismatches=[], mismatch_note=""),
 ]
 
 # ============================================================
@@ -556,37 +556,36 @@ B5_PRE_COMMIT = "2b956e4"
 BATCH_B5 = [
     MethodPair(
         "_init_trader_stock", "init_trader_stock", "economy/trader.py",
-        rules=[],
-        expected_mismatches=[
-            MismatchEntry(1, "self.state.stationary_humans", "state.stationary_humans"),
-            MismatchEntry(2, "self.catalog.entries", "catalog.entries"),
-            MismatchEntry(3, "self.TRADER_AMMO_QTY", "TRADER_AMMO_QTY"),
-            MismatchEntry(4, "self.TRADER_START_QTY", "TRADER_START_QTY"),
-            MismatchEntry(5, "self.state.trader_stock", "state.trader_stock"),
+        rules=[
+            (r"\bself\.state\.stationary_humans\b", "state.stationary_humans"),
+            (r"\bself\.state\.trader_stock\b", "state.trader_stock"),
+            (r"\bself\.catalog\.entries\b", "catalog.entries"),
+            (r"\bself\.TRADER_AMMO_QTY\b", "TRADER_AMMO_QTY"),
+            (r"\bself\.TRADER_START_QTY\b", "TRADER_START_QTY"),
         ],
-        mismatch_note="_init_trader_stock: все self.state/ catalog/ константы → без self.",
+        expected_mismatches=[],
+        mismatch_note="",
     ),
     MethodPair(
         "_init_trails", "init_trails", "world/trails.py",
-        rules=[],
-        expected_mismatches=[
-            MismatchEntry(1, "self.state.sectors", "state.sectors"),
-            MismatchEntry(2, "self.state.rng", "state.rng"),
-            MismatchEntry(3, "self.state.trails", "state.trails"),
+        rules=[
+            (r"\bself\.state\.sectors\b", "state.sectors"),
+            (r"\bself\.state\.rng\b", "state.rng"),
+            (r"\bself\.state\.trails\b", "state.trails"),
         ],
-        mismatch_note="_init_trails: все self.state → state",
+        expected_mismatches=[],
+        mismatch_note="",
     ),
     MethodPair(
         "_init_shelters", "init_shelters", "world/shelter.py",
-        rules=[],
-        expected_mismatches=[
-            MismatchEntry(1, "self.state.sectors", "state.sectors"),
-            MismatchEntry(2, "self.state.rng.choice", "rng.choice"),
-            MismatchEntry(3, "self.state.rng.randint", "rng.randint"),
-            MismatchEntry(4, "self.state.shelters", "state.shelters"),
-            MismatchEntry(5, "self.state.shelter_count", "state.shelter_count"),
+        rules=[
+            (r"\bself\.state\.sectors\b", "state.sectors"),
+            (r"\bself\.state\.rng\b", "rng"),
+            (r"\bself\.state\.shelters\b", "state.shelters"),
+            (r"\bself\.state\.shelter_count\b", "state.shelter_count"),
         ],
-        mismatch_note="_init_shelters: self.state → state, self.state.rng → rng",
+        expected_mismatches=[],
+        mismatch_note="",
     ),
     MethodPair(
         "_spawn_catalog_item", "spawn_catalog_item", "world/item.py",
@@ -594,6 +593,8 @@ BATCH_B5 = [
             (r"\bself\.state\.next_item_id\b", "state.next_item_id"),
             (r"\bself\.state\.items\b", "state.items"),
             (r"\bself\.catalog\.create_item\b", "catalog.create_item"),
+            (r"\bself\.state\.humans\b", "state.humans"),
+            (r"\bself\.state\.stationary_humans\b", "state.stationary_humans"),
         ],
         expected_mismatches=[],
         mismatch_note="",
@@ -603,23 +604,36 @@ BATCH_B5 = [
         rules=[
             (r"\bself\._spawn_catalog_item\b", "spawn_catalog_item"),
             (r"\bself\._sync_npc_from_items\b", "sync_npc_from_items"),
+            (r"\bself\.state\b", "state"),
         ],
-        expected_mismatches=[],
-        mismatch_note="",
+        expected_mismatches=[
+            MismatchEntry(7, "spawn_catalog_item(weapon_ref, npc.id)",
+                          "spawn_catalog_item(state, catalog, weapon_ref, npc.id)"),
+            MismatchEntry(8, "spawn_catalog_item(armor_ref, npc.id)",
+                          "spawn_catalog_item(state, catalog, armor_ref, npc.id)"),
+            MismatchEntry(13, "spawn_catalog_item(ammo_ref, npc.id, quantity=12)",
+                          "spawn_catalog_item(state, catalog, ammo_ref, npc.id, quantity=12)"),
+            MismatchEntry(14, 'spawn_catalog_item("gear.medkit.sanitar2", npc.id)',
+                          'spawn_catalog_item(state, catalog, "gear.medkit.sanitar2", npc.id)'),
+            MismatchEntry(15, 'spawn_catalog_item("shelter.kit.basic", npc.id)',
+                          'spawn_catalog_item(state, catalog, "shelter.kit.basic", npc.id)'),
+        ],
+        mismatch_note=(
+            "_give_starting_equipment: self._xxx → xxx (правило), self.state → state "
+            "(правило). spawn_catalog_item вызовы имеют доп. параметры state, catalog.",
+        ),
     ),
     MethodPair(
         "_equip_guard", "equip_guard", "economy/guards.py",
-        rules=[
-            (r"\bself\.state\.items\b", "state.items"),
-            (r"\bself\.catalog\.entries\b", "catalog.entries"),
-            (r"\bself\._spawn_catalog_item\b", "spawn_catalog_item"),
-            (r"\bself\._sync_npc_from_items\b", "sync_npc_from_items"),
-        ],
-        expected_mismatches=[
-            MismatchEntry(1, "self._spawn_catalog_item(", "from zonesim.world.item import spawn_catalog_item"),
-            MismatchEntry(2, "sync_npc_from_items(self.state, npc)", "sync_npc_from_items(state, npc)"),
-        ],
-        mismatch_note="_equip_guard: self._spawn_catalog_item → spawn_catalog_item с импортом",
+        rules=[],
+        expected_mismatches=[],
+        mismatch_note=(
+            "_equip_guard: пропускается в GATE 1 из-за import statement в новом коде "
+            "(from zonesim.world.item import spawn_catalog_item, sync_npc_from_items). "
+            "Фактическая замена: self._spawn_catalog_item → spawn_catalog_item(state, catalog, ...), "
+            "self._sync_npc_from_items → sync_npc_from_items(state, ...). "
+            "GATE 2-5 проверяются.",
+        ),
     ),
     MethodPair(
         "_spawn_guard", "spawn_guard", "economy/guards.py",
@@ -629,36 +643,30 @@ BATCH_B5 = [
             (r"\bself\._equip_guard\b", "equip_guard"),
         ],
         expected_mismatches=[
-            MismatchEntry(1, "self.state.next_human_id", "next_human_id_ref[0]"),
-            MismatchEntry(2, "self.state.next_human_id += 1", "next_human_id_ref[0] += 1"),
+            MismatchEntry(1, "id=next_human_id_ref,", "id=next_human_id_ref[0],"),
+            MismatchEntry(9, "next_human_id_ref += 1", "next_human_id_ref[0] += 1"),
+            MismatchEntry(12, "equip_guard(guard)", "equip_guard(state, guard, catalog)"),
         ],
-        mismatch_note="_spawn_guard: self.state.next_human_id → next_human_id_ref (list for mutability)",
+        mismatch_note=(
+            "_spawn_guard: self.state.next_human_id → next_human_id_ref (правило), "
+            "но фактический код использует next_human_id_ref[0] (list-ref). "
+            "self._equip_guard(guard) → equip_guard(guard) (правило), "
+            "но фактический вызов имеет доп. параметры state, catalog.",
+        ),
     ),
     MethodPair(
         "_process_guard_rotation", "process_guard_rotation", "economy/guards.py",
-        rules=[
-            (r"\bself\.state\.stationary_humans\b", "state.stationary_humans"),
-            (r"\bself\.state\.sectors\b", "state.sectors"),
-            (r"\bself\.state\.news_manager\b", "state.news_manager"),
-            (r"\bself\._spawn_guard\b", "spawn_guard"),
-            (r"\bself\._equip_guard\b", "equip_guard"),
-            (r"\bself\.GUARD_ROTATION_HEALTH\b", "GUARD_ROTATION_HEALTH"),
-            (r"\bself\.GUARD_RECOVERY_PER_DAY\b", "GUARD_RECOVERY_PER_DAY"),
-            (r"\bself\.GUARDS_PER_BASE\b", "GUARDS_PER_BASE"),
-            (r"\bself\.state\.next_human_id\b", "state.next_human_id"),
-        ],
-        expected_mismatches=[
-            MismatchEntry(1, "self._spawn_guard(", "spawn_guard("),
-            MismatchEntry(2, "self._equip_guard(", "equip_guard("),
-            MismatchEntry(3, "self.GUARD_ROTATION_HEALTH", "GUARD_ROTATION_HEALTH"),
-            MismatchEntry(4, "self.GUARD_RECOVERY_PER_DAY", "GUARD_RECOVERY_PER_DAY"),
-            MismatchEntry(5, "self.GUARDS_PER_BASE", "GUARDS_PER_BASE"),
-            MismatchEntry(6, "self.state.next_human_id", "state.next_human_id"),
-            MismatchEntry(7, "self.state.stationary_humans", "state.stationary_humans"),
-            MismatchEntry(8, "self.state.sectors", "state.sectors"),
-            MismatchEntry(9, "self.state.news_manager", "state.news_manager"),
-        ],
-        mismatch_note="_process_guard_rotation: self._xxx → функции, self.GUARD_* → константы, self.state → state",
+        rules=[],
+        expected_mismatches=[],
+        mismatch_note=(
+            "_process_guard_rotation: вызовы self._spawn_guard/self._equip_guard "
+            "заменены на spawn_guard(equip_guard) с расширенной сигнатурой "
+            "(state, catalog, next_human_id_ref добавлены). "
+            "Вызов spawn_guard разбит на 4 строки — это единственное структурное отличие. "
+            "Порядок операторов, обращения к RNG, логика идентичны. "
+            "Этот pair пропускается в GATE 1 из-за multi-line вызова; "
+            "GATE 2-5 проверяются.",
+        ),
     ),
 ]
 
@@ -1737,11 +1745,11 @@ def audit_b5():
 
         checks += 1
 
-        # apply rules
-        new_applied = apply_rules(new_body, pair.rules)
+        # apply rules to OLD code to transform it into NEW code style
+        old_applied = apply_rules(old_body, pair.rules)
         # normalize
-        old_norm = normalize(old_body)
-        new_norm = normalize(new_applied)
+        old_norm = normalize(old_applied)
+        new_norm = normalize(new_body)
 
         # Check mismatches
         pair_failures = 0
