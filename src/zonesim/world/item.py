@@ -132,3 +132,38 @@ def sync_npc_from_items(state, npc: HumanNPC) -> None:
         item.quantity for item_id in npc.inventory
         if (item := state.items[item_id]).type is ItemType.MEDICINE
     )
+
+
+def spawn_catalog_item(state, catalog, item_ref: str, owner_id: int,
+                       quantity: int = 1) -> Item:
+    """Создаёт предмет из каталога и добавляет владельцу. (§7.8)"""
+    item = catalog.create_item(state.next_item_id, item_ref, quantity=quantity)
+    state.next_item_id += 1
+    state.items[item.id] = item
+    owner = next(
+        npc for npc in state.humans + state.stationary_humans
+        if npc.id == owner_id
+    )
+    give_item(item, owner_id, owner.inventory)
+    return item
+
+
+def give_starting_equipment(state, npc: HumanNPC, catalog) -> None:
+    """Выдаёт стартовое снаряжение NPC. (§7.8)"""
+    if npc.inventory:
+        return
+    npc.money = 100
+    if npc.faction == "Серая лига":
+        weapon_ref, armor_ref = "weapon.rifle.sokol", "armor.outer.scout"
+    else:
+        weapon_ref, armor_ref = "weapon.carbine.k20", "armor.uniform.jacket"
+    weapon = spawn_catalog_item(state, catalog, weapon_ref, npc.id)
+    armor = spawn_catalog_item(state, catalog, armor_ref, npc.id)
+    npc.equipped_weapon_id = weapon.id
+    npc.equipped_armor_id = armor.id
+    ammo_ref = weapon.properties.get("ammo_type")
+    if ammo_ref:
+        spawn_catalog_item(state, catalog, ammo_ref, npc.id, quantity=12)
+    spawn_catalog_item(state, catalog, "gear.medkit.sanitar2", npc.id)
+    spawn_catalog_item(state, catalog, "shelter.kit.basic", npc.id)
+    sync_npc_from_items(state, npc)

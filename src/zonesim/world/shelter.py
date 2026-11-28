@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from zonesim.world.entity import EntityStatus
 from zonesim.anomalies.emission import (
     EMISSION_MONSTER_SHELTER_CHANCE, EMISSION_MONSTER_STAY_MIN, EMISSION_MONSTER_STAY_MAX,
+    SHELTER_COUNT,
 )
 
 if TYPE_CHECKING:
@@ -575,3 +576,48 @@ def group_can_create_shelter(state, group, members: list) -> bool:
         return False
 
     return True
+
+
+def init_shelters(state, rng) -> None:
+    """Стационарные укрытия: 8 шт, не более одного в секторе,
+    любой сектор в двух рёбрах от укрытия. (§7.16)"""
+    from zonesim.world.sector import get_distance
+
+    start_ids = {s.id for s in state.sectors.values() if s.is_faction_start}
+    candidates = [sid for sid in state.sectors if sid not in start_ids]
+    chosen: list[int] = []
+    all_ids = set(state.sectors)
+    while len(chosen) < SHELTER_COUNT:
+        uncovered = [
+            sid for sid in all_ids
+            if not any(
+                (dist := get_distance(state.sectors, sid, c)) is not None and dist <= 2
+                for c in chosen
+            )
+        ]
+        if not uncovered:
+            break
+        # жадный выбор: сектор, покрывающий больше всего непокрытых
+        best = max(
+            candidates,
+            key=lambda sid: sum(
+                1 for u in uncovered
+                if (dist := get_distance(state.sectors, sid, u)) is not None and dist <= 2
+            ),
+        )
+        chosen.append(best)
+        candidates.remove(best)
+    # дозаполняем до стартового количества разбросанными укрытиями
+    while len(chosen) < SHELTER_COUNT and candidates:
+        pick = rng.choice(candidates)
+        chosen.append(pick)
+        candidates.remove(pick)
+    state.shelters = {
+        index: StormShelter(
+            id=index,
+            sector_id=sector_id,
+            capacity=rng.randint(2, 6),
+        )
+        for index, sector_id in enumerate(chosen)
+    }
+    state.shelter_count = len(state.shelters)

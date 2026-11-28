@@ -65,3 +65,14 @@ def group_has_passage(state, group: "HumanGroup", anomaly) -> bool:
             if fact.payload.get("edge") == edge:
                 return True
     return False
+
+
+def init_trails(state) -> None:
+    """Тропы: около 40% рёбер графа. (§10.4)"""
+    edges = {
+        edge_key(sid, nid)
+        for sid, sector in state.sectors.items()
+        for nid in sector.neighbors
+    }
+    trails = [list(edge) for edge in sorted(edges) if state.rng.random() < 0.4]
+    state.trails = trails

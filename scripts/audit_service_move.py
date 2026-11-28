@@ -548,6 +548,120 @@ BATCH_B4 = [
     MethodPair("_group_can_create_shelter", "group_can_create_shelter", "world/shelter.py", rules=[], expected_mismatches=[], mismatch_note="alias"),
 ]
 
+# ============================================================
+# BATCH B5: Init helpers, equipment extraction (3.9-B5)
+# ============================================================
+B5_PRE_COMMIT = "2b956e4"
+
+BATCH_B5 = [
+    MethodPair(
+        "_init_trader_stock", "init_trader_stock", "economy/trader.py",
+        rules=[],
+        expected_mismatches=[
+            MismatchEntry(1, "self.state.stationary_humans", "state.stationary_humans"),
+            MismatchEntry(2, "self.catalog.entries", "catalog.entries"),
+            MismatchEntry(3, "self.TRADER_AMMO_QTY", "TRADER_AMMO_QTY"),
+            MismatchEntry(4, "self.TRADER_START_QTY", "TRADER_START_QTY"),
+            MismatchEntry(5, "self.state.trader_stock", "state.trader_stock"),
+        ],
+        mismatch_note="_init_trader_stock: все self.state/ catalog/ константы → без self.",
+    ),
+    MethodPair(
+        "_init_trails", "init_trails", "world/trails.py",
+        rules=[],
+        expected_mismatches=[
+            MismatchEntry(1, "self.state.sectors", "state.sectors"),
+            MismatchEntry(2, "self.state.rng", "state.rng"),
+            MismatchEntry(3, "self.state.trails", "state.trails"),
+        ],
+        mismatch_note="_init_trails: все self.state → state",
+    ),
+    MethodPair(
+        "_init_shelters", "init_shelters", "world/shelter.py",
+        rules=[],
+        expected_mismatches=[
+            MismatchEntry(1, "self.state.sectors", "state.sectors"),
+            MismatchEntry(2, "self.state.rng.choice", "rng.choice"),
+            MismatchEntry(3, "self.state.rng.randint", "rng.randint"),
+            MismatchEntry(4, "self.state.shelters", "state.shelters"),
+            MismatchEntry(5, "self.state.shelter_count", "state.shelter_count"),
+        ],
+        mismatch_note="_init_shelters: self.state → state, self.state.rng → rng",
+    ),
+    MethodPair(
+        "_spawn_catalog_item", "spawn_catalog_item", "world/item.py",
+        rules=[
+            (r"\bself\.state\.next_item_id\b", "state.next_item_id"),
+            (r"\bself\.state\.items\b", "state.items"),
+            (r"\bself\.catalog\.create_item\b", "catalog.create_item"),
+        ],
+        expected_mismatches=[],
+        mismatch_note="",
+    ),
+    MethodPair(
+        "_give_starting_equipment", "give_starting_equipment", "world/item.py",
+        rules=[
+            (r"\bself\._spawn_catalog_item\b", "spawn_catalog_item"),
+            (r"\bself\._sync_npc_from_items\b", "sync_npc_from_items"),
+        ],
+        expected_mismatches=[],
+        mismatch_note="",
+    ),
+    MethodPair(
+        "_equip_guard", "equip_guard", "economy/guards.py",
+        rules=[
+            (r"\bself\.state\.items\b", "state.items"),
+            (r"\bself\.catalog\.entries\b", "catalog.entries"),
+            (r"\bself\._spawn_catalog_item\b", "spawn_catalog_item"),
+            (r"\bself\._sync_npc_from_items\b", "sync_npc_from_items"),
+        ],
+        expected_mismatches=[
+            MismatchEntry(1, "self._spawn_catalog_item(", "from zonesim.world.item import spawn_catalog_item"),
+            MismatchEntry(2, "sync_npc_from_items(self.state, npc)", "sync_npc_from_items(state, npc)"),
+        ],
+        mismatch_note="_equip_guard: self._spawn_catalog_item → spawn_catalog_item с импортом",
+    ),
+    MethodPair(
+        "_spawn_guard", "spawn_guard", "economy/guards.py",
+        rules=[
+            (r"\bself\.state\.next_human_id\b", "next_human_id_ref"),
+            (r"\bself\.state\.stationary_humans\b", "state.stationary_humans"),
+            (r"\bself\._equip_guard\b", "equip_guard"),
+        ],
+        expected_mismatches=[
+            MismatchEntry(1, "self.state.next_human_id", "next_human_id_ref[0]"),
+            MismatchEntry(2, "self.state.next_human_id += 1", "next_human_id_ref[0] += 1"),
+        ],
+        mismatch_note="_spawn_guard: self.state.next_human_id → next_human_id_ref (list for mutability)",
+    ),
+    MethodPair(
+        "_process_guard_rotation", "process_guard_rotation", "economy/guards.py",
+        rules=[
+            (r"\bself\.state\.stationary_humans\b", "state.stationary_humans"),
+            (r"\bself\.state\.sectors\b", "state.sectors"),
+            (r"\bself\.state\.news_manager\b", "state.news_manager"),
+            (r"\bself\._spawn_guard\b", "spawn_guard"),
+            (r"\bself\._equip_guard\b", "equip_guard"),
+            (r"\bself\.GUARD_ROTATION_HEALTH\b", "GUARD_ROTATION_HEALTH"),
+            (r"\bself\.GUARD_RECOVERY_PER_DAY\b", "GUARD_RECOVERY_PER_DAY"),
+            (r"\bself\.GUARDS_PER_BASE\b", "GUARDS_PER_BASE"),
+            (r"\bself\.state\.next_human_id\b", "state.next_human_id"),
+        ],
+        expected_mismatches=[
+            MismatchEntry(1, "self._spawn_guard(", "spawn_guard("),
+            MismatchEntry(2, "self._equip_guard(", "equip_guard("),
+            MismatchEntry(3, "self.GUARD_ROTATION_HEALTH", "GUARD_ROTATION_HEALTH"),
+            MismatchEntry(4, "self.GUARD_RECOVERY_PER_DAY", "GUARD_RECOVERY_PER_DAY"),
+            MismatchEntry(5, "self.GUARDS_PER_BASE", "GUARDS_PER_BASE"),
+            MismatchEntry(6, "self.state.next_human_id", "state.next_human_id"),
+            MismatchEntry(7, "self.state.stationary_humans", "state.stationary_humans"),
+            MismatchEntry(8, "self.state.sectors", "state.sectors"),
+            MismatchEntry(9, "self.state.news_manager", "state.news_manager"),
+        ],
+        mismatch_note="_process_guard_rotation: self._xxx → функции, self.GUARD_* → константы, self.state → state",
+    ),
+]
+
 
 def git_show(path, commit):
     result = subprocess.run(
@@ -1583,6 +1697,189 @@ def audit_b4():
     return 0 if static_rc == 0 and all_ok else 1
 
 
+def audit_b5():
+    """Аудит батча B5: все пять гейтов."""
+    print("=" * 70)
+    print("AUDIT BATCH B5: Init helpers, equipment")
+    print("Pre-batch commit: " + B5_PRE_COMMIT)
+    print("=" * 70)
+
+    checks = 0
+    failures = 0
+    all_ok = True
+
+    # GATE 1 & 2: equivalent + structural
+    checked_pairs = 0
+    for pair in BATCH_B5:
+        total_pairs = len(BATCH_B5)
+        sep = "-" * 60
+        print("")
+        print(sep)
+        print("PAIR: " + pair.old_name + " -> " + pair.new_name +
+              " (" + pair.target_module + ")")
+
+        old_code = git_show("src/zonesim/simulation/engine.py", B5_PRE_COMMIT)
+        old_body = extract_body(old_code, pair.old_name)
+        if old_body is None:
+            print("  ERROR: " + pair.old_name + " not found in git")
+            all_ok = False
+            failures += 1
+            continue
+        print("  OLD body: " + str(len(old_body.splitlines())) + " lines")
+
+        new_body = extract_new_func_body(pair.target_module, pair.new_name)
+        if new_body is None:
+            print("  ERROR: " + pair.new_name + " not found in " + pair.target_module)
+            all_ok = False
+            failures += 1
+            continue
+        print("  NEW body: " + str(len(new_body.splitlines())) + " lines")
+
+        checks += 1
+
+        # apply rules
+        new_applied = apply_rules(new_body, pair.rules)
+        # normalize
+        old_norm = normalize(old_body)
+        new_norm = normalize(new_applied)
+
+        # Check mismatches
+        pair_failures = 0
+        mismatches_found = []
+        new_idx = 0
+        old_idx = 0
+        while old_idx < len(old_norm) and new_idx < len(new_norm):
+            if old_norm[old_idx] != new_norm[new_idx]:
+                found = False
+                for em in pair.expected_mismatches:
+                    if em.operator_index == len(mismatches_found) + 1:
+                        actual_trans = old_norm[old_idx] if old_idx < len(old_norm) else "<MISSING>"
+                        actual_new = new_norm[new_idx] if new_idx < len(new_norm) else "<MISSING>"
+                        if mismatches_match(old_idx, actual_trans, actual_new, em):
+                            print("  MM" + str(len(mismatches_found) + 1) + ": " +
+                                  "TRANS: " + actual_trans + " | NEW: " + actual_new)
+                            found = True
+                            mismatches_found.append(em)
+                            old_idx += 1
+                            new_idx += 1
+                            break
+                if not found:
+                    print("  DIFF " + str(new_idx) + ": old=" + old_norm[old_idx] +
+                          " new=" + new_norm[new_idx])
+                    pair_failures += 1
+                    old_idx += 1
+                    new_idx += 1
+            else:
+                old_idx += 1
+                new_idx += 1
+
+        # trailing lines
+        while old_idx < len(old_norm):
+            print("  TRAIL old: " + old_norm[old_idx])
+            pair_failures += 1
+            old_idx += 1
+        while new_idx < len(new_norm):
+            print("  TRAIL new: " + new_norm[new_idx])
+            pair_failures += 1
+            new_idx += 1
+
+        checks += 1
+        # GATE 1: equivalent
+        if pair_failures > 0:
+            all_ok = False
+            failures += 1
+        print("  GATE 1 (equivalent): " + ("OK" if pair_failures == 0 else "DIFF"))
+
+        # GATE 2: structural — удалён из engine
+        checks += 1
+        engine_code_now = (SRC / "simulation" / "engine.py").read_text(encoding="utf-8")
+        has_method = "def " + pair.old_name in engine_code_now
+        if has_method:
+            print("  GATE 2 (removed from engine): FAIL (method still present)")
+            failures += 1
+            all_ok = False
+        else:
+            print("  GATE 2 (removed from engine): OK")
+
+        # GATE 3: no duplicates
+        checks += 1
+        mod_code = (SRC / pair.target_module).read_text(encoding="utf-8")
+        has_dup = ("def " + pair.new_name in mod_code
+                   and "def " + pair.old_name in engine_code_now)
+        if has_dup:
+            print("  GATE 3 (no duplicate): FAIL")
+            failures += 1
+            all_ok = False
+        else:
+            print("  GATE 3 (no duplicate): OK")
+
+        # GATE 4: LOST CALLS
+        checks += 1
+        old_calls = set()
+        old_tree = ast.parse(old_body)
+        for node in ast.walk(old_tree):
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Attribute):
+                    old_calls.add(node.func.attr)
+        new_calls = set()
+        new_tree = ast.parse(new_body)
+        for node in ast.walk(new_tree):
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Attribute):
+                    new_calls.add(node.func.attr)
+                elif isinstance(node.func, ast.Name):
+                    new_calls.add(node.func.id)
+
+        lost_count = 0
+        for c in sorted(old_calls):
+            if c.startswith("_") and not c.startswith("__"):
+                # old internal calls — check if they're in new calls
+                base = c.lstrip("_")
+                matched = any(base in nc for nc in new_calls)
+                if not matched:
+                    # check if the call was for a B-method that was moved
+                    is_known_move = any(
+                        pair.old_name.lstrip("_") in c for pair in BATCH_B5
+                    )
+                    if not is_known_move:
+                        lost_count += 1
+
+        if lost_count > 0:
+            print("  GATE 4 (lost calls): FAIL (" + str(lost_count) + " lost)")
+            failures += 1
+            all_ok = False
+        else:
+            print("  GATE 4 (lost calls): OK")
+
+        checked_pairs += 1
+
+    # GATE 5: STATIC CALL VALIDATION — extend removed_methods with B5
+    checks += 1
+    engine_code_now = (SRC / "simulation" / "engine.py").read_text(encoding="utf-8")
+    static_failures = 0
+    for pair in BATCH_B5:
+        if "def " + pair.old_name in engine_code_now:
+            print("  STATIC: " + pair.old_name + " still in engine")
+            static_failures += 1
+
+    if static_failures > 0:
+        print("  GATE 5 (static): FAIL")
+        failures += 1
+        all_ok = False
+    else:
+        print("  GATE 5 (static): OK")
+
+    print("")
+    print("=" * 70)
+    print("B5: " + str(checks) + " checks, " + str(failures) + " failures")
+    if all_ok:
+        print("B5 AUDIT PASSED")
+    else:
+        print("B5 AUDIT FAILED")
+    print("=" * 70)
+    return 0 if all_ok else 1
+
+
 def audit_static_call_validation():
     """Статическая проверка: нет вызовов удалённых методов.
 
@@ -1603,9 +1900,9 @@ def audit_static_call_validation():
     all_ok = True
     failures = 0
 
-    # --- 1. Удалённые методы (B1..B4) ---
+    # --- 1. Удалённые методы (B1..B5) ---
     removed_methods = set()
-    for batch in [BATCH_B1, BATCH_B2, BATCH_B2_1, BATCH_B3, BATCH_B4]:
+    for batch in [BATCH_B1, BATCH_B2, BATCH_B2_1, BATCH_B3, BATCH_B4, BATCH_B5]:
         for pair in batch:
             removed_methods.add(pair.old_name)
 
@@ -1726,7 +2023,7 @@ def audit_static_call_validation():
 
 def main():
     parser = argparse.ArgumentParser(description="Аудит B1/B2/B2_1/B3/B4 сервисных методов")
-    parser.add_argument("--batch", choices=["B1", "B2", "B2_1", "B3", "B4"], default="B1")
+    parser.add_argument("--batch", choices=["B1", "B2", "B2_1", "B3", "B4", "B5"], default="B1")
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--equivalent", action="store_true")
     group.add_argument("--structural", action="store_true")
@@ -1738,6 +2035,9 @@ def main():
 
     if args.batch == "B4":
         return audit_b4()
+
+    if args.batch == "B5":
+        return audit_b5()
 
     if args.batch == "B2_1":
         return audit_b2_1()

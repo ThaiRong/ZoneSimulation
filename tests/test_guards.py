@@ -8,6 +8,7 @@ from zonesim.world.entity import EntityStatus
 from zonesim.world.item import ItemType
 from zonesim.combat.power import squad_power
 from zonesim.world.groups import sync_monster_groups
+from zonesim.economy.guards import process_guard_rotation, GUARDS_PER_BASE
 
 
 def _guards(engine):
@@ -68,7 +69,7 @@ class TestGuardRotation:
         guard.health = int(guard.max_health * 0.3)
         sector_before = guard.sector_id
 
-        engine._process_guard_rotation(hour=24)
+        process_guard_rotation(engine.state, hour=24, catalog=engine.catalog)
 
         assert guard.on_treatment
         assert guard.status == EntityStatus.SLEEPING
@@ -86,7 +87,7 @@ class TestGuardRotation:
 
     def test_healthy_guard_not_replaced(self):
         engine = SimulationEngine(seed=42)
-        engine._process_guard_rotation(hour=24)
+        process_guard_rotation(engine.state, hour=24, catalog=engine.catalog)
         assert not any(getattr(n, "on_treatment", False) for n in _guards(engine))
         assert not any(
             getattr(n, "reserve_for", None) is not None
@@ -97,15 +98,15 @@ class TestGuardRotation:
         engine = SimulationEngine(seed=42)
         guard = _guards(engine)[0]
         guard.health = int(guard.max_health * 0.3)
-        engine._process_guard_rotation(hour=24)
+        process_guard_rotation(engine.state, hour=24, catalog=engine.catalog)
         reserve = next(
             n for n in engine.state.stationary_humans
             if getattr(n, "reserve_for", None) == guard.id
         )
         # лазарет лечит 50% в сутки: два дня до полного восстановления
-        engine._process_guard_rotation(hour=48)
+        process_guard_rotation(engine.state, hour=48, catalog=engine.catalog)
         assert guard.on_treatment  # ещё лечится
-        engine._process_guard_rotation(hour=72)
+        process_guard_rotation(engine.state, hour=72, catalog=engine.catalog)
         assert not guard.on_treatment
         assert guard.status == EntityStatus.ACTIVE
         assert reserve.status == EntityStatus.EXILED  # резервист убыл
@@ -114,8 +115,8 @@ class TestGuardRotation:
         engine = SimulationEngine(seed=42)
         guard = _guards(engine)[0]
         guard.health = int(guard.max_health * 0.3)
-        engine._process_guard_rotation(hour=24)
-        engine._process_guard_rotation(hour=48)  # пока лечится
+        process_guard_rotation(engine.state, hour=24, catalog=engine.catalog)
+        process_guard_rotation(engine.state, hour=48, catalog=engine.catalog)  # пока лечится
         reserves = [
             n for n in engine.state.stationary_humans
             if getattr(n, "reserve_for", None) == guard.id
@@ -139,7 +140,7 @@ class TestGuardReplenishment:
             and getattr(n, "reserve_for", None) is None
         )
 
-        engine._process_guard_rotation(hour=24)
+        process_guard_rotation(engine.state, hour=24, catalog=engine.catalog)
 
         assert alive_before < 2
         recruits = [
@@ -147,14 +148,14 @@ class TestGuardReplenishment:
             if n.stationary_role == "guard" and n.sector_id == base_sector
             and n.status == EntityStatus.ACTIVE and n.name == "Охранник-новобранец"
         ]
-        assert len(recruits) == engine.GUARDS_PER_BASE - alive_before
+        assert len(recruits) == GUARDS_PER_BASE - alive_before
 
     def test_treatment_guard_does_not_auto_wake(self):
         engine = SimulationEngine(seed=42)
         guard = _guards(engine)[0]
         guard.health = int(guard.max_health * 0.3)
         guard.stamina = guard.max_stamina
-        engine._process_guard_rotation(hour=24)
+        process_guard_rotation(engine.state, hour=24, catalog=engine.catalog)
         assert guard.status == EntityStatus.SLEEPING
         # час отдыха/сна не будит лечащегося охранника
         engine.context.hour = engine.state.time.hour

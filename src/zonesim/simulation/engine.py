@@ -55,7 +55,7 @@ from zonesim.anomalies.research import research_anomaly
 
 from zonesim.world.group import HumanGroup, MonsterGroup
 from zonesim.world.catalog import ItemCatalog
-from zonesim.world.shelter import StormShelter, Shelter
+from zonesim.world.shelter import StormShelter, Shelter, init_shelters
 from zonesim.monsters.behavior import choose_group_intention, select_weakest_target, species_value
 from zonesim.monsters.feed import FeedManager
 from zonesim.monsters.hunt import should_pursue
@@ -70,7 +70,7 @@ from zonesim.combat.guards import base_guards
 from zonesim.needs.healing import rest_heal
 from zonesim.needs.artifact import give_artifact
 
-from zonesim.economy.trader import sell_loot, SELL_PRICE_SHARE, conditional_trader_is_active, conditional_trader_can_sleep, conditional_trader_base_sector
+from zonesim.economy.trader import sell_loot, SELL_PRICE_SHARE, conditional_trader_is_active, conditional_trader_can_sleep, conditional_trader_base_sector, init_trader_stock
 from zonesim.world.groups import group_kit, active_members, group_leader
 from zonesim.world.groups import monster_group_members, sync_human_groups, sync_monster_groups
 from zonesim.world.shelter import (
@@ -85,9 +85,9 @@ from zonesim.knowledge import group_detector_bonus
 from zonesim.knowledge.expiry import expire_findings
 from zonesim.world.trails import (
     trail_set, roll_trail_blockage, roll_trail_blockages,
-    blocked_trail_map, group_has_passage,
+    blocked_trail_map, group_has_passage, init_trails,
 )
-from zonesim.world.item import create_item, consume_item, sync_npc_from_items
+from zonesim.world.item import create_item, consume_item, sync_npc_from_items, spawn_catalog_item, give_starting_equipment
 from zonesim.relations.journal import check_and_journal_relations, log_relation_change
 from zonesim.anomalies.emission import (
     emission_safe_sectors, is_group_emission_sheltered, emission_active, emission_known,
@@ -97,6 +97,7 @@ from zonesim.anomalies.emission import (
 
 from zonesim.economy.contracts import ContractManager
 from zonesim.economy.trade import CaptureManager, ImportExportManager, ExportRecord
+from zonesim.economy.guards import equip_guard, spawn_guard, process_guard_rotation
 from zonesim.economy.pricing import calculate_sell_price, get_type_multiplier, calculate_stock_multiplier
 
 from zonesim.anomalies.core import Anomaly as AnomalyEntity, AnomalyType, AnomalyStatus
@@ -248,102 +249,16 @@ class SimulationEngine:
         self.state.next_anomaly_id = max((a.id for a in self.state.anomalies.values()), default=0) + 1
         self.state.next_group_id = max(self.state.human_groups, default=-1) + 1
         for npc in all_humans:
-            self._give_starting_equipment(npc)
+            give_starting_equipment(self.state, npc, self.catalog)
         for npc in self.state.stationary_humans:
             if npc.stationary_role == "guard":
-                self._equip_guard(npc)
-        self._init_trader_stock()
-        self._init_trails()
-        self._init_shelters()
+                equip_guard(self.state, npc, self.catalog)
+        init_trader_stock(self.state, self.catalog)
+        init_trails(self.state)
+        init_shelters(self.state, self.state.rng)
         roll_trail_blockages(self.state)
         self.state.next_emission_hour = schedule_next_emission(self.state.rng)
         sync_monster_groups(self.state)
-
-    # Наценка торговцев поверх каталога
-    TRADE_MARKUP = 1.2
-    # Стартовое количество в запасе по категориям
-    TRADER_START_QTY = {
-        "weapon": 2,
-        "body_armor": 2,
-        "head_armor": 1,
-        "outer_layer": 1,
-        "medical": 4,
-        "optics": 1,
-        "detector": 2,
-        "capture_kit": 2,
-        "anomaly_destruction_kit": 2,
-    }
-    TRADER_AMMO_QTY = {"ammo.pistol": 40, "ammo.rifle": 60, "ammo.heavy": 20}
-
-    def _init_trader_stock(self) -> None:
-        """Стартовый запас торговцев: импортные позиции каталога. (§16)"""
-        for trader in self.state.stationary_humans:
-            if trader.stationary_role != "trader":
-                continue
-            stock: dict[str, int] = {}
-            for entry in self.catalog.entries():
-                if not entry.get("import_required"):
-                    continue
-                qty = self.TRADER_AMMO_QTY.get(
-                    entry["id"], self.TRADER_START_QTY.get(entry["category"], 1),
-                )
-                if qty > 0:
-                    stock[entry["id"]] = qty
-            self.state.trader_stock[trader.id] = stock
-
-    def _init_trails(self) -> None:
-        """Тропы: около 40% рёбер графа. (§10.4)"""
-        edges = {
-            edge_key(sid, nid)
-            for sid, sector in self.state.sectors.items()
-            for nid in sector.neighbors
-        }
-        trails = [list(edge) for edge in sorted(edges) if self.state.rng.random() < 0.4]
-        self.state.trails = trails
-
-    def _init_shelters(self) -> None:
-        """Стационарные укрытия: 8 шт, не более одного в секторе,
-        любой сектор в двух рёбрах от укрытия. (§7.16)"""
-        from zonesim.world.sector import get_distance
-
-        start_ids = {s.id for s in self.state.sectors.values() if s.is_faction_start}
-        candidates = [sid for sid in self.state.sectors if sid not in start_ids]
-        chosen: list[int] = []
-        all_ids = set(self.state.sectors)
-        while len(chosen) < SHELTER_COUNT:
-            uncovered = [
-                sid for sid in all_ids
-                if not any(
-                    (dist := get_distance(self.state.sectors, sid, c)) is not None and dist <= 2
-                    for c in chosen
-                )
-            ]
-            if not uncovered:
-                break
-            # жадный выбор: сектор, покрывающий больше всего непокрытых
-            best = max(
-                candidates,
-                key=lambda sid: sum(
-                    1 for u in uncovered
-                    if (dist := get_distance(self.state.sectors, sid, u)) is not None and dist <= 2
-                ),
-            )
-            chosen.append(best)
-            candidates.remove(best)
-        # дозаполняем до стартового количества разбросанными укрытиями
-        while len(chosen) < SHELTER_COUNT and candidates:
-            pick = self.state.rng.choice(candidates)
-            chosen.append(pick)
-            candidates.remove(pick)
-        self.state.shelters = {
-            index: StormShelter(
-                id=index,
-                sector_id=sector_id,
-                capacity=self.state.rng.randint(2, 6),
-            )
-            for index, sector_id in enumerate(chosen)
-        }
-        self.state.shelter_count = len(self.state.shelters)
 
     def _schedule_conditional_trader(self, hour: int) -> None:
         """Запланировать следующий появление ситуативного торговца. (§16.6)"""
@@ -438,7 +353,7 @@ class SimulationEngine:
         state.conditional_trader_end_hour = hour + CONDITIONAL_TRADER_DURATION
         
         # Даем стартовое снаряжение
-        self._give_starting_equipment(trader)
+        give_starting_equipment(state, trader, self.catalog)
         
         self.state.news_manager.create_event(
             hour=hour, minute=0, sector_id=state.conditional_trader_sector,
@@ -603,169 +518,24 @@ class SimulationEngine:
                 )
             ]
 
-    def _equip_guard(self, npc: HumanNPC) -> None:
-        """Охранник базы получает лучшее оружие и броню из каталога,
-        много патронов и аптечек — бесплатно, за счёт группировки."""
-        for item_id in (npc.equipped_weapon_id, npc.equipped_armor_id):
-            item = self.state.items.get(item_id)
-            if item is not None and item_id in npc.inventory:
-                npc.inventory.remove(item_id)
-            self.state.items.pop(item_id, None)
-        weapon_entry = max(
-            (e for e in self.catalog.entries() if e["category"] == "weapon"),
-            key=lambda e: (e["base_damage"], e["base_value"]),
-        )
-        armor_entry = max(
-            (e for e in self.catalog.entries() if e["category"] == "body_armor"),
-            key=lambda e: (e["armor_factor"], e["base_value"]),
-        )
-        weapon = self._spawn_catalog_item(weapon_entry["id"], npc.id)
-        armor = self._spawn_catalog_item(armor_entry["id"], npc.id)
-        npc.equipped_weapon_id = weapon.id
-        npc.equipped_armor_id = armor.id
-        if weapon_entry.get("ammo_type"):
-            self._spawn_catalog_item(weapon_entry["ammo_type"], npc.id, quantity=60)
-        for _ in range(3):
-            self._spawn_catalog_item("gear.medkit.sanitar2", npc.id)
-        sync_npc_from_items(self.state, npc)
-
     # --- Ротация охраны: раненый уходит лечиться, пост занимает резервист ---
     # Расхождение ТЗ/код: ТЗ указывает 2, в коде DEFAULT_GUARDS_PER_BASE = 4
     # (см. config.py). Инвариант #11 проверяет >= DEFAULT_GUARDS_PER_BASE.
 
-    GUARD_ROTATION_HEALTH = 0.5    # ниже этого доли здоровья — смена
-    GUARD_RECOVERY_PER_DAY = 0.5   # лазарет базы лечит 50% в сутки
-    GUARDS_PER_BASE = DEFAULT_GUARDS_PER_BASE  # штат охраны базы
-
-    def _process_guard_rotation(self, hour: int) -> None:
-        """Раненый охранник лечится и заменяется резервистом; погибших
-        группировка восполняет новобранцами.
-
-        Гарантирует минимум GUARDS_PER_BASE активных охранников на базе
-        (даже когда некоторые на лечении).
-        """
-        if hour % 24 != 0:
-            return
-        guards = [
-            n for n in self.state.stationary_humans
-            if n.stationary_role == "guard"
-        ]
-        by_sector: dict[int, list[HumanNPC]] = {}
-        for npc in guards:
-            by_sector.setdefault(npc.sector_id, []).append(npc)
-
-        for sector_id, sector_guards in by_sector.items():
-            # Считаем активных (не на лечении)
-            active_count = sum(
-                1 for g in sector_guards
-                if g.status == EntityStatus.ACTIVE
-            )
-            for guard in sector_guards:
-                if getattr(guard, "on_treatment", False):
-                    guard.health = min(
-                        guard.max_health,
-                        guard.health + int(guard.max_health * self.GUARD_RECOVERY_PER_DAY),
-                    )
-                    if guard.health >= guard.max_health:
-                        guard.on_treatment = False
-                        guard.status = EntityStatus.ACTIVE
-                        reserves = [
-                            n for n in by_sector.get(sector_id, [])
-                            if getattr(n, "reserve_for", None) == guard.id
-                            and not getattr(n, "on_treatment", False)
-                            and n.status not in (EntityStatus.EXILED, EntityStatus.DEAD)
-                        ]
-                        for reserve in reserves:
-                            reserve.status = EntityStatus.EXILED  # резервист убыл
-                        self.state.news_manager.create_event(
-                            hour=hour, minute=0, sector_id=sector_id,
-                            event_type="guard_returned", participants=[guard.id],
-                            result="returned", importance=25,
-                            summary=f"Охранник {guard.id} вернулся на пост после лечения",
-                            details={"guard_id": guard.id},
-                        )
-                elif (
-                    guard.status == EntityStatus.ACTIVE
-                    and guard.health_share <= self.GUARD_ROTATION_HEALTH
-                    and not getattr(guard, "on_treatment", False)
-                    and not any(
-                        getattr(n, "reserve_for", None) == guard.id
-                        and n.status not in (EntityStatus.DEAD, EntityStatus.EXILED)
-                        for n in guards
-                    )
-                    # Не отправляем на лечение, если это приведёт к падению ниже
-                    # минимума (с учётом одного охранника на лечении)
-                    and (active_count - 1) >= self.GUARDS_PER_BASE - 1
-                ):
-                    guard.on_treatment = True
-                    guard.status = EntityStatus.SLEEPING
-                    reserve = self._spawn_guard(guard, name="Резервист", reserve_for=guard.id)
-                    self.state.news_manager.create_event(
-                        hour=hour, minute=0, sector_id=sector_id,
-                        event_type="guard_replacement",
-                        participants=[guard.id, reserve.id], result="replaced",
-                        importance=30,
-                        summary=(
-                            f"Раненый охранник {guard.id} ушёл лечиться,"
-                            f" пост занял резервист {reserve.id}"
-                        ),
-                        details={"guard_id": guard.id, "reserve_id": reserve.id},
-                    )
-
-        # восполнение погибших: на каждой базе держим штат охраны
-        for sector in self.state.sectors.values():
-            if not sector.is_faction_start:
-                continue
-            roster = [
-                n for n in self.state.stationary_humans
-                if n.stationary_role == "guard"
-                and n.sector_id == sector.id
-                and n.status == EntityStatus.ACTIVE
-                and getattr(n, "reserve_for", None) is None
-            ]
-            while len(roster) < self.GUARDS_PER_BASE:
-                template = roster[0] if roster else next(
-                    (n for n in self.state.stationary_humans
-                     if n.stationary_role == "trader" and n.sector_id == sector.id),
-                    None,
-                )
-                faction = template.faction if template else sector.controller_faction or "Бродяги"
-                recruit = HumanNPC(
-                    id=self.state.next_human_id,
-                    faction=faction,
-                    sector_id=sector.id,
-                    name="Охранник-новобранец",
-                    attack=55, defense=55, attentiveness=55, bravery=70,
-                    is_stationary=True, stationary_role="guard",
-                    money=0,
-                )
-                self.state.next_human_id += 1
-                self.state.stationary_humans.append(recruit)
-                self._equip_guard(recruit)
-                roster.append(recruit)
-                self.state.news_manager.create_event(
-                    hour=hour, minute=0, sector_id=sector.id,
-                    event_type="guard_recruited", participants=[recruit.id],
-                    result="recruited", importance=25,
-                    summary=f"Группировка «{faction}» пополнила охрану базы новобранцем {recruit.id}",
-                    details={"guard_id": recruit.id, "faction": faction},
-                )
-
-    def _spawn_guard(self, wounded: HumanNPC, name: str, reserve_for: int | None) -> HumanNPC:
-        guard = HumanNPC(
-            id=self.state.next_human_id,
-            faction=wounded.faction,
-            sector_id=wounded.sector_id,
-            name=name,
-            attack=55, defense=55, attentiveness=55, bravery=70,
-            is_stationary=True, stationary_role="guard",
-            money=0,
-        )
-        self.state.next_human_id += 1
-        guard.reserve_for = reserve_for
-        self.state.stationary_humans.append(guard)
-        self._equip_guard(guard)
-        return guard
+    # Наценка торговцев поверх каталога (используется trade_price, остаётся)
+    TRADE_MARKUP = 1.2
+    # Стартовое количество в запасе по категориям (используется trade_price, остаётся)
+    TRADER_START_QTY = {
+        "weapon": 2,
+        "body_armor": 2,
+        "head_armor": 1,
+        "outer_layer": 1,
+        "medical": 4,
+        "optics": 1,
+        "detector": 2,
+        "capture_kit": 2,
+        "anomaly_destruction_kit": 2,
+    }
 
     def trade_price(self, item_ref: str, quantity: int = 1) -> float:
         """Цена покупки у торговца с учётом stock_multiplier (§16.3)."""
@@ -1024,36 +794,6 @@ class SimulationEngine:
             summary=f"NPC {buyer.id} купил «{item.name}» у NPC {seller.id} за {price}",
             details={"item_id": item.id, "price": price},
         )
-
-    def _give_starting_equipment(self, npc: HumanNPC) -> None:
-        if npc.inventory:
-            return
-        npc.money = 100
-        if npc.faction == "Серая лига":
-            weapon_ref, armor_ref = "weapon.rifle.sokol", "armor.outer.scout"
-        else:
-            weapon_ref, armor_ref = "weapon.carbine.k20", "armor.uniform.jacket"
-        weapon = self._spawn_catalog_item(weapon_ref, npc.id)
-        armor = self._spawn_catalog_item(armor_ref, npc.id)
-        npc.equipped_weapon_id = weapon.id
-        npc.equipped_armor_id = armor.id
-        ammo_ref = weapon.properties.get("ammo_type")
-        if ammo_ref:
-            self._spawn_catalog_item(ammo_ref, npc.id, quantity=12)
-        self._spawn_catalog_item("gear.medkit.sanitar2", npc.id)
-        self._spawn_catalog_item("shelter.kit.basic", npc.id)  # нерасходный набор для убежища (§7.10)
-        sync_npc_from_items(self.state, npc)
-
-    def _spawn_catalog_item(self, item_ref: str, owner_id: int, quantity: int = 1) -> Item:
-        item = self.catalog.create_item(self.state.next_item_id, item_ref, quantity=quantity)
-        self.state.next_item_id += 1
-        self.state.items[item.id] = item
-        owner = next(
-            npc for npc in self.state.humans + self.state.stationary_humans
-            if npc.id == owner_id
-        )
-        give_item(item, owner_id, owner.inventory)
-        return item
 
     def _sync_items_from_npc(self, npc: HumanNPC) -> None:
         weapon = self.state.items.get(npc.equipped_weapon_id)

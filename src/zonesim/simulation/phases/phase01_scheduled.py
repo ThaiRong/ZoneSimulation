@@ -1,7 +1,7 @@
 """Фаза 1: Запланированные события (миграции, эмиссии, охрана, торговцы).
 
 Этап 3, Промпт 3.4: тело перенесено из engine.py.
-Все access к state через ctx.state, вызовы вспомогательных — через ctx.engine_ref.
+Все access к state через ctx.state, вызовы вспомогательных — функции из модулей.
 """
 
 from __future__ import annotations
@@ -10,6 +10,8 @@ from zonesim.generation.migration import process_migration
 from zonesim.simulation.context import SimulationContext
 from zonesim.world.groups import sync_monster_groups
 from zonesim.world.shelter import free_emptied_shelters, process_shelter_occupation
+from zonesim.world.item import give_starting_equipment
+from zonesim.economy.guards import process_guard_rotation
 from zonesim.anomalies.emission import (
     emission_active, apply_emission_exposure, process_emission_schedule,
 )
@@ -54,7 +56,7 @@ def run_phase1_scheduled(ctx: SimulationContext) -> None:
             entity.group_id = group.id
             state.human_groups[group.id] = group
             state.humans.append(entity)
-            engine._give_starting_equipment(entity)
+            give_starting_equipment(state, entity, engine.catalog)
 
     # === Монстры: пополнение численности ===
     active_monsters = sum(
@@ -84,7 +86,7 @@ def run_phase1_scheduled(ctx: SimulationContext) -> None:
     free_emptied_shelters(state, hour)
 
     # === Охрана ===
-    engine._process_guard_rotation(hour)
+    process_guard_rotation(state, hour, engine.catalog)
 
     # === Ситуативный торговец ===
     engine._process_conditional_trader_schedule(hour)

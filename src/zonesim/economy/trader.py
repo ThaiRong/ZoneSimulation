@@ -132,6 +132,37 @@ class Trader:
 SELL_PRICE_SHARE = 0.6  # класс константа SimulationEngine.SELL_PRICE_SHARE
 
 
+TRADER_START_QTY = {
+    "weapon": 2,
+    "body_armor": 2,
+    "head_armor": 1,
+    "outer_layer": 1,
+    "medical": 4,
+    "optics": 1,
+    "detector": 2,
+    "capture_kit": 2,
+    "anomaly_destruction_kit": 2,
+}
+TRADER_AMMO_QTY = {"ammo.pistol": 40, "ammo.rifle": 60, "ammo.heavy": 20}
+
+
+def init_trader_stock(state, catalog) -> None:
+    """Стартовый запас торговцев: импортные позиции каталога. (§16)"""
+    for trader in state.stationary_humans:
+        if trader.stationary_role != "trader":
+            continue
+        stock: dict[str, int] = {}
+        for entry in catalog.entries():
+            if not entry.get("import_required"):
+                continue
+            qty = TRADER_AMMO_QTY.get(
+                entry["id"], TRADER_START_QTY.get(entry["category"], 1),
+            )
+            if qty > 0:
+                stock[entry["id"]] = qty
+        state.trader_stock[trader.id] = stock
+
+
 def conditional_trader_is_active(state) -> bool:
     """Проверяет, что ситуативный торговец ещё работает."""
     if state.conditional_trader_id is None:
