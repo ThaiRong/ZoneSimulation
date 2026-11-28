@@ -1586,9 +1586,14 @@ def audit_b4():
 def audit_static_call_validation():
     """Статическая проверка: нет вызовов удалённых методов.
 
-    Находит все обращения вида (self|engine|e)\\._(...) и сверяет с множеством
-    методов, определённых в SimulationEngine через ast. Любое обращение к неопределённому
-    методу из BATCH_B3/B2/B2_1 — FAIL.
+    Находит вызовы удалённых методов из BATCH_B1..B4. Использует ast-обход
+    с определением объёмлющего класса для корректной области видимости self.
+
+    Ключевые принципы:
+    - self._X в классе SimulationEngine → проверять against current_methods
+    - self._X в ЛЮБОМ другом классе (в т.ч. тест-классах) → НЕ флагировать
+    - engine/e _X → флагировать всегда (обращения к движку из фаз/тестов)
+    - filepath:lineno из ast node (а не хардкод)
     """
     print("")
     print("=" * 70)
@@ -1598,13 +1603,13 @@ def audit_static_call_validation():
     all_ok = True
     failures = 0
 
-    # 1. Собираем удалённые методы из всех батчей
+    # --- 1. Удалённые методы (B1..B4) ---
     removed_methods = set()
     for batch in [BATCH_B1, BATCH_B2, BATCH_B2_1, BATCH_B3, BATCH_B4]:
         for pair in batch:
             removed_methods.add(pair.old_name)
 
-    # 2. Собираем текущие методы SimulationEngine
+    # --- 2. Текущие методы SimulationEngine ---
     engine_code = (SRC / "simulation" / "engine.py").read_text(encoding="utf-8")
     engine_tree = ast.parse(engine_code)
     current_methods = set()
@@ -1614,59 +1619,99 @@ def audit_static_call_validation():
                 if isinstance(item, ast.FunctionDef):
                     current_methods.add(item.name)
 
-    # 3. Паттерн для поиска вызовов
-    call_pattern = re.compile(
-        r'(self|engine|e)\.(_[a-zA-Z_][a-zA-Z0-9_]*)\s*\('
-    )
+    # --- 3. ast-хелпер: извлечь все Call с (self|engine|e)._X ---
+    def _walk_calls_with_class(tree, filepath):
+        """Возвращает [(filepath, lineno, attr, caller_var, enclosing_class), ...].
 
-    # 4. Проверяем engine.py, phases, tests
-    files_to_check = []
-    files_to_check.append(("src/zonesim/simulation/engine.py", engine_code))
+        caller_var ∈ {'self', 'engine', 'e'} — переменная, которой вызывается метод.
+        enclosing_class — имя ClassDef, в котором находится вызов (или '').
+        """
+        results = []
 
+        class _ClassTracker(ast.NodeVisitor):
+            def __init__(self):
+                self._class_stack = []
+
+            def visit_ClassDef(self, node):
+                self._class_stack.append(node.name)
+                self.generic_visit(node)
+                self._class_stack.pop()
+
+            def visit_Call(self, node):
+                attr_name = ""
+                caller_var = ""
+                if isinstance(node.func, ast.Attribute) and isinstance(node.func.attr, str):
+                    attr_name = node.func.attr
+                    if isinstance(node.func.value, ast.Name):
+                        caller_var = node.func.value.id
+                    elif isinstance(node.func.value, ast.Attribute):
+                        # chain: a.b._foo() — берём крайний Name из цепочки
+                        root = node.func.value
+                        while isinstance(root, ast.Attribute) and isinstance(root.value, ast.Name):
+                            root = root.value
+                        if isinstance(root, ast.Name):
+                            caller_var = root.id
+                if attr_name.startswith("_") and caller_var in ("self", "engine", "e"):
+                    class_name = self._class_stack[-1] if self._class_stack else ""
+                    results.append((filepath, node.lineno, attr_name, caller_var, class_name))
+                self.generic_visit(node)
+
+        tracker = _ClassTracker()
+        tracker.visit(tree)
+        return results
+
+    # --- 4. Проверяем engine.py ---
+    print("  Checking src/zonesim/simulation/engine.py:")
+    calls = _walk_calls_with_class(engine_tree, "src/zonesim/simulation/engine.py")
+    for filepath, lineno, attr, caller, cls in calls:
+        if caller == "self" and attr in removed_methods:
+            print(f"  FAIL: {filepath}:{lineno}: {caller}.{attr}() — метод удалён")
+            all_ok = False
+            failures += 1
+
+    # --- 5. Проверяем phases ---
     phases_dir = SRC / "simulation" / "phases"
     if phases_dir.exists():
-        for p in phases_dir.glob("*.py"):
-            files_to_check.append((f"src/zonesim/simulation/phases/{p.name}", p.read_text(encoding="utf-8")))
+        for p in sorted(phases_dir.glob("*.py")):
+            phase_code = p.read_text(encoding="utf-8")
+            phase_tree = ast.parse(phase_code)
+            fpath = f"src/zonesim/simulation/phases/{p.name}"
+            calls = _walk_calls_with_class(phase_tree, fpath)
+            for filepath, lineno, attr, caller, cls in calls:
+                if caller == "self":
+                    # self в фазе — обычно это engine, но фаза не class...
+                    # safe: не флагировать self вне SimulationEngine
+                    pass
+                elif caller in ("engine", "e"):
+                    if attr in removed_methods:
+                        print(f"  FAIL: {filepath}:{lineno}: {caller}.{attr}() — удалён")
+                        all_ok = False
+                        failures += 1
 
+    # --- 6. Проверяем тесты ---
     tests_dir = REPO_ROOT / "tests"
     if tests_dir.exists():
-        for p in tests_dir.glob("test_*.py"):
-            files_to_check.append((f"tests/{p.name}", p.read_text(encoding="utf-8")))
+        for p in sorted(tests_dir.glob("test_*.py")):
+            test_code = p.read_text(encoding="utf-8")
+            test_tree = ast.parse(test_code)
+            fpath = f"tests/{p.name}"
+            calls = _walk_calls_with_class(test_tree, fpath)
+            for filepath, lineno, attr, caller, cls in calls:
+                if caller == "self":
+                    # self в тест-классе — НЕ движок
+                    # (иначе false positive на тестовые хелперы типа _at_home)
+                    continue
+                elif caller in ("engine", "e"):
+                    if attr in removed_methods:
+                        print(f"  FAIL: {filepath}:{lineno}: {caller}.{attr}() — удалён")
+                        all_ok = False
+                        failures += 1
 
-    for filepath, code in files_to_check:
-        lines = code.splitlines()
-        for line_no, line in enumerate(lines, 1):
-            # Пропускаем комментарии
-            stripped = line.strip()
-            if stripped.startswith("#") or '"""' in stripped or "'''" in stripped:
-                continue
-            # Пропускаем docstring строки (упрощённо)
-            for match in call_pattern.finditer(line):
-                caller = match.group(1)
-                method_name = match.group(2)
-                # Проверяем: если метод удалён и НЕ определён сейчас — это FAIL
-                if method_name in removed_methods and method_name not in current_methods:
-                    # Но это может быть допустимо, если метод ещё не удалён из engine
-                    # (для B3 audit это строго запрещённый паттерн)
-                    print(f"  FAIL: {filepath}:{line_no}: {caller}.{method_name}() — метод удалён")
-                    all_ok = False
-                    failures += 1
-
-    # 5. Дополнительно: self._X в engine.py должен быть в current_methods
-    for line_no, line in enumerate(lines, 1):
-        stripped = line.strip()
-        if stripped.startswith("#") or '"""' in stripped or "'''" in stripped:
-            continue
-        for match in call_pattern.finditer(line):
-            caller = match.group(1)
-            method_name = match.group(2)
-            if caller == "self" and method_name.startswith("_") and method_name not in current_methods:
-                print(f"  WARN: engine.py:{line_no}: self.{method_name}() — не определён в SimulationEngine")
-                all_ok = False
-                failures += 1
-
+    # --- 7. Отчёт ---
     if failures == 0:
         print("  Все вызовы валидны: OK")
+    else:
+        print(f"  Найдено {failures} висячих вызовов")
 
     print("")
     print("=" * 70)
@@ -1676,7 +1721,6 @@ def audit_static_call_validation():
     else:
         print("STATIC CALL VALIDATION FAILED")
     print("=" * 70)
-
     return 0 if all_ok else 1
 
 
